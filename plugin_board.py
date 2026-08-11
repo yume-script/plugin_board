@@ -35,22 +35,22 @@ GITHUB_REPOS = [
     "https://github.com/javara999/naverkakaoridi",
     "https://github.com/colaiuta77/achievements",
     "https://github.com/yume-script/pixiv_ranking",
+    "https://github.com/yume-script/extract_isbn",
+    "https://github.com/colaiuta77/activity",
+    "https://github.com/colaiuta77/activity_desk",
+    "https://github.com/colaiuta77/achievements",
     "https://github.com/yume-script/unified_book",
 ]
 
 # GitHub API/README만으로는 "검색형 메타데이터"인지 "카테고리 탭 UI"인지 구분할 수
 # 없어서, 분류가 필요할 때만 owner/repo 키로 지정합니다. 지정하지 않으면 화면에서
 # "기타" 분류로 표시됩니다 — 새 저장소를 추가할 때 반드시 채워야 하는 값은 아닙니다.
-GITHUB_REPOS = [
-    "https://github.com/javara999/naverkakaoridi",
-    "https://github.com/colaiuta77/achievements",
-    "https://github.com/yume-script/pixiv_ranking",
-    "https://github.com/yume-script/extract_isbn",
-    "https://github.com/colaiuta77/activity",
-    "https://github.com/colaiuta77/activity_desk",
-    "https://github.com/colaiuta77/achievements",
-    "https://github.com/yume-script/unified_book"
-]
+TYPE_OVERRIDES = {
+    "javara999/naverkakaoridi": "search",
+    "colaiuta77/achievements": "tab",
+    "yume-script/pixiv_ranking": "tab",
+    "yume-script/unified_book": "search",
+}
 
 TYPE_LABELS = {
     "search": "검색형 메타데이터",
