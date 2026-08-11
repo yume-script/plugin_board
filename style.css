@@ -145,6 +145,19 @@
   padding-bottom: 9px;
 }
 
+/* GitHub 조회 실패(예: API rate limit) 시 카드에 경고 테두리 표시 */
+.pb-card-error {
+  border-color: #d9534f66;
+}
+.pb-card-error .pb-card-desc {
+  color: #d9534f;
+}
+
+.pb-tag-type {
+  opacity: 1;
+  font-weight: 700;
+}
+
 .pb-card-owner {
   font-size: 10.5px;
   letter-spacing: 0.06em;
