@@ -301,6 +301,13 @@
   font-weight: 700;
 }
 
+/* GitHub 저장소를 알 수 없는(GITHUB_REPOS 미등록) 로컬 설치 플러그인 안내 태그 */
+.pb-tag-local {
+  color: var(--app-text-muted);
+  border-color: var(--app-border, rgba(255,255,255,0.3));
+  opacity: 1;
+}
+
 /* 이미 설치되어 최신 상태인 카드에 표시되는 배지 (버튼 대체) */
 .pb-installed-badge {
   font-size: 11px;

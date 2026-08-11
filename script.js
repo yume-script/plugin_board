@@ -131,7 +131,7 @@
 
     const owner = document.createElement("p");
     owner.className = "pb-card-owner";
-    owner.textContent = `${item.owner || ""} / ${item.id || ""}`;
+    owner.textContent = item.owner ? `${item.owner} / ${item.id}` : (item.id || "");
 
     const title = document.createElement("h2");
     title.className = "pb-card-title";
@@ -157,6 +157,13 @@
       updTag.className = "pb-tag pb-tag-update";
       updTag.textContent = "업데이트 가능";
       tagsWrap.appendChild(updTag);
+    }
+
+    if (item.local_only) {
+      const localTag = document.createElement("span");
+      localTag.className = "pb-tag pb-tag-local";
+      localTag.textContent = "GitHub 미등록";
+      tagsWrap.appendChild(localTag);
     }
 
     (item.tags || []).forEach((tagText) => {
@@ -185,13 +192,16 @@
     btnGroup.className = "pb-btn-group";
     btnGroup.appendChild(buildActionControl(item));
 
-    const link = document.createElement("a");
-    link.className = "pb-link";
-    link.href = item.url || "#";
-    link.target = "_blank";
-    link.rel = "noopener";
-    link.innerHTML = `${GITHUB_ICON}GitHub`;
-    btnGroup.appendChild(link);
+    // GitHub 저장소 주소를 모르는(local_only) 항목은 GitHub 버튼을 표시하지 않음
+    if (item.url) {
+      const link = document.createElement("a");
+      link.className = "pb-link";
+      link.href = item.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.innerHTML = `${GITHUB_ICON}GitHub`;
+      btnGroup.appendChild(link);
+    }
 
     foot.append(stamp, btnGroup);
 

@@ -139,6 +139,92 @@ def _remote_is_newer(local_v, remote_v):
     return rt > lt
 
 
+def _read_local_class_attrs(plugin_id):
+    """설치된 플러그인의 {plugin_id}.py에서 name/id/is_searchable/category_tab 등
+    주요 클래스 속성을 AST로만(코드 실행 없이) 읽어온다. GITHUB_REPOS에 없는
+    플러그인의 표시 이름·분류를 최대한 정확히 추정하는 데 사용한다."""
+    path = os.path.join(_plugins_metadata_dir(), plugin_id, plugin_id + ".py")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read(), filename=path)
+    except Exception:
+        return {}
+
+    wanted = {"name", "id", "is_searchable", "category_tab", "dashboard_widget"}
+    attrs = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for stmt in node.body:
+                if isinstance(stmt, ast.Assign):
+                    for target in stmt.targets:
+                        if isinstance(target, ast.Name) and target.id in wanted:
+                            try:
+                                attrs[target.id] = ast.literal_eval(stmt.value)
+                            except Exception:
+                                pass
+            if attrs:
+                break  # 관례상 파일당 provider 클래스는 하나
+    return attrs
+
+
+def _scan_uncurated_installed(curated_ids):
+    """GITHUB_REPOS(큐레이션 목록)에 없지만 이 서버에 실제로 설치되어 있는
+    메타데이터 플러그인을 plugins/metadata 디렉토리에서 직접 찾아 카드로 만든다.
+    GitHub 저장소 주소를 모르므로 설명·최신 버전·업데이트 확인은 제공하지 않는다."""
+    base_dir = _plugins_metadata_dir()
+    items = []
+    try:
+        entries = sorted(os.listdir(base_dir))
+    except Exception:
+        return items
+
+    for entry in entries:
+        if entry in curated_ids or entry == "plugin_board":
+            continue
+        if not _PLUGIN_ID_RE.match(entry):
+            continue
+        full_path = os.path.join(base_dir, entry)
+        if not os.path.isdir(full_path):
+            continue
+
+        version = _local_version(entry)
+        attrs = _read_local_class_attrs(entry)
+        title = attrs.get("name") or entry
+
+        if attrs.get("is_searchable"):
+            plugin_type = "search"
+        elif attrs.get("category_tab"):
+            plugin_type = "tab"
+        else:
+            plugin_type = "other"
+
+        items.append({
+            "id": entry,
+            "owner": "",
+            "title": title,
+            "type": plugin_type,
+            "type_label": TYPE_LABELS.get(plugin_type, TYPE_LABELS["other"]),
+            "desc": (
+                "이 서버에 설치되어 있지만 plugin_board의 GITHUB_REPOS 목록에는 "
+                "등록되지 않은 플러그인입니다. 목록에 저장소 주소를 추가하면 "
+                "설명·최신 버전·업데이트 확인이 가능해집니다."
+            ),
+            "tags": [],
+            "features": [],
+            "version_label": ("v" + version) if version else "—",
+            "url": None,
+            "error": False,
+            "installed": True,
+            "installed_version": version,
+            "has_update": False,
+            "local_only": True,
+        })
+
+    return items
+
+
 def _fetch_remote_version(owner, repo, default_branch, token):
     """저장소의 VERSION 파일에서 최신 버전을 가져온다(원본 문자열, 'v' 접두사 없음)."""
     branches = [b for b in (default_branch, "main", "master") if b]
@@ -180,6 +266,14 @@ def _fetch_repo_entry(url, token):
     plugin_type = TYPE_OVERRIDES.get(key, "other")
     installed = _is_installed(repo)
     installed_version = _local_version(repo) if installed else None
+
+    if installed:
+        # 이미 설치되어 있다면 실제 소스에서 분류를 더 정확히 추정 (수동 지정보다 우선)
+        local_attrs = _read_local_class_attrs(repo)
+        if local_attrs.get("is_searchable"):
+            plugin_type = "search"
+        elif local_attrs.get("category_tab"):
+            plugin_type = "tab"
 
     try:
         api_data = _http_get_json(
@@ -477,5 +571,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
     def get_dashboard_data(self, db_type, limit=10):
         cfg = self.get_plugin_config(db_type, default={})
         token = cfg.get("GITHUB_TOKEN") or None
-        items = [_fetch_repo_entry(url, token) for url in GITHUB_REPOS]
-        return {"success": True, "items": items}
+        curated_items = [_fetch_repo_entry(url, token) for url in GITHUB_REPOS]
+        curated_ids = {it["id"] for it in curated_items}
+        local_items = _scan_uncurated_installed(curated_ids)
+        return {"success": True, "items": curated_items + local_items}
