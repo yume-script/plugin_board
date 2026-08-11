@@ -49,7 +49,7 @@ GITHUB_REPOS = [
     "https://github.com/colaiuta77/activity",
     "https://github.com/colaiuta77/activity_desk",
     "https://github.com/colaiuta77/achievements",
-    "https://github.com/yume-script/unified_book",
+    "https://github.com/yume-script/unified_book"
 ]
 
 TYPE_LABELS = {
