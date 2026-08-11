@@ -87,6 +87,24 @@ plugin_manager 자신도 Git URL 설치를 지원하므로, 최초 1회는 서�
 다른 설치 수단으로 `plugins/metadata/plugin_manager/`에 넣어야 합니다. 자세한 내용은
 [plugin_manager README](https://github.com/madnite1/plugin_manager)를 참고하세요.
 
+## 서버에 설치된 플러그인 섹션
+
+화면 하단에는 `GITHUB_REPOS` 큐레이션 목록과 무관하게, **이 서버에 실제로 설치된 모든
+메타데이터 플러그인**을 보여주는 별도 섹션이 있습니다. plugin_manager의
+`GET /api/media/dashboard/widgets/plugin_manager/data?type=<db_type>` 응답을 그대로 사용하므로,
+GITHUB_REPOS에 등록하지 않은 플러그인(plugin_board·plugin_manager 자신 포함)도 전부 표시됩니다.
+
+각 행에 표시되는 정보:
+
+- 활성화 상태(점 색상), 이름, ID
+- 분류 배지 — 시스템 / 검색형 / 카테고리 탭 / 위젯 / 설정 있음
+- 설치된 버전, 업데이트 가능 시 최신 버전 표시
+- `업데이트` 버튼(업데이트 가능한 경우만) — `action: "update"` 호출
+- `활성화`/`비활성화` 버튼(시스템 플러그인 제외) — `action: "toggle"` 호출
+
+이 섹션도 plugin_manager가 설치되어 있지 않으면 "설치 현황을 표시할 수 없습니다" 안내만
+표시되고, 위쪽 큐레이션 카드 목록은 정상 동작합니다(서로 독립적으로 실패 처리됨).
+
 ## 새 저장소 추가하기
 
 `plugin_board.py`의 `GITHUB_REPOS` 리스트에 GitHub 주소만 한 줄 추가하면 됩니다.

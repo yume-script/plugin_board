@@ -293,6 +293,132 @@
   transform: none;
 }
 
+/* ---------- 설치된 플러그인 섹션 ---------- */
+.pb-installed-section {
+  margin-top: 30px;
+}
+
+.pb-section-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0 0 4px;
+  color: var(--app-text-primary);
+}
+
+.pb-section-desc {
+  margin: 0 0 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--app-text-muted);
+  max-width: 68ch;
+}
+
+.pb-installed-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pb-irow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: var(--app-bg-card);
+  border: 1px solid var(--app-border, rgba(255,255,255,0.1));
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+.pb-irow-disabled {
+  opacity: 0.55;
+}
+
+.pb-irow-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 180px;
+  flex: 1 1 200px;
+}
+
+.pb-irow-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--app-text-muted);
+  flex-shrink: 0;
+}
+.pb-irow-dot-on {
+  background: #3fb950;
+}
+
+.pb-irow-name {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--app-text-primary);
+  line-height: 1.3;
+}
+.pb-irow-id {
+  margin: 1px 0 0;
+  font-size: 10.5px;
+  color: var(--app-text-muted);
+}
+
+.pb-irow-badges {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  flex: 1 1 160px;
+}
+
+.pb-irow-version {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pb-tag-update {
+  color: #fff;
+  background: #d9534f;
+  border-color: #d9534f;
+  opacity: 1;
+}
+
+.pb-irow-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.pb-install-btn-sm {
+  padding: 5px 10px;
+  font-size: 10.5px;
+}
+
+.pb-toggle-btn {
+  font-size: 10.5px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--app-text-secondary, var(--app-text-primary));
+  background: transparent;
+  border: 1px solid var(--app-border, rgba(255,255,255,0.2));
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s ease;
+}
+.pb-toggle-btn:hover:not(:disabled) {
+  background: var(--app-bg-card-hover);
+}
+.pb-toggle-btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
 /* ---------- 푸터 ---------- */
 .pb-footer {
   text-align: center;

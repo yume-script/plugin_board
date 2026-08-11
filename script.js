@@ -7,6 +7,8 @@
   const gridEl = document.getElementById("pb-grid");
   const filtersEl = document.getElementById("pb-filters");
   const tallyEl = document.getElementById("pb-tally");
+  const installedStatusEl = document.getElementById("pb-installed-status");
+  const installedGridEl = document.getElementById("pb-installed-grid");
 
   let allItems = [];
   let activeFilter = "all";
@@ -120,6 +122,7 @@
 
         if (result && result.success) {
           showToast(result.message || `'${item.title}' 처리가 완료되었습니다.`, false);
+          loadInstalledPlugins();
         } else {
           showToast((result && result.error) || "요청이 실패했습니다.", true);
         }
@@ -135,6 +138,157 @@
     });
 
     return btn;
+  }
+
+  // ------------------------------------------------------------------
+  // "서버에 설치된 플러그인" 섹션 — plugin_manager가 파악한 실제 설치 현황을
+  // 그대로 보여준다. 위쪽 GITHUB_REPOS 큐레이션 목록과 무관하게, 이 서버에
+  // 설치된 모든 메타데이터 플러그인(plugin_board·plugin_manager 자신 포함)이
+  // 나열된다.
+  // ------------------------------------------------------------------
+  function typeBadges(p) {
+    const badges = [];
+    if (p.is_system) badges.push("시스템");
+    if (p.is_searchable) badges.push("검색형");
+    if (p.is_category) badges.push("카테고리 탭");
+    if (p.is_widget) badges.push("위젯");
+    if (p.has_config) badges.push("설정 있음");
+    return badges;
+  }
+
+  function buildInstalledRow(p, dbType) {
+    const row = document.createElement("article");
+    row.className = "pb-irow" + (p.enabled ? "" : " pb-irow-disabled");
+
+    const main = document.createElement("div");
+    main.className = "pb-irow-main";
+
+    const dot = document.createElement("span");
+    dot.className = "pb-irow-dot" + (p.enabled ? " pb-irow-dot-on" : "");
+    dot.title = p.enabled ? "활성화됨" : "비활성화됨";
+
+    const nameWrap = document.createElement("div");
+    const name = document.createElement("p");
+    name.className = "pb-irow-name";
+    name.textContent = p.name || p.id;
+    const id = document.createElement("p");
+    id.className = "pb-irow-id";
+    id.textContent = p.id;
+    nameWrap.append(name, id);
+
+    main.append(dot, nameWrap);
+
+    const badgesWrap = document.createElement("div");
+    badgesWrap.className = "pb-irow-badges";
+    typeBadges(p).forEach((label) => {
+      const b = document.createElement("span");
+      b.className = "pb-tag";
+      b.textContent = label;
+      badgesWrap.appendChild(b);
+    });
+
+    const versionWrap = document.createElement("div");
+    versionWrap.className = "pb-irow-version";
+    const vStamp = document.createElement("span");
+    vStamp.className = "pb-stamp";
+    vStamp.textContent = "v" + (p.version || "?");
+    versionWrap.appendChild(vStamp);
+    if (p.has_update) {
+      const upd = document.createElement("span");
+      upd.className = "pb-tag pb-tag-update";
+      upd.textContent = `업데이트 가능 (v${p.latest_version || "?"})`;
+      versionWrap.appendChild(upd);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "pb-irow-actions";
+
+    if (p.has_update) {
+      const updBtn = document.createElement("button");
+      updBtn.type = "button";
+      updBtn.className = "pb-install-btn pb-install-btn-sm";
+      updBtn.innerHTML = `${INSTALL_ICON}업데이트`;
+      updBtn.addEventListener("click", async () => {
+        const orig = updBtn.innerHTML;
+        updBtn.disabled = true;
+        updBtn.innerHTML = `${INSTALL_ICON}업데이트 중…`;
+        try {
+          const result = await callPluginManagerAction(dbType, {
+            action: "update",
+            plugin_id: p.id,
+          });
+          if (result && result.success) {
+            showToast(result.message || `'${p.id}' 업데이트 완료`, false);
+            loadInstalledPlugins();
+          } else {
+            showToast((result && result.error) || "업데이트 실패", true);
+          }
+        } catch (err) {
+          showToast("업데이트 요청 중 통신 오류가 발생했습니다.", true);
+        } finally {
+          updBtn.disabled = false;
+          updBtn.innerHTML = orig;
+        }
+      });
+      actions.appendChild(updBtn);
+    }
+
+    if (!p.is_system) {
+      const toggleBtn = document.createElement("button");
+      toggleBtn.type = "button";
+      toggleBtn.className = "pb-toggle-btn";
+      toggleBtn.textContent = p.enabled ? "비활성화" : "활성화";
+      toggleBtn.addEventListener("click", async () => {
+        const orig = toggleBtn.textContent;
+        toggleBtn.disabled = true;
+        toggleBtn.textContent = "처리 중…";
+        try {
+          const result = await callPluginManagerAction(dbType, {
+            action: "toggle",
+            plugin_id: p.id,
+            enabled: p.enabled ? "0" : "1",
+          });
+          if (result && result.success) {
+            showToast(result.message || `'${p.id}' 상태가 변경되었습니다.`, false);
+            loadInstalledPlugins();
+          } else {
+            showToast((result && result.error) || "상태 변경 실패", true);
+            toggleBtn.disabled = false;
+            toggleBtn.textContent = orig;
+          }
+        } catch (err) {
+          showToast("상태 변경 요청 중 통신 오류가 발생했습니다.", true);
+          toggleBtn.disabled = false;
+          toggleBtn.textContent = orig;
+        }
+      });
+      actions.appendChild(toggleBtn);
+    }
+
+    row.append(main, badgesWrap, versionWrap, actions);
+    return row;
+  }
+
+  async function loadInstalledPlugins() {
+    const dbType = getDbType();
+    try {
+      const plugins = await fetchInstalledPlugins(dbType);
+      plugins.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, "ko"));
+
+      installedGridEl.innerHTML = "";
+      plugins.forEach((p) => installedGridEl.appendChild(buildInstalledRow(p, dbType)));
+
+      installedStatusEl.hidden = true;
+      installedGridEl.hidden = false;
+      console.log(`${LOG_PREFIX} 설치된 플러그인 ${plugins.length}개 확인`);
+    } catch (err) {
+      console.warn(`${LOG_PREFIX} plugin_manager 목록 조회 실패:`, err);
+      installedStatusEl.textContent =
+        "plugin_manager가 설치되어 있지 않아 설치 현황을 표시할 수 없습니다.";
+      installedStatusEl.classList.add("pb-error");
+      installedStatusEl.hidden = false;
+      installedGridEl.hidden = true;
+    }
   }
 
   function buildCard(item) {
@@ -316,4 +470,5 @@
   }
 
   load();
+  loadInstalledPlugins();
 })();
