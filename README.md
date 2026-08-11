@@ -60,6 +60,33 @@ plugins/metadata/plugin_board/
 | ------------- | --------- | -- | ------------------------------------------------ |
 | `GITHUB_TOKEN` | password | 선택 | GitHub Personal Access Token. 미입력 시 무인증 한도(60/시간)로 조회 |
 
+## 설치/업데이트 버튼 (plugin_manager 연동)
+
+각 카드의 `설치/업데이트` 버튼은 [plugin_manager](https://github.com/madnite1/plugin_manager)
+플러그인이 서버에 **함께 설치되어 있어야** 동작합니다. plugin_board 자신은 파일 시스템에
+아무것도 쓰지 않고, 실제 설치·업데이트는 전부 plugin_manager의 API를 통해 서버에서 처리됩니다.
+
+버튼 클릭 시 동작:
+
+1. `GET /api/media/dashboard/widgets/plugin_manager/data?type=<db_type>` 로 설치된
+   플러그인 목록을 조회합니다.
+2. 카드의 `id`(저장소 이름)가 목록에 있으면:
+   - 이미 최신 버전이면 별도 요청 없이 "이미 최신 버전입니다" 토스트만 표시
+   - 업데이트가 있으면 `action: "update"` 호출
+3. 목록에 없으면 `action: "install_git"`, `git_url: <카드의 GitHub 주소>`로 신규 설치를 요청합니다.
+4. 두 액션 모두 `POST /api/media/books/0/apply-metadata`
+   (`{"type": db_type, "source": "plugin_manager", "item_data": {...}}`)로 전송되며,
+   응답의 `message`/`error`를 화면 하단 토스트로 보여줍니다.
+
+plugin_manager가 설치되어 있지 않으면 목록 조회 단계에서 실패하고, 버튼 클릭 시
+"plugin_manager가 설치되어 있어야 합니다"라는 안내 토스트가 표시됩니다.
+
+### plugin_manager 설치 방법 (참고)
+
+plugin_manager 자신도 Git URL 설치를 지원하므로, 최초 1회는 서버에서 직접 배치하거나
+다른 설치 수단으로 `plugins/metadata/plugin_manager/`에 넣어야 합니다. 자세한 내용은
+[plugin_manager README](https://github.com/madnite1/plugin_manager)를 참고하세요.
+
 ## 새 저장소 추가하기
 
 `plugin_board.py`의 `GITHUB_REPOS` 리스트에 GitHub 주소만 한 줄 추가하면 됩니다.

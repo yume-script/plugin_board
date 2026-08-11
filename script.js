@@ -17,12 +17,125 @@
   }
 
   function dataUrl() {
-    return `/api/media/dashboard/widgets/${PLUGIN_ID}/data?db_type=${encodeURIComponent(getDbType())}`;
+    // plugin_manager 등 기존 플러그인들과 동일하게 쿼리 파라미터명은 "type"을 사용
+    return `/api/media/dashboard/widgets/${PLUGIN_ID}/data?type=${encodeURIComponent(getDbType())}`;
   }
 
   // GitHub 아이콘(SVG) — 정적 마크업이므로 innerHTML 사용은 안전함
   const GITHUB_ICON =
     '<svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>';
+
+  // 다운로드/설치 아이콘(SVG)
+  const INSTALL_ICON =
+    '<svg viewBox="0 0 16 16"><path d="M8 0a.75.75 0 0 1 .75.75v7.19l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V.75A.75.75 0 0 1 8 0Z"/><path d="M1.5 10.5a.75.75 0 0 1 .75.75v2A.75.75 0 0 0 3 14h10a.75.75 0 0 0 .75-.75v-2a.75.75 0 0 1 1.5 0v2A2.25 2.25 0 0 1 13 15.5H3A2.25 2.25 0 0 1 .75 13.25v-2a.75.75 0 0 1 .75-.75Z"/></svg>';
+
+  // ------------------------------------------------------------------
+  // plugin_manager 연동 (https://github.com/madnite1/plugin_manager)
+  // 실제 설치/업데이트는 이 시스템 플러그인의 apply-metadata 액션을 통해
+  // 서버에서 처리된다 — plugin_board 자신은 파일 시스템에 쓰지 않는다.
+  // ------------------------------------------------------------------
+  const PLUGIN_MANAGER_ID = "plugin_manager";
+
+  function pluginManagerListUrl(dbType) {
+    return `/api/media/dashboard/widgets/${PLUGIN_MANAGER_ID}/data?type=${encodeURIComponent(dbType)}`;
+  }
+
+  async function fetchInstalledPlugins(dbType) {
+    const res = await fetch(pluginManagerListUrl(dbType));
+    const json = await res.json();
+    if (!res.ok || !json || json.success === false) {
+      throw new Error((json && json.error) || `HTTP ${res.status}`);
+    }
+    return Array.isArray(json.plugins) ? json.plugins : [];
+  }
+
+  async function callPluginManagerAction(dbType, actionData) {
+    const res = await fetch("/api/media/books/0/apply-metadata", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: dbType,
+        source: PLUGIN_MANAGER_ID,
+        item_data: actionData,
+      }),
+    });
+    return res.json();
+  }
+
+  // ------------------------------------------------------------------
+  // 토스트 알림 (카드 하단 액션 결과 안내용)
+  // ------------------------------------------------------------------
+  let toastTimer = null;
+  function showToast(message, isError) {
+    let toast = document.getElementById("pb-toast");
+    if (!toast) {
+      toast = document.createElement("div");
+      toast.id = "pb-toast";
+      document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.className = "pb-toast " + (isError ? "pb-toast-error" : "pb-toast-success");
+    toast.classList.add("pb-toast-show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toast.classList.remove("pb-toast-show");
+    }, 4500);
+  }
+
+  // 설치/업데이트 버튼: 클릭 시점에 plugin_manager 설치 목록을 조회해
+  // 이미 설치돼 있으면 update, 아니면 install_git 액션을 호출한다.
+  function buildInstallButton(item) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "pb-install-btn";
+    btn.innerHTML = `${INSTALL_ICON}설치/업데이트`;
+
+    btn.addEventListener("click", async () => {
+      const originalHtml = btn.innerHTML;
+      const dbType = getDbType();
+      btn.disabled = true;
+      btn.innerHTML = `${INSTALL_ICON}확인 중…`;
+
+      try {
+        const installed = await fetchInstalledPlugins(dbType);
+        const match = installed.find((p) => p.id === item.id);
+
+        let actionData;
+        if (match && !match.has_update) {
+          btn.disabled = false;
+          btn.innerHTML = originalHtml;
+          showToast(`'${item.title}'은(는) 이미 최신 버전(v${match.version})입니다.`, false);
+          return;
+        } else if (match) {
+          actionData = { action: "update", plugin_id: item.id };
+          btn.innerHTML = `${INSTALL_ICON}업데이트 중…`;
+        } else {
+          actionData = { action: "install_git", git_url: item.url };
+          btn.innerHTML = `${INSTALL_ICON}설치 중…`;
+        }
+
+        const result = await callPluginManagerAction(dbType, actionData);
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+
+        if (result && result.success) {
+          showToast(result.message || `'${item.title}' 처리가 완료되었습니다.`, false);
+        } else {
+          showToast((result && result.error) || "요청이 실패했습니다.", true);
+        }
+      } catch (err) {
+        console.error(`${LOG_PREFIX} 설치/업데이트 실패:`, err);
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+        showToast(
+          "plugin_manager(https://github.com/madnite1/plugin_manager)가 설치되어 있어야 이 버튼을 사용할 수 있습니다.",
+          true
+        );
+      }
+    });
+
+    return btn;
+  }
 
   function buildCard(item) {
     const card = document.createElement("article");
@@ -77,6 +190,11 @@
     stamp.className = "pb-stamp";
     stamp.textContent = item.version_label || "—";
 
+    const btnGroup = document.createElement("div");
+    btnGroup.className = "pb-btn-group";
+
+    const installBtn = buildInstallButton(item);
+
     const link = document.createElement("a");
     link.className = "pb-link";
     link.href = item.url || "#";
@@ -84,7 +202,8 @@
     link.rel = "noopener";
     link.innerHTML = `${GITHUB_ICON}GitHub`;
 
-    foot.append(stamp, link);
+    btnGroup.append(installBtn, link);
+    foot.append(stamp, btnGroup);
 
     const parts = [head, desc, tagsWrap];
     if ((item.features || []).length > 0) parts.push(feats);

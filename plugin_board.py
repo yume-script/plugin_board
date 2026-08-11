@@ -35,12 +35,7 @@ GITHUB_REPOS = [
     "https://github.com/javara999/naverkakaoridi",
     "https://github.com/colaiuta77/achievements",
     "https://github.com/yume-script/pixiv_ranking",
-    "https://github.com/yume-script/extract_isbn",
-    "https://github.com/colaiuta77/activity",
-    "https://github.com/colaiuta77/activity_desk",
-    "https://github.com/colaiuta77/achievements",
     "https://github.com/yume-script/unified_book",
-    "https://github.com/madnite1/plugin_manager",
 ]
 
 # GitHub API/README만으로는 "검색형 메타데이터"인지 "카테고리 탭 UI"인지 구분할 수
