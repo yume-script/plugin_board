@@ -1,0 +1,271 @@
+/* plugins/metadata/plugin_board/style.css
+   8종 대시보드 테마(purple/dark/light/sepia/blue/aquamarine/ironman/epaper)와
+   동기화되도록 하드코딩 색상 대신 전역 CSS 변수(var(--app-*))를 사용합니다. */
+
+.pb-root {
+  padding: 4px 2px 32px;
+  font-family: inherit;
+  color: var(--app-text-primary, #e5e5e5);
+}
+
+/* ---------- 헤더 ---------- */
+.pb-header {
+  background: var(--app-bg-sidebar, var(--app-bg-card));
+  border: 1px solid var(--app-border, rgba(255,255,255,0.1));
+  border-radius: 10px;
+  padding: 22px 26px 18px;
+}
+
+.pb-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--app-accent, #8b5cf6);
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.pb-title {
+  font-size: clamp(22px, 3.2vw, 30px);
+  font-weight: 700;
+  margin: 0 0 8px;
+  color: var(--app-text-primary);
+}
+
+.pb-desc {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--app-text-muted, #9ca3af);
+  max-width: 62ch;
+}
+
+.pb-tally {
+  display: flex;
+  gap: 22px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+.pb-tally span {
+  display: block;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--app-text-muted);
+}
+.pb-tally strong {
+  display: block;
+  font-size: 21px;
+  font-weight: 700;
+  color: var(--app-accent, var(--app-text-primary));
+}
+
+/* ---------- 필터 탭 ---------- */
+.pb-filters {
+  display: flex;
+  gap: 6px;
+  margin: 18px 0 12px;
+  flex-wrap: wrap;
+}
+.pb-filter-btn {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--app-bg-card);
+  color: var(--app-text-secondary, var(--app-text-primary));
+  border: 1px solid var(--app-border, rgba(255,255,255,0.1));
+  padding: 7px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.pb-filter-btn:hover {
+  background: var(--app-bg-card-hover);
+}
+.pb-filter-btn.active {
+  background: var(--app-accent);
+  border-color: var(--app-accent);
+  color: #ffffff;
+}
+
+/* ---------- 보드 / 상태 ---------- */
+.pb-board {
+  min-height: 120px;
+}
+
+.pb-status {
+  padding: 32px 8px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--app-text-muted);
+}
+.pb-status.pb-error {
+  color: #d9534f;
+}
+
+/* ---------- 카드 그리드 ---------- */
+.pb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 18px;
+}
+
+.pb-card {
+  background: var(--app-bg-card);
+  border: 1px solid var(--app-border, rgba(255,255,255,0.1));
+  border-radius: 10px;
+  padding: 18px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: relative;
+  transition: transform .15s ease, background .15s ease, box-shadow .15s ease;
+}
+.pb-card:hover {
+  background: var(--app-bg-card-hover);
+  transform: translateY(-3px);
+  box-shadow: var(--app-shadow, 0 10px 24px rgba(0,0,0,0.25));
+}
+
+/* 색인 카드 느낌을 주는 펀치 홀 장식 */
+.pb-card::before {
+  content: "";
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--app-border, rgba(255,255,255,0.18));
+}
+
+.pb-card-head {
+  padding-left: 22px;
+  border-bottom: 1px dashed var(--app-border-light, var(--app-border));
+  padding-bottom: 9px;
+}
+
+.pb-card-owner {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+  margin: 0 0 3px;
+}
+
+.pb-card-title {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--app-text-primary);
+  line-height: 1.3;
+}
+
+.pb-card-desc {
+  padding-left: 22px;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--app-text-secondary, var(--app-text-muted));
+}
+
+.pb-card-tags {
+  padding-left: 22px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.pb-tag {
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--app-accent);
+  border: 1px solid var(--app-accent);
+  background: transparent;
+  padding: 3px 8px;
+  border-radius: 999px;
+  opacity: 0.85;
+}
+
+.pb-card-feats {
+  padding-left: 22px;
+  margin: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.pb-card-feats li {
+  font-size: 11.5px;
+  color: var(--app-text-secondary, var(--app-text-muted));
+  position: relative;
+  padding-left: 13px;
+  line-height: 1.5;
+}
+.pb-card-feats li::before {
+  content: "·";
+  position: absolute;
+  left: 0;
+  top: -2px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--app-accent);
+}
+
+.pb-card-foot {
+  margin-top: auto;
+  padding-left: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pb-stamp {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--app-accent);
+  border: 1.5px solid var(--app-accent);
+  padding: 3px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  opacity: 0.9;
+}
+
+.pb-link {
+  font-size: 11px;
+  font-weight: 600;
+  color: #ffffff;
+  background: var(--app-accent);
+  border: none;
+  padding: 7px 12px;
+  border-radius: 6px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background .15s ease, transform .15s ease;
+}
+.pb-link:hover {
+  background: var(--app-accent-hover, var(--app-accent));
+  transform: translateX(2px);
+}
+.pb-link svg {
+  width: 11px;
+  height: 11px;
+  fill: currentColor;
+}
+
+/* ---------- 푸터 ---------- */
+.pb-footer {
+  text-align: center;
+  margin-top: 22px;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  color: var(--app-text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pb-card, .pb-filter-btn, .pb-link {
+    transition: none;
+  }
+}
