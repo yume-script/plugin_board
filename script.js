@@ -41,16 +41,62 @@
   // apply()를 호출한다 (source: "plugin_board"). 외부 플러그인 불필요.
   // ------------------------------------------------------------------
   async function callPluginBoardAction(dbType, actionData) {
-    const res = await fetch("/api/media/books/0/apply-metadata", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: dbType,
-        source: PLUGIN_ID,
-        item_data: actionData,
-      }),
-    });
-    return res.json();
+    let res;
+    try {
+      res = await fetch("/api/media/books/0/apply-metadata", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: dbType,
+          source: PLUGIN_ID,
+          item_data: actionData,
+        }),
+      });
+    } catch (networkErr) {
+      // fetch 자체가 실패(오프라인, DNS, CORS 등) — 서버 응답조차 못 받은 경우
+      return {
+        success: false,
+        error: `서버에 연결하지 못했습니다: ${networkErr && networkErr.message ? networkErr.message : networkErr}`,
+      };
+    }
+
+    let bodyText = "";
+    try {
+      bodyText = await res.text();
+    } catch (readErr) {
+      return { success: false, error: `응답 본문을 읽지 못했습니다 (HTTP ${res.status}).` };
+    }
+
+    let json = null;
+    if (bodyText) {
+      try {
+        json = JSON.parse(bodyText);
+      } catch (parseErr) {
+        // 서버/프록시가 JSON이 아닌 오류 페이지(예: 413 요청 크기 초과, 502 등)를
+        // 돌려준 경우 — 상태 코드와 본문 일부를 그대로 보여줘 원인을 알 수 있게 한다.
+        const snippet = bodyText.replace(/\s+/g, " ").trim().slice(0, 160);
+        let hint = "";
+        if (res.status === 413) {
+          hint = " 파일이 너무 커서 서버(또는 앞단 프록시)가 요청을 거부한 것으로 보입니다.";
+        } else if (res.status >= 500) {
+          hint = " 서버 내부 오류로 보입니다.";
+        }
+        return {
+          success: false,
+          error: `서버가 올바른 응답을 반환하지 않았습니다 (HTTP ${res.status}).${hint}` +
+            (snippet ? ` 응답 일부: ${snippet}` : ""),
+        };
+      }
+    }
+
+    if (!res.ok && (!json || typeof json.success === "undefined")) {
+      return {
+        success: false,
+        error: (json && (json.error || json.message)) || `요청이 실패했습니다 (HTTP ${res.status}).`,
+      };
+    }
+
+    return json || { success: false, error: "서버로부터 빈 응답을 받았습니다." };
   }
 
   // ------------------------------------------------------------------
@@ -115,8 +161,8 @@
           btn.innerHTML = originalHtml;
         }
       } catch (err) {
-        console.error(`${LOG_PREFIX} 설치/업데이트 통신 오류:`, err);
-        showToast("설치/업데이트 요청 중 통신 오류가 발생했습니다.", true);
+        console.error(`${LOG_PREFIX} 설치/업데이트 오류:`, err);
+        showToast(`설치/업데이트 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
         btn.disabled = false;
         btn.innerHTML = originalHtml;
       }
@@ -365,7 +411,7 @@
       } catch (err) {
         saveBtn.disabled = false;
         saveBtn.textContent = orig;
-        showToast("설정 저장 중 통신 오류가 발생했습니다.", true);
+        showToast(`설정 저장 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
       }
     });
   }
@@ -436,7 +482,7 @@
           trashBtn.disabled = false;
         }
       } catch (err) {
-        showToast("삭제 요청 중 통신 오류가 발생했습니다.", true);
+        showToast(`삭제 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
         trashBtn.disabled = false;
       }
     });
@@ -460,7 +506,7 @@
         }
       } catch (err) {
         checkbox.checked = !nextEnabled;
-        showToast("상태 변경 요청 중 통신 오류가 발생했습니다.", true);
+        showToast(`상태 변경 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
       } finally {
         checkbox.disabled = false;
       }
@@ -703,8 +749,8 @@
           showToast((result && result.error) || "설치에 실패했습니다.", true);
         }
       } catch (err) {
-        console.error(`${LOG_PREFIX} Git URL 설치 통신 오류:`, err);
-        showToast("설치 요청 중 통신 오류가 발생했습니다.", true);
+        console.error(`${LOG_PREFIX} Git URL 설치 오류:`, err);
+        showToast(`설치 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
       } finally {
         btn.disabled = false;
         input.disabled = false;
@@ -735,8 +781,8 @@
           showToast((result && result.error) || "목록을 새로 불러오지 못했습니다.", true);
         }
       } catch (err) {
-        console.error(`${LOG_PREFIX} 목록 새로고침 통신 오류:`, err);
-        showToast("새로고침 요청 중 통신 오류가 발생했습니다.", true);
+        console.error(`${LOG_PREFIX} 목록 새로고침 오류:`, err);
+        showToast(`새로고침 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
       } finally {
         btn.disabled = false;
         btn.classList.remove("pb-refresh-spinning");
@@ -769,6 +815,11 @@
     const btn = document.getElementById("pb-zip-install-btn");
     if (!form || !input || !btn) return;
 
+    // zip을 base64로 인코딩해 JSON 본문에 실어 보내는 방식이라, 파일이 크면
+    // 서버 앞단 프록시(nginx 등)의 기본 요청 크기 제한(흔히 1MB)에 걸리기 쉽다.
+    // 업로드 전에 미리 경고해 "통신 오류"로만 뭉뚱그려지지 않도록 한다.
+    const SIZE_WARN_BYTES = 1 * 1024 * 1024; // 1MB
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const file = input.files && input.files[0];
@@ -779,6 +830,14 @@
       if (!/\.zip$/i.test(file.name)) {
         showToast("zip 파일만 업로드할 수 있습니다.", true);
         return;
+      }
+      if (file.size > SIZE_WARN_BYTES) {
+        const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+        showToast(
+          `선택한 zip이 ${sizeMb}MB로 다소 큽니다. 서버 설정에 따라 업로드가 거부될 수 있어요 ` +
+            `— 실패하면 Git 저장소 URL 설치를 대신 사용해보세요. 지금 업로드를 시도합니다…`,
+          true
+        );
       }
 
       const origText = btn.textContent;
@@ -801,8 +860,11 @@
           showToast((result && result.error) || "설치에 실패했습니다.", true);
         }
       } catch (err) {
-        console.error(`${LOG_PREFIX} Zip 설치 통신 오류:`, err);
-        showToast("설치 요청 중 통신 오류가 발생했습니다.", true);
+        console.error(`${LOG_PREFIX} Zip 설치 오류:`, err);
+        showToast(
+          `설치 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`,
+          true
+        );
       } finally {
         btn.disabled = false;
         input.disabled = false;
