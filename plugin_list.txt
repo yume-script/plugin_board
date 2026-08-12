@@ -4,6 +4,7 @@ https://github.com/yume-script/plugin_board
 https://github.com/yume-script/unified_book
 https://github.com/yume-script/random_gallery
 https://github.com/yume-script/extract_isbn
+https://github.com/yume-script/cache_cleaner
 https://github.com/madnite1/plugin_manager
 https://github.com/colaiuta77/achievements
 https://github.com/colaiuta77/activity
