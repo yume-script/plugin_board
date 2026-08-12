@@ -19,6 +19,7 @@ update_manifest를 AST로만(코드 실행 없이) 추출해 명시된 파일만
 """
 
 import ast
+import concurrent.futures
 import json
 import os
 import re
@@ -61,8 +62,11 @@ TYPE_LABELS = {
     "other": "기타",
 }
 
-_CACHE = {}  # {"owner/repo": (timestamp, item_dict)}
-_CACHE_TTL_SECONDS = 3600  # 1시간마다 GitHub에서 다시 조회
+_DESC_CACHE = {}  # {"owner/repo": (timestamp, {desc, tags, url, default_branch, error})}
+_DESC_CACHE_TTL_SECONDS = 86400  # 24시간 — 설명·토픽은 거의 바뀌지 않으므로 길게 캐시
+
+_VERSION_CACHE = {}  # {"owner/repo": (timestamp, {version_label, remote_version, error})}
+_VERSION_CACHE_TTL_SECONDS = 3600  # 1시간 — 버전은 더 자주 바뀔 수 있으므로 짧게 캐시
 _REQUEST_TIMEOUT = 6
 _DOWNLOAD_TIMEOUT = 30
 
@@ -301,54 +305,114 @@ def _fetch_remote_version(owner, repo, default_branch, token):
     return None
 
 
-def _fetch_remote_info(owner, repo, token):
-    """GitHub API/버전 조회 결과만 캐시한다 (설치 여부·활성화 상태처럼 자주 바뀌는
-    로컬 상태는 캐시하지 않고 매 호출마다 새로 계산한다)."""
+def _fetch_description_info(owner, repo, token):
+    """GitHub 저장소 API(설명·토픽·default_branch)만 조회해 24시간 캐시한다.
+    이 정보는 저장소 관리자가 바꾸지 않는 한 거의 변하지 않으므로 길게 캐시해
+    api.github.com 호출 자체를 줄인다."""
     key = owner + "/" + repo
-    cached = _CACHE.get(key)
-    if cached and (time.time() - cached[0]) < _CACHE_TTL_SECONDS:
+    cached = _DESC_CACHE.get(key)
+    if cached and (time.time() - cached[0]) < _DESC_CACHE_TTL_SECONDS:
         return cached[1]
 
     try:
         api_data = _http_get_json(
             "https://api.github.com/repos/%s/%s" % (owner, repo), token
         )
-        remote_version = _fetch_remote_version(
-            owner, repo, api_data.get("default_branch"), token
-        )
         info = {
             "desc": api_data.get("description") or "(GitHub에 등록된 설명이 없습니다)",
             "tags": api_data.get("topics") or [],
-            "version_label": ("v" + remote_version) if remote_version else "—",
-            "remote_version": remote_version,
             "url": api_data.get("html_url") or ("https://github.com/%s/%s" % (owner, repo)),
+            "default_branch": api_data.get("default_branch"),
             "error": False,
         }
     except urllib.error.HTTPError as exc:
-        remote_version = _fetch_remote_version(owner, repo, None, token)
         info = {
             "desc": "GitHub API 호출 제한 또는 오류(%s)" % exc.code,
             "tags": [],
-            "version_label": ("v" + remote_version) if remote_version else "—",
-            "remote_version": remote_version,
             "url": "https://github.com/%s/%s" % (owner, repo),
+            "default_branch": None,
             "error": True,
         }
     except Exception as exc:
         info = {
             "desc": "GitHub 정보를 불러오지 못했습니다 (%s)" % exc,
             "tags": [],
-            "version_label": "—",
-            "remote_version": None,
             "url": "https://github.com/%s/%s" % (owner, repo),
+            "default_branch": None,
             "error": True,
         }
 
-    _CACHE[key] = (time.time(), info)
+    _DESC_CACHE[key] = (time.time(), info)
     return info
 
 
-def _fetch_repo_entry(url, token, is_enabled_fn):
+def _fetch_version_info(owner, repo, token, default_branch):
+    """저장소의 VERSION 파일만 조회해 1시간 캐시한다. 설명/토픽보다 자주 바뀔 수
+    있는 값이므로(플러그인 릴리즈 주기) 캐시 수명을 짧게 유지한다."""
+    key = owner + "/" + repo
+    cached = _VERSION_CACHE.get(key)
+    if cached and (time.time() - cached[0]) < _VERSION_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    remote_version = _fetch_remote_version(owner, repo, default_branch, token)
+    info = {
+        "version_label": ("v" + remote_version) if remote_version else "—",
+        "remote_version": remote_version,
+        "error": remote_version is None,
+    }
+    _VERSION_CACHE[key] = (time.time(), info)
+    return info
+
+
+def _fetch_remote_info(owner, repo, token):
+    """설명(24시간 캐시)과 버전(1시간 캐시)을 각각 독립적으로 조회해 합친다.
+    설명 캐시가 살아있으면 api.github.com 호출 없이 버전만 새로 확인하므로,
+    캐시 만료 주기마다 매번 두 요청을 다 보내던 것보다 평균 호출 수가 줄어든다."""
+    desc_info = _fetch_description_info(owner, repo, token)
+    version_info = _fetch_version_info(owner, repo, token, desc_info.get("default_branch"))
+    return {
+        "desc": desc_info["desc"],
+        "tags": desc_info["tags"],
+        "version_label": version_info["version_label"],
+        "remote_version": version_info["remote_version"],
+        "url": desc_info["url"],
+        "error": desc_info["error"] or version_info["error"],
+    }
+
+
+def _fetch_remote_info_parallel(owner_repo_pairs, token, max_workers=8):
+    """여러 저장소의 GitHub 정보를 동시에 조회한다. plugin_board 로딩 시간의
+    가장 큰 병목이 저장소 개수만큼 순차적으로 쌓이는 네트워크 왕복이었기 때문에,
+    이 부분만 스레드 풀로 병렬화해 전체 대기 시간을 '가장 느린 요청 1개' 수준으로
+    줄인다. 캐시가 이미 있는 저장소는 스레드 안에서도 즉시 반환되므로 비용이 없다."""
+    results = {}
+    if not owner_repo_pairs:
+        return results
+
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(max_workers, len(owner_repo_pairs))
+    ) as executor:
+        future_map = {
+            executor.submit(_fetch_remote_info, owner, repo, token): (owner, repo)
+            for owner, repo in owner_repo_pairs
+        }
+        for future in concurrent.futures.as_completed(future_map):
+            owner, repo = future_map[future]
+            try:
+                results[(owner, repo)] = future.result()
+            except Exception as exc:
+                results[(owner, repo)] = {
+                    "desc": "GitHub 정보를 불러오지 못했습니다 (%s)" % exc,
+                    "tags": [],
+                    "version_label": "—",
+                    "remote_version": None,
+                    "url": "https://github.com/%s/%s" % (owner, repo),
+                    "error": True,
+                }
+    return results
+
+
+def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None):
     owner, repo = _parse_owner_repo(url)
     if not owner or not repo:
         return {
@@ -376,7 +440,8 @@ def _fetch_repo_entry(url, token, is_enabled_fn):
             plugin_type = "tab"
         has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(repo)
 
-    info = _fetch_remote_info(owner, repo, token)
+    # 병렬로 미리 가져온 원격 정보가 있으면 그걸 쓰고, 없으면(단건 호출 등) 직접 조회
+    info = preloaded_info if preloaded_info is not None else _fetch_remote_info(owner, repo, token)
     remote_version = info["remote_version"]
 
     item = {
@@ -514,7 +579,8 @@ def _delete_plugin(plugin_id):
     except Exception as exc:
         return False, "삭제 실패: %s" % exc
 
-    _CACHE.clear()  # 삭제된 플러그인이 GitHub 캐시에 남아 잘못된 정보를 주지 않도록
+    _DESC_CACHE.clear()  # 삭제된 플러그인이 GitHub 캐시에 남아 잘못된 정보를 주지 않도록
+    _VERSION_CACHE.clear()
     _try_hot_reload(plugin_id)
     return True, "'%s' 플러그인이 삭제되었습니다." % plugin_id
 
@@ -568,7 +634,9 @@ def _install_or_update(owner, repo, token=None):
                 shutil.rmtree(target_dir)
             shutil.copytree(src_root, target_dir)
 
-            _CACHE.pop(owner + "/" + repo, None)  # 설치 직후 카드가 최신 상태를 반영하도록 캐시 무효화
+            key = owner + "/" + repo
+            _DESC_CACHE.pop(key, None)  # 설치 직후 카드가 최신 상태를 반영하도록 캐시 무효화
+            _VERSION_CACHE.pop(key, None)
             _try_hot_reload(repo)
 
             new_version = _local_version(repo) or "?"
@@ -712,9 +780,22 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             except Exception:
                 return True
 
-        curated_items = [
-            _fetch_repo_entry(url, token, is_enabled_fn) for url in repo_urls
-        ]
+        curated_items = []
+        owner_repo_pairs = []
+        for url in repo_urls:
+            owner, repo = _parse_owner_repo(url)
+            if owner and repo:
+                owner_repo_pairs.append((owner, repo))
+
+        # 저장소 개수만큼 순차 호출하던 GitHub 조회를 병렬로 한 번에 처리 —
+        # 캐시가 살아있는 저장소는 이 안에서도 즉시 반환되므로 추가 비용이 없다.
+        remote_infos = _fetch_remote_info_parallel(owner_repo_pairs, token)
+
+        for url in repo_urls:
+            owner, repo = _parse_owner_repo(url)
+            preloaded = remote_infos.get((owner, repo)) if owner and repo else None
+            curated_items.append(_fetch_repo_entry(url, token, is_enabled_fn, preloaded))
+
         curated_ids = {it["id"] for it in curated_items}
         local_items = _scan_uncurated_installed(curated_ids, is_enabled_fn)
         return {"success": True, "items": curated_items + local_items}
