@@ -608,10 +608,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
     update_manifest = {
         "enabled": True,
         "provider": "github-raw",
-        "raw_base_url": (
-            "https://raw.githubusercontent.com/<org>/<repo>/<branch>/"
-            "plugins/metadata/plugin_board"
-        ),
+        "raw_base_url": "https://raw.githubusercontent.com/yume-script/plugin_board/refs/heads/main",
         "files": [
             "plugin_board.py",
             "__init__.py",
@@ -619,6 +616,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             "index.html",
             "style.css",
             "script.js",
+            "README.md",
         ],
         "version_file": "VERSION",
         "version_key": "plugin version",

@@ -9,7 +9,7 @@ BookOasis 좌측 사이드바에 전용 카테고리 탭을 추가해, BookOasis
 
 | 항목      | 값                                            |
 | ------- | --------------------------------------------- |
-| 플러그인 버전 | `2.5.0`                                       |
+| 플러그인 버전 | `2.3.0`                                       |
 | 플러그인 ID | `plugin_board`                                |
 | 표시 이름   | 플러그인게시판                                       |
 | 클래스     | `PluginBoardMetadataProvider`                 |
@@ -226,9 +226,28 @@ TYPE_OVERRIDES = {
 ## 자동 업데이트 (plugin_board 자기 자신)
 
 `update_manifest`에 GitHub raw 기반 업데이트 계약이 선언되어 있습니다.
-`raw_base_url`의 `<org>/<repo>/<branch>`를 실제 저장소 경로로 바꾼 뒤, GitHub의
-`VERSION`이 로컬보다 높을 때만 환경설정 화면의 샘플 업데이트 버튼으로 갱신됩니다.
-(이 계약은 plugin_board 자신을 업데이트하는 용도이며, §5의 자체 엔진과는 별개입니다.)
+
+```python
+update_manifest = {
+    "enabled": True,
+    "provider": "github-raw",
+    "raw_base_url": "https://raw.githubusercontent.com/yume-script/plugin_board/refs/heads/main",
+    "files": [
+        "plugin_board.py", "__init__.py", "VERSION",
+        "index.html", "style.css", "script.js", "README.md",
+    ],
+    "version_file": "VERSION",
+    "version_key": "plugin version",
+    "show_sample_update_button": True,
+}
+```
+
+`raw_base_url`은 `yume-script/plugin_board` 저장소 루트를 직접 가리키며(그 저장소의
+파일이 `plugins/metadata/plugin_board/` 하위가 아니라 저장소 루트에 바로 있는 구조),
+`files`에는 이 폴더의 7개 파일을 전부 등록해 전체가 업데이트 대상에 포함됩니다.
+GitHub의 `VERSION`이 로컬보다 높을 때만 환경설정 화면의 샘플 업데이트 버튼으로
+갱신됩니다. (이 계약은 plugin_board 자신을 업데이트하는 용도이며, §5의 전체
+재다운로드 설치 엔진과는 별개의 코어 표준 메커니즘입니다.)
 
 ## 보안 관련 설계 메모
 
