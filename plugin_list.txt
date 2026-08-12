@@ -7,3 +7,4 @@ https://github.com/madnite1/plugin_manager
 https://github.com/colaiuta77/achievements
 https://github.com/colaiuta77/activity
 https://github.com/colaiuta77/activity_desk
+https://github.com/grandfoxx/my_reading_summary
