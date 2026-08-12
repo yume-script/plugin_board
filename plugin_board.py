@@ -19,6 +19,7 @@ update_manifest를 AST로만(코드 실행 없이) 추출해 명시된 파일만
 """
 
 import ast
+import base64
 import concurrent.futures
 import json
 import os
@@ -43,6 +44,11 @@ REMOTE_PLUGIN_LIST_URL = (
     "https://raw.githubusercontent.com/yume-script/plugin_board/main/plugin_list.txt"
 )
 
+# plugin_board 자기 자신은 개발 중인 저장소라 plugin_list.txt에 없을 수 있다.
+# 코어의 별도 자동 업데이트 화면에 의존하지 않고 이 카드 목록 안에서도 스스로의
+# 업데이트 여부를 확인/설치할 수 있도록, 목록에 없으면 자동으로 포함시킨다.
+SELF_REPO_URL = "https://github.com/yume-script/plugin_board"
+
 _LIST_CACHE = {"ts": 0.0, "urls": []}
 _LIST_CACHE_TTL_SECONDS = 3600  # 1시간마다 목록을 다시 조회
 
@@ -54,6 +60,7 @@ TYPE_OVERRIDES = {
     "colaiuta77/achievements": "tab",
     "yume-script/pixiv_ranking": "tab",
     "yume-script/unified_book": "search",
+    "yume-script/plugin_board": "tab",
 }
 
 TYPE_LABELS = {
@@ -585,6 +592,190 @@ def _delete_plugin(plugin_id):
     return True, "'%s' 플러그인이 삭제되었습니다." % plugin_id
 
 
+def _extract_plugin_id_from_py(py_path):
+    """.py 파일 안의 클래스에서 id = "..." 선언을 AST로만(코드 실행 없이) 찾는다."""
+    if not os.path.isfile(py_path):
+        return None
+    try:
+        with open(py_path, "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read(), filename=py_path)
+    except Exception:
+        return None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for stmt in node.body:
+                if isinstance(stmt, ast.Assign):
+                    for target in stmt.targets:
+                        if isinstance(target, ast.Name) and target.id == "id":
+                            try:
+                                val = ast.literal_eval(stmt.value)
+                            except Exception:
+                                continue
+                            if isinstance(val, str) and val.strip():
+                                return val.strip()
+    return None
+
+
+def _is_plugin_directory(dpath):
+    """이 디렉토리가 BookOasis 플러그인처럼 보이는지 판별한다
+    (VERSION 파일이 있거나, id = "..."를 선언한 .py 파일이 있으면 인정)."""
+    if not os.path.isdir(dpath):
+        return False
+    if os.path.isfile(os.path.join(dpath, "VERSION")):
+        return True
+    try:
+        for fname in os.listdir(dpath):
+            if fname.endswith(".py") and fname not in ("__init__.py", "base.py"):
+                if _extract_plugin_id_from_py(os.path.join(dpath, fname)):
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def _find_plugin_root_dir(start_dir):
+    """압축을 해제한 폴더 트리 안에서, 폴더 깊이에 상관없이 실제 플러그인 루트를
+    찾는다. zip 안에 파일이 바로 있는 경우/저장소 하나로 한 번 감싸인 경우/그보다
+    더 깊이 중첩된 경우를 전부 다룬다."""
+    if _is_plugin_directory(start_dir):
+        return start_dir
+
+    for root, dirs, _files in os.walk(start_dir):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__MACOSX"]
+        if _is_plugin_directory(root):
+            return root
+
+    # 플러그인 구조를 못 찾았지만 하위 폴더가 정확히 1개뿐이면 그걸 사용한다
+    # (흔한 "저장소이름-브랜치/" 형태로 한 번만 감싸져 있는 경우)
+    try:
+        subdirs = [
+            os.path.join(start_dir, d)
+            for d in os.listdir(start_dir)
+            if os.path.isdir(os.path.join(start_dir, d))
+            and not d.startswith(".")
+            and d != "__MACOSX"
+        ]
+    except Exception:
+        subdirs = []
+    if len(subdirs) == 1:
+        return subdirs[0]
+
+    return start_dir
+
+
+def _detect_plugin_id(plugin_dir, fallback_name=None):
+    """플러그인 루트 디렉토리에서 plugin_id를 추정한다.
+    1) VERSION 파일의 id/plugin_id 값 → 2) .py 파일의 id = "..." 선언(AST) →
+    3) 폴더 이름 → 4) zip 파일명 순으로 시도한다."""
+    version_path = os.path.join(plugin_dir, "VERSION")
+    if os.path.isfile(version_path):
+        try:
+            with open(version_path, "r", encoding="utf-8") as f:
+                vdata = json.load(f)
+            pid = vdata.get("id") or vdata.get("plugin_id")
+            if pid and _PLUGIN_ID_RE.match(str(pid).strip()):
+                return str(pid).strip()
+        except Exception:
+            pass
+
+    try:
+        for fname in sorted(os.listdir(plugin_dir)):
+            if fname.endswith(".py") and fname not in ("__init__.py", "base.py"):
+                pid = _extract_plugin_id_from_py(os.path.join(plugin_dir, fname))
+                if pid:
+                    return pid
+    except Exception:
+        pass
+
+    folder_name = os.path.basename(os.path.normpath(plugin_dir))
+    if folder_name and not folder_name.lower().startswith(("tmp", "extract")):
+        return folder_name
+
+    if fallback_name:
+        clean = re.sub(r"\.zip$", "", str(fallback_name), flags=re.IGNORECASE)
+        clean = re.sub(r"[^a-zA-Z0-9_-]", "_", clean).strip("_")
+        if clean:
+            return clean
+
+    return ""
+
+
+def _install_from_zip(zip_data_b64, filename, db_type):
+    """업로드된 zip 파일(base64)로 플러그인을 설치한다. GitHub 없이도 동작하며,
+    zip 내부 폴더 깊이(바로 최상위 / 한 번 감싸짐 / 더 깊이 중첩)에 상관없이
+    실제 플러그인 루트를 찾아 그 내용을 plugins/metadata/{id}/로 복사한다."""
+    if not zip_data_b64:
+        return False, "zip 데이터가 없습니다."
+
+    if "," in zip_data_b64:
+        zip_data_b64 = zip_data_b64.split(",", 1)[1]  # data:...;base64, 접두어 제거
+
+    try:
+        zip_bytes = base64.b64decode(zip_data_b64)
+    except Exception as exc:
+        return False, "zip 데이터를 해석하지 못했습니다: %s" % exc
+
+    tmp_dir = tempfile.mkdtemp(prefix="plugin_board_zip_")
+    try:
+        zip_path = os.path.join(tmp_dir, "upload.zip")
+        with open(zip_path, "wb") as f:
+            f.write(zip_bytes)
+
+        extract_dir = os.path.join(tmp_dir, "extract")
+        os.makedirs(extract_dir, exist_ok=True)
+        try:
+            _extract_zip_safe(zip_path, extract_dir)  # Zip Slip 방지 검증 포함
+        except Exception as exc:
+            return False, "zip 압축 해제에 실패했습니다: %s" % exc
+
+        plugin_root = _find_plugin_root_dir(extract_dir)
+        if not _is_plugin_directory(plugin_root):
+            return False, (
+                "zip 안에서 유효한 플러그인 구조를 찾지 못했습니다 "
+                "(VERSION 파일 또는 id = \"...\"를 선언한 .py 파일이 필요합니다)."
+            )
+
+        plugin_id = _detect_plugin_id(plugin_root, fallback_name=filename)
+        if not plugin_id:
+            return False, "플러그인 ID를 식별하지 못했습니다."
+
+        try:
+            _validate_plugin_id(plugin_id)
+        except ValueError as exc:
+            return False, str(exc)
+
+        if plugin_id == "plugin_board":
+            return False, "plugin_board 자기 자신은 이 화면에서 덮어쓸 수 없습니다."
+
+        base_dir = _plugins_metadata_dir()
+        target_dir = _safe_join(base_dir, plugin_id)
+
+        if os.path.isdir(target_dir):
+            shutil.rmtree(target_dir)
+        shutil.copytree(
+            plugin_root,
+            target_dir,
+            ignore=shutil.ignore_patterns(
+                ".git", ".github", "__pycache__", "*.pyc", "__MACOSX", ".DS_Store"
+            ),
+        )
+
+        # 이 plugin_id가 큐레이션 목록의 저장소와 같다면 캐시도 함께 무효화
+        for cache in (_DESC_CACHE, _VERSION_CACHE):
+            for key in [k for k in cache if k.endswith("/" + plugin_id)]:
+                cache.pop(key, None)
+
+        _try_hot_reload(plugin_id)
+
+        new_version = _local_version(plugin_id) or "?"
+        return True, "'%s' zip 설치 완료 (버전: v%s)" % (plugin_id, new_version)
+    except Exception as exc:
+        return False, "zip 설치 중 오류가 발생했습니다: %s" % exc
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def _install_or_update(owner, repo, token=None):
     """저장소 zip을 받아 plugins/metadata/{repo}/를 통째로 교체한다.
     update_manifest.files 화이트리스트로 파일을 골라내지 않고, 검증에 성공한
@@ -709,6 +900,24 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         action = str(item_data.get("action", "")).strip().lower()
         plugin_id = str(item_data.get("plugin_id", "")).strip()
 
+        if action == "refresh_list":
+            cfg = self.get_plugin_config(db_type, default={})
+            token = cfg.get("GITHUB_TOKEN") or None
+            urls = _fetch_repo_list(token, force=True)
+            if not urls:
+                return False, (
+                    "plugin_list.txt를 다시 가져오지 못했습니다 "
+                    "(%s 조회 실패)" % REMOTE_PLUGIN_LIST_URL
+                )
+            return True, "플러그인 목록을 새로 불러왔습니다 (%d개 저장소)." % len(urls)
+
+        if action == "install_zip":
+            zip_data = str(item_data.get("zip_data", "")).strip()
+            filename = str(item_data.get("filename", "")).strip()
+            if not zip_data:
+                return False, "zip_data가 필요합니다."
+            return _install_from_zip(zip_data, filename, db_type)
+
         if action == "toggle":
             if not plugin_id:
                 return False, "plugin_id가 필요합니다."
@@ -763,6 +972,12 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                     "(%s 조회 실패)" % REMOTE_PLUGIN_LIST_URL
                 ),
             }
+
+        # plugin_board 자기 자신이 원격 목록에 없다면 자동으로 포함시켜, 개발 중인
+        # 버전도 다른 플러그인과 동일하게 카드 + 업데이트 버튼으로 관리할 수 있게 한다.
+        existing_repo_names = {_parse_owner_repo(u)[1] for u in repo_urls}
+        if "plugin_board" not in existing_repo_names:
+            repo_urls = repo_urls + [SELF_REPO_URL]
 
         try:
             gateway = self.get_db_gateway(db_type)

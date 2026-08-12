@@ -2,6 +2,10 @@
 <div class="pb-root">
 
   <header class="pb-header">
+    <button type="button" id="pb-refresh-list-btn" class="pb-refresh-btn" title="plugin_list.txt를 지금 다시 불러오기">
+      <span class="pb-refresh-icon"><svg viewBox="0 0 16 16"><path d="M13.65 2.35a7.958 7.958 0 0 0-11.3 0L1 3.7V1H0v4h4V4H1.7l1-1a6.965 6.965 0 0 1 9.9 0 6.965 6.965 0 0 1 0 9.9 6.965 6.965 0 0 1-9.9 0 6.93 6.93 0 0 1-1.7-2.86l-.96.29a7.94 7.94 0 0 0 1.95 3.27 7.958 7.958 0 0 0 11.3 0 7.958 7.958 0 0 0 0-11.3Z"/></svg></span>
+      목록 새로고침
+    </button>
     <p class="pb-eyebrow">BookOasis · Metadata &amp; Category Plug-ins</p>
     <h1 class="pb-title">플러그인게시판</h1>
     <p class="pb-desc">BookOasis 플러그인 목록을 GitHub에서 실시간으로 불러와, 설명·최신 버전·이 서버의 설치 여부를 확인해 카드로 보여줍니다.</p>
@@ -24,6 +28,25 @@
       💡 팁: 저장소 이름과 같은 메인 모듈 파일(예: <code>my_plugin/my_plugin.py</code>)이
       있는 BookOasis 플러그인 저장소만 지원합니다. 설치 시 대상 폴더 전체를 저장소
       내용으로 교체합니다.
+    </p>
+  </section>
+
+  <section class="pb-git-panel">
+    <div class="pb-git-panel-head">
+      <div class="pb-git-panel-title">
+        <span class="pb-git-panel-icon"><svg viewBox="0 0 16 16"><path d="M4.5 1A1.5 1.5 0 0 0 3 2.5v11A1.5 1.5 0 0 0 4.5 15h7a1.5 1.5 0 0 0 1.5-1.5v-8.086a1.5 1.5 0 0 0-.44-1.06L9.647 1.44A1.5 1.5 0 0 0 8.586 1H4.5ZM7 6h1v1h1v1H8v1H7V8H6V7h1V6Zm-1 3h3v1H6V9Z"/></svg></span>
+        <h2>Zip 파일 설치</h2>
+      </div>
+      <span class="pb-git-panel-badge">ZIP 설치</span>
+    </div>
+    <form id="pb-zip-install-form" class="pb-git-panel-form">
+      <input type="file" id="pb-zip-install-input" accept=".zip,application/zip" />
+      <button type="submit" id="pb-zip-install-btn">Zip 설치</button>
+    </form>
+    <p class="pb-git-panel-tip">
+      💡 팁: 압축 파일 내부 폴더 깊이(최상위에 바로 있음 / 저장소 폴더 하나로 감싸짐 /
+      그보다 더 중첩됨)에 상관없이 <code>VERSION</code> 파일 또는 <code>id = "..."</code>가
+      선언된 메인 <code>.py</code> 파일을 자동으로 찾아 그 위치를 플러그인 루트로 설치합니다.
     </p>
   </section>
 

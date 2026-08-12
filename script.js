@@ -508,6 +508,12 @@
       tagsWrap.appendChild(updTag);
     }
 
+    if (item.id === "plugin_board") {
+      const selfTag = document.createElement("span");
+      selfTag.className = "pb-tag pb-tag-self";
+      selfTag.textContent = "이 플러그인게시판";
+      tagsWrap.appendChild(selfTag);
+    }
 
     (item.tags || []).forEach((tagText) => {
       const tag = document.createElement("span");
@@ -553,7 +559,9 @@
     parts.push(tagsWrap);
     if ((item.features || []).length > 0) parts.push(feats);
     parts.push(foot);
-    if (item.installed) parts.push(buildManageRow(item));
+    // plugin_board 자기 자신은 삭제/비활성화가 백엔드에서 항상 거부되므로,
+    // 혼란을 주지 않도록 관리 행(스위치·삭제) 자체를 표시하지 않는다.
+    if (item.installed && item.id !== "plugin_board") parts.push(buildManageRow(item));
     card.append(...parts);
     return card;
   }
@@ -705,6 +713,106 @@
     });
   }
 
+  // ------------------------------------------------------------------
+  // "목록 새로고침" 버튼 — 캐시(최대 1시간) 만료를 기다리지 않고 plugin_list.txt를
+  // 즉시 다시 불러온다. 실제 설치 상태에는 영향 없음(순수 목록 재조회).
+  // ------------------------------------------------------------------
+  function wireRefreshListButton() {
+    const btn = document.getElementById("pb-refresh-list-btn");
+    if (!btn) return;
+
+    btn.addEventListener("click", async () => {
+      const origHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.classList.add("pb-refresh-spinning");
+
+      try {
+        const result = await callPluginBoardAction(getDbType(), { action: "refresh_list" });
+        if (result && result.success) {
+          showToast(result.message || "목록을 새로 불러왔습니다.", false);
+          await load();
+        } else {
+          showToast((result && result.error) || "목록을 새로 불러오지 못했습니다.", true);
+        }
+      } catch (err) {
+        console.error(`${LOG_PREFIX} 목록 새로고침 통신 오류:`, err);
+        showToast("새로고침 요청 중 통신 오류가 발생했습니다.", true);
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove("pb-refresh-spinning");
+        btn.innerHTML = origHtml;
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // "Zip 파일 설치" 패널 — 파일을 base64로 읽어 apply({action:"install_zip"})로
+  // 전송한다. 폴더 깊이 판단·플러그인 ID 추정은 전부 백엔드(_find_plugin_root_dir/
+  // _detect_plugin_id)가 처리한다.
+  // ------------------------------------------------------------------
+  function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result || "");
+        const idx = result.indexOf(",");
+        resolve(idx >= 0 ? result.slice(idx + 1) : result);
+      };
+      reader.onerror = () => reject(reader.error || new Error("파일을 읽지 못했습니다."));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function wireZipInstallPanel() {
+    const form = document.getElementById("pb-zip-install-form");
+    const input = document.getElementById("pb-zip-install-input");
+    const btn = document.getElementById("pb-zip-install-btn");
+    if (!form || !input || !btn) return;
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const file = input.files && input.files[0];
+      if (!file) {
+        showToast("설치할 zip 파일을 선택해주세요.", true);
+        return;
+      }
+      if (!/\.zip$/i.test(file.name)) {
+        showToast("zip 파일만 업로드할 수 있습니다.", true);
+        return;
+      }
+
+      const origText = btn.textContent;
+      btn.disabled = true;
+      input.disabled = true;
+      btn.textContent = "설치 중…";
+
+      try {
+        const base64 = await readFileAsBase64(file);
+        const result = await callPluginBoardAction(getDbType(), {
+          action: "install_zip",
+          zip_data: base64,
+          filename: file.name,
+        });
+        if (result && result.success) {
+          showToast(result.message || "설치가 완료되었습니다.", false);
+          form.reset();
+          load();
+        } else {
+          showToast((result && result.error) || "설치에 실패했습니다.", true);
+        }
+      } catch (err) {
+        console.error(`${LOG_PREFIX} Zip 설치 통신 오류:`, err);
+        showToast("설치 요청 중 통신 오류가 발생했습니다.", true);
+      } finally {
+        btn.disabled = false;
+        input.disabled = false;
+        btn.textContent = origText;
+      }
+    });
+  }
+
+  wireRefreshListButton();
   wireGitInstallPanel();
+  wireZipInstallPanel();
   load();
 })();
