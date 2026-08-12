@@ -69,6 +69,12 @@ _DOWNLOAD_TIMEOUT = 30
 _PLUGIN_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
 
+# plugins/metadata 아래에 있어도 실제 플러그인이 아닌 폴더는 카드로 만들지 않는다.
+# (예: bytecode 캐시, 잘못 생성된 빈 폴더 등)
+_EXCLUDED_DIR_NAMES = {"__pycache__", "-", ".git", ".github", ".DS_Store", "base"}
+# 영문/숫자를 최소 1자 이상 포함해야 유효한 플러그인 폴더명으로 인정 ("-"만 있는 폴더 등 배제)
+_VALID_PLUGIN_DIRNAME_RE = re.compile(r"^(?=.*[a-zA-Z0-9])[a-zA-Z0-9_-]+$")
+
 
 # ========================================================================
 # 공통 HTTP 유틸
@@ -197,6 +203,21 @@ def _read_local_class_attrs(plugin_id):
     return attrs
 
 
+def _looks_like_plugin_dir(entry, full_path):
+    """plugins/metadata 아래의 폴더가 실제 플러그인처럼 보이는지 판별한다.
+    __pycache__, '-', 숨김 폴더 등 카드로 만들면 안 되는 항목을 걸러낸다."""
+    if entry in _EXCLUDED_DIR_NAMES:
+        return False
+    if entry.startswith(".") or entry.startswith("__"):
+        return False
+    if not _VALID_PLUGIN_DIRNAME_RE.match(entry):
+        return False
+    # 진짜 플러그인이라면 {entry}.py(메인 모듈) 또는 VERSION 파일 중 하나는 있어야 한다
+    has_module = os.path.isfile(os.path.join(full_path, entry + ".py"))
+    has_version = os.path.isfile(os.path.join(full_path, "VERSION"))
+    return has_module or has_version
+
+
 def _scan_uncurated_installed(curated_ids, is_enabled_fn):
     """plugin_list.txt(원격 큐레이션 목록)에 없지만 이 서버에 실제로 설치되어 있는
     메타데이터 플러그인을 plugins/metadata 디렉토리에서 직접 찾아 카드로 만든다.
@@ -211,10 +232,10 @@ def _scan_uncurated_installed(curated_ids, is_enabled_fn):
     for entry in entries:
         if entry in curated_ids or entry == "plugin_board":
             continue
-        if not _PLUGIN_ID_RE.match(entry):
-            continue
         full_path = os.path.join(base_dir, entry)
         if not os.path.isdir(full_path):
+            continue
+        if not _looks_like_plugin_dir(entry, full_path):
             continue
 
         version = _local_version(entry)
@@ -514,6 +535,29 @@ def _delete_plugin(plugin_id):
     return True, "'%s' 플러그인이 삭제되었습니다." % plugin_id
 
 
+def _prune_files_not_in_manifest(target_dir, manifest_files):
+    """update_manifest.files 목록에 없는 파일은 대상 폴더에서 전부 삭제해,
+    설치 결과가 항상 manifest와 정확히 일치하도록 동기화한다
+    (madnite1/plugin_manager의 Git URL 설치와 동일한 정책)."""
+    keep = {os.path.normpath(str(f)) for f in manifest_files}
+    for root, dirs, files in os.walk(target_dir, topdown=False):
+        for fname in files:
+            abs_path = os.path.join(root, fname)
+            rel_path = os.path.normpath(os.path.relpath(abs_path, target_dir))
+            if rel_path not in keep:
+                try:
+                    os.remove(abs_path)
+                except OSError:
+                    pass
+        # 파일을 지우고 남은 빈 디렉토리 정리
+        if root != target_dir:
+            try:
+                if not os.listdir(root):
+                    os.rmdir(root)
+            except OSError:
+                pass
+
+
 def _install_or_update(owner, repo, token=None):
     _validate_plugin_id(repo)
 
@@ -568,6 +612,8 @@ def _install_or_update(owner, repo, token=None):
                 dst_file = _safe_join(target_dir, rel_file)
                 os.makedirs(os.path.dirname(dst_file), exist_ok=True)
                 shutil.copy2(src_file, dst_file)
+
+            _prune_files_not_in_manifest(target_dir, manifest["files"])
 
             _CACHE.pop(owner + "/" + repo, None)  # 설치 직후 카드가 최신 상태를 반영하도록 캐시 무효화
             _try_hot_reload(repo)

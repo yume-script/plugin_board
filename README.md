@@ -109,13 +109,25 @@ GitHub 저장소 주소를 모르므로 이 카드들은:
    — 소스 코드를 import/exec 하지 않으므로 클론된 코드가 그 자리에서 실행되지 않습니다
 4. `update_manifest.files`에 명시된 파일만 골라 `plugins/metadata/{repo}/`로 복사
    (경로 이탈·존재하지 않는 파일 등은 사전 검증 후 거부)
-5. 가능하면 코어의 hot reload(`services.metadata_factory.MetadataFactory.hot_reload_plugin`)를
+5. **복사 후 `update_manifest.files` 목록에 없는 파일은 대상 폴더에서 전부 삭제**해,
+   설치 결과가 항상 manifest와 정확히 일치하도록 정리합니다(빈 디렉토리도 함께 정리).
+   이전 버전에서 남아있던 파일이나 수동으로 넣어둔 파일도 이 시점에 제거됩니다.
+6. 가능하면 코어의 hot reload(`services.metadata_factory.MetadataFactory.hot_reload_plugin`)를
    시도해 서버 재시작 없이 즉시 반영 (실패해도 설치 자체는 이미 완료된 상태)
 
 `update_manifest`가 없는 저장소(가이드 규격을 따르지 않는 저장소)는 안전을 위해 설치를
 거부합니다.
 
-### 6. 활성화/비활성화 · 환경설정 · 삭제 — 코어 공통 API 그대로 사용
+### 6. Git 저장소 URL 설치 패널 — plugin_list.txt에 없는 저장소도 즉시 설치
+
+화면 상단에는 `madnite1/plugin_manager`의 "Git 저장소 URL 설치" 패널과 같은 형태의
+입력창이 있습니다. `plugin_list.txt`에 등록돼 있지 않은 저장소라도 GitHub 주소만
+입력하면 바로 설치할 수 있습니다. 내부적으로는 카드의 `신규설치` 버튼과 동일한
+`apply({"action": "install_git", "git_url": ...})`를 호출할 뿐이라, 별도의 백엔드
+로직이 추가된 것은 아닙니다. 설치가 끝나면 목록을 새로고침하며, `plugin_list.txt`에
+없는 저장소이므로 §4에서 설명한 "미등록 설치 플러그인" 카드로 표시됩니다.
+
+### 7. 활성화/비활성화 · 환경설정 · 삭제 — 코어 공통 API 그대로 사용
 
 설치된 카드 하단에는 관리 행이 추가로 표시됩니다.
 
@@ -220,8 +232,11 @@ TYPE_OVERRIDES = {
 - **플러그인 ID 검증**: 저장소 이름은 영문·숫자·`_`·`-`만 허용합니다.
 - **코드 비실행 원칙**: `update_manifest`는 AST 파싱(`ast.literal_eval`)으로만 읽고,
   다운로드한 소스는 설치 전 단계에서 한 번도 import/exec 되지 않습니다.
-- **화이트리스트 복사**: `update_manifest.files`에 명시된 파일만 복사하며, 존재하지
-  않는 파일이나 상위 경로(`..`)가 섞여 있으면 설치 전체를 거부합니다.
+- **화이트리스트 복사 + 정리(prune)**: `update_manifest.files`에 명시된 파일만 복사하며,
+  존재하지 않는 파일이나 상위 경로(`..`)가 섞여 있으면 설치 전체를 거부합니다. 복사 후에는
+  그 목록에 없는 파일을 전부 삭제해 설치 결과가 항상 manifest와 정확히 일치하게 만듭니다.
+- **비-플러그인 폴더 제외**: `plugins/metadata/` 스캔 시 `__pycache__`, `-`, 숨김 폴더 등은
+  제외하고, `{폴더명}.py` 또는 `VERSION` 파일이 실제로 있는 폴더만 플러그인으로 인정합니다.
 - **목록 출처 신뢰**: `plugin_list.txt`는 `yume-script/plugin_board` 저장소 하나에서만
   읽어옵니다. 다른 출처를 신뢰하려면 `REMOTE_PLUGIN_LIST_URL`을 직접 바꿔야 합니다.
 
@@ -230,7 +245,6 @@ TYPE_OVERRIDES = {
 - 검색/메타데이터 적용은 지원하지 않는 안내·설치·관리용 플러그인입니다(`is_searchable = False`).
 - GitHub API 무인증 한도(60회/시간)를 서버 전체가 공유합니다. `GITHUB_TOKEN` 설정을 권장합니다.
 - 기능 목록(`features`)은 GitHub API로 자동 추출하지 않으므로 기본적으로 비어 있습니다.
-- 업데이트 시 기존에 설치된 파일 중 새 `update_manifest.files` 목록에서 빠진 파일은
-  삭제되지 않고 그대로 남습니다(덮어쓰기만 수행).
+- Git URL 설치 패널·`신규설치` 버튼 모두 `update_manifest`를 선언한 저장소만 지원합니다.
 - 환경설정 모달은 표준 `config_schema` 자동 생성 폼만 지원하며, 커스텀 `settings_ui`
   (HTML/CSS/JS)는 지원하지 않습니다.

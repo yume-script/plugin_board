@@ -602,5 +602,53 @@
     }
   }
 
+  // ------------------------------------------------------------------
+  // "Git 저장소 URL 설치" 패널 — plugin_list.txt에 없는 임의의 GitHub 저장소도
+  // URL만 입력하면 바로 설치할 수 있다(update_manifest 규격을 따르는 저장소만).
+  // ------------------------------------------------------------------
+  function wireGitInstallPanel() {
+    const form = document.getElementById("pb-git-install-form");
+    const input = document.getElementById("pb-git-install-input");
+    const btn = document.getElementById("pb-git-install-btn");
+    if (!form || !input || !btn) return;
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const url = input.value.trim();
+      if (!url) return;
+      if (!/^https?:\/\/github\.com\/[^/]+\/[^/]+/i.test(url)) {
+        showToast("올바른 GitHub 저장소 주소를 입력해주세요. (예: https://github.com/user/repo)", true);
+        return;
+      }
+
+      const origText = btn.textContent;
+      btn.disabled = true;
+      input.disabled = true;
+      btn.textContent = "설치 중…";
+
+      try {
+        const result = await callPluginBoardAction(getDbType(), {
+          action: "install_git",
+          git_url: url,
+        });
+        if (result && result.success) {
+          showToast(result.message || "설치가 완료되었습니다.", false);
+          input.value = "";
+          load();
+        } else {
+          showToast((result && result.error) || "설치에 실패했습니다.", true);
+        }
+      } catch (err) {
+        console.error(`${LOG_PREFIX} Git URL 설치 통신 오류:`, err);
+        showToast("설치 요청 중 통신 오류가 발생했습니다.", true);
+      } finally {
+        btn.disabled = false;
+        input.disabled = false;
+        btn.textContent = origText;
+      }
+    });
+  }
+
+  wireGitInstallPanel();
   load();
 })();

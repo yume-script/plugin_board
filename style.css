@@ -60,6 +60,120 @@
   color: var(--app-accent, var(--app-text-primary));
 }
 
+/* ---------- Git 저장소 URL 설치 패널 ---------- */
+.pb-git-panel {
+  margin-top: 16px;
+  background: var(--app-bg-card);
+  border: 1px solid var(--app-border, rgba(255,255,255,0.1));
+  border-radius: 10px;
+  padding: 16px 20px 18px;
+}
+
+.pb-git-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.pb-git-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pb-git-panel-title h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--app-text-primary);
+}
+.pb-git-panel-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  color: var(--app-text-primary);
+  flex-shrink: 0;
+}
+.pb-git-panel-icon svg {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+}
+
+.pb-git-panel-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #fff;
+  background: var(--app-accent);
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pb-git-panel-form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pb-git-panel-form input {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--app-input-bg, var(--app-bg-main));
+  border: 1px solid var(--app-border, rgba(255,255,255,0.15));
+  color: var(--app-text-primary);
+  font-size: 12.5px;
+  font-family: inherit;
+}
+.pb-git-panel-form input::placeholder {
+  color: var(--app-text-muted);
+}
+.pb-git-panel-form input:disabled {
+  opacity: 0.6;
+}
+
+.pb-git-panel-form button {
+  font-size: 12.5px;
+  font-weight: 700;
+  font-family: inherit;
+  color: #fff;
+  background: linear-gradient(135deg, var(--app-accent), #2fbf85);
+  border: none;
+  padding: 9px 18px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity .15s ease, transform .15s ease;
+}
+.pb-git-panel-form button:hover:not(:disabled) {
+  opacity: 0.92;
+  transform: translateY(-1px);
+}
+.pb-git-panel-form button:disabled {
+  opacity: 0.65;
+  cursor: progress;
+  transform: none;
+}
+
+.pb-git-panel-tip {
+  margin: 10px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--app-text-muted);
+}
+.pb-git-panel-tip code {
+  background: var(--app-bg-main);
+  border: 1px solid var(--app-border, rgba(255,255,255,0.12));
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 10.5px;
+  color: var(--app-text-secondary, var(--app-text-primary));
+}
+
 /* ---------- 필터 탭 ---------- */
 .pb-filters {
   display: flex;
