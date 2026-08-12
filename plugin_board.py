@@ -145,6 +145,14 @@ def _is_installed(plugin_id):
     return os.path.isdir(os.path.join(_plugins_metadata_dir(), plugin_id))
 
 
+def _has_settings_ui(plugin_id):
+    """settings.html이 있으면 config_schema가 비어 있어도 커스텀 설정 화면을
+    제공하는 것이므로, 환경설정(⚙) 버튼 노출 여부 판단에 함께 사용한다."""
+    return os.path.isfile(
+        os.path.join(_plugins_metadata_dir(), plugin_id, "settings.html")
+    )
+
+
 def _local_version(plugin_id):
     version_file = os.path.join(_plugins_metadata_dir(), plugin_id, "VERSION")
     if not os.path.isfile(version_file):
@@ -264,7 +272,7 @@ def _scan_uncurated_installed(curated_ids, is_enabled_fn):
             "installed": True,
             "installed_version": version,
             "has_update": False,
-            "has_config": bool(attrs.get("config_schema")),
+            "has_config": bool(attrs.get("config_schema")) or _has_settings_ui(entry),
             "enabled": is_enabled_fn(entry),
             "local_only": True,
         })
@@ -366,7 +374,7 @@ def _fetch_repo_entry(url, token, is_enabled_fn):
             plugin_type = "search"
         elif local_attrs.get("category_tab"):
             plugin_type = "tab"
-        has_config = bool(local_attrs.get("config_schema"))
+        has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(repo)
 
     info = _fetch_remote_info(owner, repo, token)
     remote_version = info["remote_version"]
@@ -434,30 +442,6 @@ def _find_extracted_root(extract_dir):
     if len(entries) == 1:
         return os.path.join(extract_dir, entries[0])
     return extract_dir
-
-
-def _extract_update_manifest(py_path):
-    """대상 플러그인 .py 파일에서 update_manifest 딕셔너리를 AST로만 추출한다.
-    코드를 import/exec 하지 않으므로 클론된 소스가 악의적이어도 실행되지 않는다."""
-    if not os.path.isfile(py_path):
-        return None
-    try:
-        with open(py_path, "r", encoding="utf-8") as f:
-            tree = ast.parse(f.read(), filename=py_path)
-    except Exception:
-        return None
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            for stmt in node.body:
-                if isinstance(stmt, ast.Assign):
-                    for target in stmt.targets:
-                        if isinstance(target, ast.Name) and target.id == "update_manifest":
-                            try:
-                                return ast.literal_eval(stmt.value)
-                            except Exception:
-                                return None
-    return None
 
 
 def _candidate_branches(default_branch):
@@ -535,30 +519,10 @@ def _delete_plugin(plugin_id):
     return True, "'%s' 플러그인이 삭제되었습니다." % plugin_id
 
 
-def _prune_files_not_in_manifest(target_dir, manifest_files):
-    """update_manifest.files 목록에 없는 파일은 대상 폴더에서 전부 삭제해,
-    설치 결과가 항상 manifest와 정확히 일치하도록 동기화한다
-    (madnite1/plugin_manager의 Git URL 설치와 동일한 정책)."""
-    keep = {os.path.normpath(str(f)) for f in manifest_files}
-    for root, dirs, files in os.walk(target_dir, topdown=False):
-        for fname in files:
-            abs_path = os.path.join(root, fname)
-            rel_path = os.path.normpath(os.path.relpath(abs_path, target_dir))
-            if rel_path not in keep:
-                try:
-                    os.remove(abs_path)
-                except OSError:
-                    pass
-        # 파일을 지우고 남은 빈 디렉토리 정리
-        if root != target_dir:
-            try:
-                if not os.listdir(root):
-                    os.rmdir(root)
-            except OSError:
-                pass
-
-
 def _install_or_update(owner, repo, token=None):
+    """저장소 zip을 받아 plugins/metadata/{repo}/를 통째로 교체한다.
+    update_manifest.files 화이트리스트로 파일을 골라내지 않고, 검증에 성공한
+    새 소스로 기존 설치 폴더를 완전히 대체한다(전체 재다운로드 방식)."""
     _validate_plugin_id(repo)
 
     default_branch = None
@@ -585,41 +549,30 @@ def _install_or_update(owner, repo, token=None):
             _extract_zip_safe(zip_path, extract_dir)
             src_root = _find_extracted_root(extract_dir)
 
+            # 최소한의 신원 확인: 저장소 이름과 같은 메인 모듈 파일이 있어야
+            # BookOasis 플러그인 저장소로 간주한다(가이드의 폴더형 구조 관례).
             module_py = os.path.join(src_root, repo + ".py")
-            manifest = _extract_update_manifest(module_py)
-            if not manifest or not isinstance(manifest.get("files"), list):
+            if not os.path.isfile(module_py):
                 last_error = (
-                    "'%s.py'에서 update_manifest.files를 찾지 못했습니다 "
-                    "(가이드 규격을 따르는 저장소인지 확인해주세요)." % repo
+                    "'%s.py' 파일을 찾지 못했습니다 — BookOasis 플러그인 저장소가 맞는지, "
+                    "메인 모듈 파일명이 저장소 이름과 같은지 확인해주세요." % repo
                 )
                 continue
 
             base_dir = _plugins_metadata_dir()
             target_dir = _safe_join(base_dir, repo)
 
-            # manifest에 명시된 파일만 골라 존재 여부와 경로 안전성을 먼저 검증
-            for rel_file in manifest["files"]:
-                rel_file = str(rel_file)
-                if ".." in rel_file.replace("\\", "/").split("/") or rel_file.startswith("/"):
-                    raise ValueError("manifest 파일 경로가 유효하지 않습니다: %s" % rel_file)
-                src_file = os.path.join(src_root, rel_file)
-                if not os.path.isfile(src_file):
-                    raise ValueError("소스에 파일이 없습니다: %s" % rel_file)
-
-            os.makedirs(target_dir, exist_ok=True)
-            for rel_file in manifest["files"]:
-                src_file = os.path.join(src_root, rel_file)
-                dst_file = _safe_join(target_dir, rel_file)
-                os.makedirs(os.path.dirname(dst_file), exist_ok=True)
-                shutil.copy2(src_file, dst_file)
-
-            _prune_files_not_in_manifest(target_dir, manifest["files"])
+            # 검증(모듈 파일 존재 확인)을 통과한 뒤에야 기존 설치를 지운다 —
+            # 검증에 실패하면 이 지점에 도달하지 않으므로 기존 설치는 그대로 보존된다.
+            if os.path.isdir(target_dir):
+                shutil.rmtree(target_dir)
+            shutil.copytree(src_root, target_dir)
 
             _CACHE.pop(owner + "/" + repo, None)  # 설치 직후 카드가 최신 상태를 반영하도록 캐시 무효화
             _try_hot_reload(repo)
 
             new_version = _local_version(repo) or "?"
-            return True, "'%s' 설치/업데이트 완료 (브랜치: %s, 버전: v%s)" % (
+            return True, "'%s' 설치/업데이트 완료 (브랜치: %s, 버전: v%s, 저장소 전체 교체)" % (
                 repo, branch, new_version,
             )
         except Exception as exc:

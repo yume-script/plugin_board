@@ -219,6 +219,53 @@
     return wrap;
   }
 
+  // ------------------------------------------------------------------
+  // 커스텀 설정 UI(settings.html/css/js)를 코어가 렌더링한 결과(settings_ui)를
+  // 그대로 삽입·실행한다. madnite1/plugin_manager의 환경설정 모달과 동일한 방식:
+  // - settings_ui.html은 form 안에 그대로 삽입 (name 속성이 있는 input/select만
+  //   저장 시 수집되므로, settings.html 작성자가 name을 config 키와 맞춰야 한다)
+  // - settings_ui.css는 <style>로 주입
+  // - settings_ui.js와 삽입된 HTML 안의 <script> 태그는 new Function으로 실행
+  //   (window, pluginId, root, config 인자 전달)
+  // ------------------------------------------------------------------
+  function renderCustomSettingsUi(bodyEl, p, config) {
+    const form = document.createElement("form");
+    form.id = "pb-settings-form";
+    form.dataset.pluginId = p.id;
+
+    const root = document.createElement("div");
+    root.className = "pb-settings-ui-root";
+    root.innerHTML = p.settings_ui.html; // 플러그인 제작자가 제공하는 신뢰된 관리자용 UI
+
+    form.appendChild(root);
+    bodyEl.appendChild(form);
+
+    if (p.settings_ui.css) {
+      const styleEl = document.createElement("style");
+      styleEl.textContent = p.settings_ui.css;
+      root.appendChild(styleEl);
+    }
+
+    if (p.settings_ui.js) {
+      try {
+        const fn = new Function("window", "pluginId", "root", "config", p.settings_ui.js);
+        fn(window, p.id, root, config);
+      } catch (err) {
+        console.error(`${LOG_PREFIX} settings.js 실행 오류 (${p.id}):`, err);
+      }
+    }
+
+    // innerHTML로 삽입된 <script> 태그는 브라우저가 자동 실행하지 않으므로 직접 실행
+    root.querySelectorAll("script").forEach((script) => {
+      try {
+        const fn = new Function("window", "pluginId", "root", "config", script.textContent);
+        fn(window, p.id, root, config);
+      } catch (err) {
+        console.error(`${LOG_PREFIX} settings.html 인라인 스크립트 오류 (${p.id}):`, err);
+      }
+    });
+  }
+
   async function openSettingsModal(item, dbType) {
     const modal = ensureSettingsModal();
     const titleEl = modal.querySelector("#pb-settings-modal-title");
@@ -240,8 +287,17 @@
 
       const schema = p.config_schema || [];
       const config = p.config || {};
+      const hasCustomUi = !!(p.settings_ui && p.settings_ui.html);
 
       bodyEl.innerHTML = "";
+
+      if (hasCustomUi) {
+        // settings.html이 있으면 config_schema 자동 생성 폼보다 우선한다
+        saveBtn.hidden = false;
+        renderCustomSettingsUi(bodyEl, p, config);
+        return;
+      }
+
       if (schema.length === 0) {
         const empty = document.createElement("p");
         empty.className = "pb-status";

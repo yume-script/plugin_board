@@ -90,7 +90,7 @@ GitHub 저장소 주소를 모르므로 이 카드들은:
 이 저장소를 나중에 `plugin_list.txt`에 추가하면, 다음 로드부터는 일반 큐레이션 카드로
 승격되어 설명·최신 버전·업데이트 확인이 모두 활성화됩니다.
 
-### 5. 신규설치 / 업데이트 — 자체 내장 엔진 (git 불필요)
+### 5. 신규설치 / 업데이트 — 전체 재다운로드 방식 (git 불필요)
 
 각 카드 버튼은 상태에 따라 자동으로 바뀝니다.
 
@@ -100,23 +100,22 @@ GitHub 저장소 주소를 모르므로 이 카드들은:
 | 설치됨 + 업데이트 있음 | `업데이트` (+ "업데이트 가능" 태그) |
 | 설치됨 + 최신 버전 | 초록색 `설치됨` 배지 (버튼 없음) |
 
-버튼 클릭 시 [madnite1/plugin_manager](https://github.com/madnite1/plugin_manager)가
-쓰는 것과 동일한 원리로 서버에서 처리합니다(참고해 자체 구현).
+버튼 클릭 시 다음 순서로 서버에서 처리합니다. `update_manifest.files` 화이트리스트로
+파일을 골라내지 않고, **검증에 성공한 새 소스로 설치 폴더 전체를 교체**하는 단순한
+방식입니다.
 
 1. GitHub `codeload.github.com`에서 저장소 소스를 zip으로 다운로드 (git 바이너리 불필요)
 2. 임시 디렉토리에 압축 해제 (Zip Slip 방지 검증 포함)
-3. 대상 플러그인의 `{repo}.py`에서 `update_manifest` 딕셔너리를 **AST로만** 추출
-   — 소스 코드를 import/exec 하지 않으므로 클론된 코드가 그 자리에서 실행되지 않습니다
-4. `update_manifest.files`에 명시된 파일만 골라 `plugins/metadata/{repo}/`로 복사
-   (경로 이탈·존재하지 않는 파일 등은 사전 검증 후 거부)
-5. **복사 후 `update_manifest.files` 목록에 없는 파일은 대상 폴더에서 전부 삭제**해,
-   설치 결과가 항상 manifest와 정확히 일치하도록 정리합니다(빈 디렉토리도 함께 정리).
-   이전 버전에서 남아있던 파일이나 수동으로 넣어둔 파일도 이 시점에 제거됩니다.
-6. 가능하면 코어의 hot reload(`services.metadata_factory.MetadataFactory.hot_reload_plugin`)를
+3. 압축 해제된 소스에 `{repo}.py`(저장소 이름과 같은 메인 모듈 파일)가 있는지 확인
+   — 최소한의 신원 확인이며, 소스 코드를 import/exec 하지는 않습니다
+4. 확인에 성공한 경우에만 기존 `plugins/metadata/{repo}/`를 삭제하고, 압축 해제된
+   소스 **전체**를 그 자리에 복사합니다(README·LICENSE·docs 등 부가 파일 포함).
+   확인에 실패하면 기존 설치를 전혀 건드리지 않고 실패로 반환합니다.
+5. 가능하면 코어의 hot reload(`services.metadata_factory.MetadataFactory.hot_reload_plugin`)를
    시도해 서버 재시작 없이 즉시 반영 (실패해도 설치 자체는 이미 완료된 상태)
 
-`update_manifest`가 없는 저장소(가이드 규격을 따르지 않는 저장소)는 안전을 위해 설치를
-거부합니다.
+`{repo}.py`가 없는 저장소(BookOasis 플러그인 구조를 따르지 않는 저장소)는 안전을 위해
+설치를 거부하며, 이 경우 기존 설치는 그대로 보존됩니다.
 
 ### 6. Git 저장소 URL 설치 패널 — plugin_list.txt에 없는 저장소도 즉시 설치
 
@@ -135,13 +134,19 @@ GitHub 저장소 주소를 모르므로 이 카드들은:
   .toggle_plugin_enabled(...)`를 그대로 호출합니다. plugin_board가 직접 구현하지
   않고 코어에 위임하므로, 다른 화면(예: 환경설정 > 플러그인 설정)에서 본 상태와
   항상 일치합니다.
-- **환경설정(⚙) 버튼** — 설치된 플러그인의 `config_schema`가 있을 때만 표시됩니다.
-  클릭하면 모든 플러그인이 공통으로 쓰는 코어 API를 호출해 설정 폼을 엽니다.
+- **환경설정(⚙) 버튼** — 설치된 플러그인에 `config_schema` 또는 `settings.html`이
+  있을 때 표시됩니다. 클릭하면 모든 플러그인이 공통으로 쓰는 코어 API를 호출해
+  설정 화면을 엽니다.
   - 조회: `GET /api/media/metadata/plugins/manage`
   - 저장: `POST /api/media/metadata/plugins/save-config`
-  - text / password / number / checkbox / select 타입을 지원합니다(가이드 §4와 동일).
-  - plugin_manager가 지원하는 커스텀 `settings_ui`(HTML/CSS/JS)는 지원하지 않고,
-    표준 `config_schema` 자동 생성 폼만 지원합니다.
+  - **`settings.html`이 있으면 그 커스텀 UI를 최우선으로 사용합니다.** 코어가
+    렌더링해 내려주는 `settings_ui.html`/`.css`/`.js`를 그대로 모달에 삽입·실행합니다
+    (madnite1/plugin_manager의 환경설정 모달과 동일한 방식). `settings.html`이 없으면
+    `config_schema` 기반 자동 생성 폼(text / password / number / checkbox / select,
+    가이드 §4와 동일)으로 대체합니다.
+  - 저장은 두 경우 모두 동일하게 폼 안의 `name` 속성이 있는 input/select 값을
+    모아 `save-config`로 전송합니다 — `settings.html` 작성 시 입력 요소의 `name`을
+    저장하려는 설정 키와 맞추면 됩니다.
 - **삭제(🗑) 버튼** — 확인 대화상자 후 `plugins/metadata/{id}/` 폴더를 삭제합니다.
   경로 검증은 설치 엔진과 동일한 함수(`_validate_plugin_id`, `_safe_join`)를
   재사용합니다. `plugin_board` 자기 자신은 비활성화·삭제 모두 차단됩니다.
@@ -230,21 +235,26 @@ TYPE_OVERRIDES = {
 - **경로 이탈 방지**: 설치 대상 경로(`_safe_join`)와 zip 압축 해제(`_extract_zip_safe`)
   모두 결과 경로가 `plugins/metadata/` 하위인지 매번 검증합니다.
 - **플러그인 ID 검증**: 저장소 이름은 영문·숫자·`_`·`-`만 허용합니다.
-- **코드 비실행 원칙**: `update_manifest`는 AST 파싱(`ast.literal_eval`)으로만 읽고,
-  다운로드한 소스는 설치 전 단계에서 한 번도 import/exec 되지 않습니다.
-- **화이트리스트 복사 + 정리(prune)**: `update_manifest.files`에 명시된 파일만 복사하며,
-  존재하지 않는 파일이나 상위 경로(`..`)가 섞여 있으면 설치 전체를 거부합니다. 복사 후에는
-  그 목록에 없는 파일을 전부 삭제해 설치 결과가 항상 manifest와 정확히 일치하게 만듭니다.
+- **최소 신원 확인 후 교체**: `{repo}.py`(메인 모듈) 존재를 먼저 확인하고, 그 확인을
+  통과한 뒤에야 기존 설치 폴더를 삭제하고 새 소스로 교체합니다. 확인에 실패하면
+  기존 설치를 전혀 건드리지 않습니다. 다운로드한 소스는 이 확인 과정에서 import/exec
+  되지 않고 파일 존재 여부만 확인합니다 — 단, 설치 자체를 진행하면 그 플러그인의 코드는
+  BookOasis가 정상적으로 로드해 실행합니다(플러그인 설치는 본질적으로 해당 저장소의
+  코드 실행을 신뢰하는 행위이므로, 신뢰할 수 있는 저장소만 설치해야 합니다).
 - **비-플러그인 폴더 제외**: `plugins/metadata/` 스캔 시 `__pycache__`, `-`, 숨김 폴더 등은
   제외하고, `{폴더명}.py` 또는 `VERSION` 파일이 실제로 있는 폴더만 플러그인으로 인정합니다.
 - **목록 출처 신뢰**: `plugin_list.txt`는 `yume-script/plugin_board` 저장소 하나에서만
   읽어옵니다. 다른 출처를 신뢰하려면 `REMOTE_PLUGIN_LIST_URL`을 직접 바꿔야 합니다.
+- **커스텀 설정 UI 실행**: `settings.html`/`settings.js`는 신뢰된 관리자 화면(환경설정)에서만
+  삽입·실행되며, plugin_manager와 동일하게 `new Function(...)`으로 실행됩니다. 이미 설치를
+  허용한 플러그인의 코드이므로 별도로 샌드박싱하지 않습니다.
 
 ## 제한 사항
 
 - 검색/메타데이터 적용은 지원하지 않는 안내·설치·관리용 플러그인입니다(`is_searchable = False`).
 - GitHub API 무인증 한도(60회/시간)를 서버 전체가 공유합니다. `GITHUB_TOKEN` 설정을 권장합니다.
 - 기능 목록(`features`)은 GitHub API로 자동 추출하지 않으므로 기본적으로 비어 있습니다.
-- Git URL 설치 패널·`신규설치` 버튼 모두 `update_manifest`를 선언한 저장소만 지원합니다.
-- 환경설정 모달은 표준 `config_schema` 자동 생성 폼만 지원하며, 커스텀 `settings_ui`
-  (HTML/CSS/JS)는 지원하지 않습니다.
+- Git URL 설치 패널·`신규설치`/`업데이트` 버튼 모두 저장소에 `{repo}.py` 메인 모듈이
+  있어야 동작합니다(가이드의 폴더형 플러그인 구조 관례).
+- 설치/업데이트는 대상 폴더를 **완전히 교체**합니다. 설치 폴더 안에 수동으로 넣어둔
+  파일이 있다면 다음 업데이트 때 사라집니다.
