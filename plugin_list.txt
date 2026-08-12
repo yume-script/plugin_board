@@ -1,0 +1,9 @@
+https://github.com/javara999/naverkakaoridi
+https://github.com/yume-script/pixiv_ranking
+https://github.com/yume-script/unified_book
+https://github.com/yume-script/random_gallery
+https://github.com/yume-script/extract_isbn
+https://github.com/madnite1/plugin_manager
+https://github.com/colaiuta77/achievements
+https://github.com/colaiuta77/activity
+https://github.com/colaiuta77/activity_desk
