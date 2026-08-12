@@ -15,7 +15,7 @@ BookOasis 좌측 사이드바에 전용 카테고리 탭을 추가해, BookOasis
 | 클래스     | `PluginBoardMetadataProvider`                 |
 | 모듈      | `plugins.metadata.plugin_board.plugin_board`  |
 | 유형      | 카테고리 풀페이지 탭 + 자체 설치/업데이트/관리 엔진 내장           |
-| 외부 의존성  | 없음 (plugin_manager 불필요)                       |
+| 외부 의존성  | 없음                      |
 
 이 플러그인은 BookOasis의 권장 폴더형 플러그인 구조를 사용하며, 전역 테마 CSS 변수
 (`var(--app-*)`)로 스타일을 구성해 8종 대시보드 테마와 자동으로 동기화됩니다.
