@@ -152,7 +152,7 @@ def _read_local_class_attrs(plugin_id):
     except Exception:
         return {}
 
-    wanted = {"name", "id", "is_searchable", "category_tab", "dashboard_widget"}
+    wanted = {"name", "id", "is_searchable", "category_tab", "dashboard_widget", "config_schema"}
     attrs = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
@@ -169,7 +169,7 @@ def _read_local_class_attrs(plugin_id):
     return attrs
 
 
-def _scan_uncurated_installed(curated_ids):
+def _scan_uncurated_installed(curated_ids, is_enabled_fn):
     """GITHUB_REPOS(큐레이션 목록)에 없지만 이 서버에 실제로 설치되어 있는
     메타데이터 플러그인을 plugins/metadata 디렉토리에서 직접 찾아 카드로 만든다.
     GitHub 저장소 주소를 모르므로 설명·최신 버전·업데이트 확인은 제공하지 않는다."""
@@ -206,11 +206,7 @@ def _scan_uncurated_installed(curated_ids):
             "title": title,
             "type": plugin_type,
             "type_label": TYPE_LABELS.get(plugin_type, TYPE_LABELS["other"]),
-            "desc": (
-                "이 서버에 설치되어 있지만 plugin_board의 GITHUB_REPOS 목록에는 "
-                "등록되지 않은 플러그인입니다. 목록에 저장소 주소를 추가하면 "
-                "설명·최신 버전·업데이트 확인이 가능해집니다."
-            ),
+            "desc": "",
             "tags": [],
             "features": [],
             "version_label": ("v" + version) if version else "—",
@@ -219,6 +215,8 @@ def _scan_uncurated_installed(curated_ids):
             "installed": True,
             "installed_version": version,
             "has_update": False,
+            "has_config": bool(attrs.get("config_schema")),
+            "enabled": is_enabled_fn(entry),
             "local_only": True,
         })
 
@@ -246,7 +244,54 @@ def _fetch_remote_version(owner, repo, default_branch, token):
     return None
 
 
-def _fetch_repo_entry(url, token):
+def _fetch_remote_info(owner, repo, token):
+    """GitHub API/버전 조회 결과만 캐시한다 (설치 여부·활성화 상태처럼 자주 바뀌는
+    로컬 상태는 캐시하지 않고 매 호출마다 새로 계산한다)."""
+    key = owner + "/" + repo
+    cached = _CACHE.get(key)
+    if cached and (time.time() - cached[0]) < _CACHE_TTL_SECONDS:
+        return cached[1]
+
+    try:
+        api_data = _http_get_json(
+            "https://api.github.com/repos/%s/%s" % (owner, repo), token
+        )
+        remote_version = _fetch_remote_version(
+            owner, repo, api_data.get("default_branch"), token
+        )
+        info = {
+            "desc": api_data.get("description") or "(GitHub에 등록된 설명이 없습니다)",
+            "tags": api_data.get("topics") or [],
+            "version_label": ("v" + remote_version) if remote_version else "—",
+            "remote_version": remote_version,
+            "url": api_data.get("html_url") or ("https://github.com/%s/%s" % (owner, repo)),
+            "error": False,
+        }
+    except urllib.error.HTTPError as exc:
+        remote_version = _fetch_remote_version(owner, repo, None, token)
+        info = {
+            "desc": "GitHub API 호출 제한 또는 오류(%s)" % exc.code,
+            "tags": [],
+            "version_label": ("v" + remote_version) if remote_version else "—",
+            "remote_version": remote_version,
+            "url": "https://github.com/%s/%s" % (owner, repo),
+            "error": True,
+        }
+    except Exception as exc:
+        info = {
+            "desc": "GitHub 정보를 불러오지 못했습니다 (%s)" % exc,
+            "tags": [],
+            "version_label": "—",
+            "remote_version": None,
+            "url": "https://github.com/%s/%s" % (owner, repo),
+            "error": True,
+        }
+
+    _CACHE[key] = (time.time(), info)
+    return info
+
+
+def _fetch_repo_entry(url, token, is_enabled_fn):
     owner, repo = _parse_owner_repo(url)
     if not owner or not repo:
         return {
@@ -256,73 +301,45 @@ def _fetch_repo_entry(url, token):
             "tags": [], "features": [], "version_label": "—",
             "url": url, "error": True,
             "installed": False, "installed_version": None, "has_update": False,
+            "has_config": False, "enabled": None,
         }
 
     key = owner + "/" + repo
-    cached = _CACHE.get(key)
-    if cached and (time.time() - cached[0]) < _CACHE_TTL_SECONDS:
-        return cached[1]
-
     plugin_type = TYPE_OVERRIDES.get(key, "other")
     installed = _is_installed(repo)
     installed_version = _local_version(repo) if installed else None
+    has_config = False
 
     if installed:
-        # 이미 설치되어 있다면 실제 소스에서 분류를 더 정확히 추정 (수동 지정보다 우선)
+        # 이미 설치되어 있다면 실제 소스에서 분류·설정 여부를 더 정확히 추정
         local_attrs = _read_local_class_attrs(repo)
         if local_attrs.get("is_searchable"):
             plugin_type = "search"
         elif local_attrs.get("category_tab"):
             plugin_type = "tab"
+        has_config = bool(local_attrs.get("config_schema"))
 
-    try:
-        api_data = _http_get_json(
-            "https://api.github.com/repos/%s/%s" % (owner, repo), token
-        )
-        remote_version = _fetch_remote_version(
-            owner, repo, api_data.get("default_branch"), token
-        )
-        item = {
-            "id": repo,
-            "owner": owner,
-            "title": repo,
-            "type": plugin_type,
-            "type_label": TYPE_LABELS.get(plugin_type, TYPE_LABELS["other"]),
-            "desc": api_data.get("description") or "(GitHub에 등록된 설명이 없습니다)",
-            "tags": api_data.get("topics") or [],
-            "features": [],
-            "version_label": ("v" + remote_version) if remote_version else "—",
-            "url": api_data.get("html_url") or url,
-            "error": False,
-            "installed": installed,
-            "installed_version": installed_version,
-            "has_update": installed and _remote_is_newer(installed_version, remote_version),
-        }
-    except urllib.error.HTTPError as exc:
-        # API 실패(예: rate limit) 시에도 VERSION만은 main/master 추정으로 시도
-        remote_version = _fetch_remote_version(owner, repo, None, token)
-        item = {
-            "id": repo, "owner": owner, "title": repo, "type": plugin_type,
-            "type_label": TYPE_LABELS.get(plugin_type, TYPE_LABELS["other"]),
-            "desc": "GitHub API 호출 제한 또는 오류(%s)" % exc.code,
-            "tags": [], "features": [],
-            "version_label": ("v" + remote_version) if remote_version else "—",
-            "url": url, "error": True,
-            "installed": installed, "installed_version": installed_version,
-            "has_update": installed and _remote_is_newer(installed_version, remote_version),
-        }
-    except Exception as exc:
-        item = {
-            "id": repo, "owner": owner, "title": repo, "type": plugin_type,
-            "type_label": TYPE_LABELS.get(plugin_type, TYPE_LABELS["other"]),
-            "desc": "GitHub 정보를 불러오지 못했습니다 (%s)" % exc,
-            "tags": [], "features": [], "version_label": "—",
-            "url": url, "error": True,
-            "installed": installed, "installed_version": installed_version,
-            "has_update": False,
-        }
+    info = _fetch_remote_info(owner, repo, token)
+    remote_version = info["remote_version"]
 
-    _CACHE[key] = (time.time(), item)
+    item = {
+        "id": repo,
+        "owner": owner,
+        "title": repo,
+        "type": plugin_type,
+        "type_label": TYPE_LABELS.get(plugin_type, TYPE_LABELS["other"]),
+        "desc": info["desc"],
+        "tags": info["tags"],
+        "features": [],
+        "version_label": info["version_label"],
+        "url": info["url"],
+        "error": info["error"],
+        "installed": installed,
+        "installed_version": installed_version,
+        "has_update": installed and _remote_is_newer(installed_version, remote_version),
+        "has_config": has_config,
+        "enabled": is_enabled_fn(repo) if installed else None,
+    }
     return item
 
 
@@ -413,6 +430,60 @@ def _try_hot_reload(plugin_id):
     except Exception:
         pass
     return False
+
+
+def _toggle_plugin_enabled(plugin_id, enabled_val, db_type):
+    """madnite1/plugin_manager와 동일하게 코어의 PluginService를 그대로 사용해
+    활성화/비활성화 상태를 변경한다. plugin_board는 이 로직을 직접 구현하지 않고
+    코어 서비스에 위임한다."""
+    try:
+        _validate_plugin_id(plugin_id)
+    except ValueError as exc:
+        return False, str(exc)
+
+    if plugin_id == "plugin_board":
+        return False, "plugin_board 자기 자신은 이 화면에서 비활성화할 수 없습니다."
+
+    try:
+        from services.plugin_service import PluginService
+    except Exception as exc:
+        return False, "코어 PluginService를 사용할 수 없습니다 (%s)" % exc
+
+    try:
+        ok, err = PluginService.toggle_plugin_enabled(db_type, plugin_id, str(enabled_val))
+        if not ok:
+            return False, err or "상태 변경에 실패했습니다."
+    except Exception as exc:
+        return False, "상태 변경 중 오류가 발생했습니다: %s" % exc
+
+    _try_hot_reload(plugin_id)
+    status_text = "활성화" if str(enabled_val) == "1" else "비활성화"
+    return True, "'%s' 상태가 '%s'로 변경되었습니다." % (plugin_id, status_text)
+
+
+def _delete_plugin(plugin_id):
+    """plugins/metadata/{plugin_id} 폴더를 삭제한다. 경로는 항상 plugins/metadata
+    경계 안에 있는지 검증한 뒤에만 삭제한다(_validate_plugin_id + _safe_join 재사용)."""
+    if plugin_id == "plugin_board":
+        return False, "plugin_board 자기 자신은 이 화면에서 삭제할 수 없습니다."
+
+    try:
+        _validate_plugin_id(plugin_id)
+        target_dir = _safe_join(_plugins_metadata_dir(), plugin_id)
+    except ValueError as exc:
+        return False, str(exc)
+
+    if not os.path.isdir(target_dir):
+        return False, "존재하지 않는 플러그인입니다: %s" % plugin_id
+
+    try:
+        shutil.rmtree(target_dir)
+    except Exception as exc:
+        return False, "삭제 실패: %s" % exc
+
+    _CACHE.clear()  # 삭제된 플러그인이 GitHub 캐시에 남아 잘못된 정보를 주지 않도록
+    _try_hot_reload(plugin_id)
+    return True, "'%s' 플러그인이 삭제되었습니다." % plugin_id
 
 
 def _install_or_update(owner, repo, token=None):
@@ -532,46 +603,79 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         return {"success": True, "items": []}
 
     # ------------------------------------------------------------------
-    # 카드의 "신규설치"/"업데이트" 버튼이 호출하는 액션 엔드포인트.
-    # item_data = {"action": "install_git" | "update", "plugin_id": ..., "git_url": ...}
+    # 카드의 버튼들이 호출하는 액션 엔드포인트.
+    # item_data = {
+    #   "action": "install_git" | "update" | "toggle" | "delete",
+    #   "plugin_id": ..., "git_url": ..., "enabled": "0" | "1"  (toggle 전용)
+    # }
     # ------------------------------------------------------------------
     def apply(self, db_type, book_id, item_data):
         if not isinstance(item_data, dict):
             return False, "유효하지 않은 요청 데이터 형식입니다."
 
         action = str(item_data.get("action", "")).strip().lower()
-        if action not in ("install_git", "update"):
-            return False, "지원하지 않는 액션입니다: %s" % action
-
-        git_url = str(item_data.get("git_url", "")).strip()
         plugin_id = str(item_data.get("plugin_id", "")).strip()
 
-        owner, repo = _parse_owner_repo(git_url) if git_url else (None, None)
-        if not owner or not repo:
-            # git_url 없이 plugin_id만 온 경우, GITHUB_REPOS에서 대응하는 주소를 찾는다
-            match = next(
-                (u for u in GITHUB_REPOS if _parse_owner_repo(u)[1] == plugin_id), None
-            )
-            if match:
-                owner, repo = _parse_owner_repo(match)
+        if action == "toggle":
+            if not plugin_id:
+                return False, "plugin_id가 필요합니다."
+            enabled_val = str(item_data.get("enabled", "1")).strip()
+            return _toggle_plugin_enabled(plugin_id, enabled_val, db_type)
 
-        if not owner or not repo:
-            return False, "Git 저장소 정보를 확인할 수 없습니다."
+        if action == "delete":
+            if not plugin_id:
+                return False, "plugin_id가 필요합니다."
+            return _delete_plugin(plugin_id)
 
-        cfg = self.get_plugin_config(db_type, default={})
-        token = cfg.get("GITHUB_TOKEN") or None
-        return _install_or_update(owner, repo, token)
+        if action in ("install_git", "update"):
+            git_url = str(item_data.get("git_url", "")).strip()
+            owner, repo = _parse_owner_repo(git_url) if git_url else (None, None)
+            if not owner or not repo:
+                # git_url 없이 plugin_id만 온 경우, GITHUB_REPOS에서 대응하는 주소를 찾는다
+                match = next(
+                    (u for u in GITHUB_REPOS if _parse_owner_repo(u)[1] == plugin_id), None
+                )
+                if match:
+                    owner, repo = _parse_owner_repo(match)
+
+            if not owner or not repo:
+                return False, "Git 저장소 정보를 확인할 수 없습니다."
+
+            cfg = self.get_plugin_config(db_type, default={})
+            token = cfg.get("GITHUB_TOKEN") or None
+            return _install_or_update(owner, repo, token)
+
+        return False, "지원하지 않는 액션입니다: %s" % action
 
     # ------------------------------------------------------------------
     # 카테고리 풀페이지 탭이 script.js를 통해 호출하는 데이터 엔드포인트.
     # GITHUB_REPOS에 저장된 주소만으로 매 호출마다(캐시 만료 시) GitHub에서
     # 최신 설명·토픽·버전을 가져오고, plugins/metadata 디렉토리를 직접 확인해
-    # 설치 여부·업데이트 필요 여부까지 함께 반환한다.
+    # 설치 여부·업데이트 필요 여부·활성화 상태·설정 보유 여부까지 함께 반환한다.
     # ------------------------------------------------------------------
     def get_dashboard_data(self, db_type, limit=10):
         cfg = self.get_plugin_config(db_type, default={})
         token = cfg.get("GITHUB_TOKEN") or None
-        curated_items = [_fetch_repo_entry(url, token) for url in GITHUB_REPOS]
+
+        try:
+            gateway = self.get_db_gateway(db_type)
+        except Exception:
+            gateway = None
+
+        def is_enabled_fn(plugin_id):
+            if gateway is None:
+                return True
+            try:
+                raw = gateway.get_setting("PLUGIN_ENABLED_%s" % plugin_id, default="1")
+                if isinstance(raw, dict):
+                    raw = raw.get("value", "1")
+                return str(raw) == "1"
+            except Exception:
+                return True
+
+        curated_items = [
+            _fetch_repo_entry(url, token, is_enabled_fn) for url in GITHUB_REPOS
+        ]
         curated_ids = {it["id"] for it in curated_items}
-        local_items = _scan_uncurated_installed(curated_ids)
+        local_items = _scan_uncurated_installed(curated_ids, is_enabled_fn)
         return {"success": True, "items": curated_items + local_items}

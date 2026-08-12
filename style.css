@@ -301,13 +301,6 @@
   font-weight: 700;
 }
 
-/* GitHub 저장소를 알 수 없는(GITHUB_REPOS 미등록) 로컬 설치 플러그인 안내 태그 */
-.pb-tag-local {
-  color: var(--app-text-muted);
-  border-color: var(--app-border, rgba(255,255,255,0.3));
-  opacity: 1;
-}
-
 /* 이미 설치되어 최신 상태인 카드에 표시되는 배지 (버튼 대체) */
 .pb-installed-badge {
   font-size: 11px;
@@ -333,6 +326,248 @@
    신규 설치 버튼만 살짝 옅은 톤으로 구분 */
 .pb-install-btn-update {
   background: var(--app-accent);
+}
+
+/* ---------- 관리 행 (활성화/비활성화 · 환경설정 · 삭제) ---------- */
+.pb-manage-row {
+  margin-top: 4px;
+  padding: 10px 18px 4px 22px;
+  border-top: 1px dashed var(--app-border-light, var(--app-border));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pb-manage-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pb-manage-status {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--app-text-secondary, var(--app-text-muted));
+}
+
+/* 토글 스위치 */
+.pb-switch {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 19px;
+  flex-shrink: 0;
+}
+.pb-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.pb-switch-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--app-border, rgba(255,255,255,0.25));
+  border-radius: 999px;
+  transition: background .15s ease;
+}
+.pb-switch-slider::before {
+  content: "";
+  position: absolute;
+  width: 15px;
+  height: 15px;
+  left: 2px;
+  top: 2px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform .15s ease;
+}
+.pb-switch input:checked + .pb-switch-slider {
+  background: var(--app-accent);
+}
+.pb-switch input:checked + .pb-switch-slider::before {
+  transform: translateX(15px);
+}
+.pb-switch input:disabled + .pb-switch-slider {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.pb-manage-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pb-icon-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--app-border, rgba(255,255,255,0.2));
+  border-radius: 6px;
+  color: var(--app-text-secondary, var(--app-text-primary));
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.pb-icon-btn:hover:not(:disabled) {
+  background: var(--app-bg-card-hover);
+}
+.pb-icon-btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.pb-icon-btn svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
+.pb-icon-btn-danger:hover:not(:disabled) {
+  color: #d9534f;
+  border-color: #d9534f66;
+  background: #d9534f14;
+}
+
+/* ---------- 환경설정 모달 ---------- */
+.pb-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 2500;
+  padding: 20px;
+}
+.pb-modal-overlay.pb-modal-show {
+  display: flex;
+}
+
+.pb-modal {
+  width: 100%;
+  max-width: 440px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--app-bg-card);
+  border: 1px solid var(--app-border, rgba(255,255,255,0.12));
+  border-radius: 10px;
+  box-shadow: var(--app-shadow, 0 20px 48px rgba(0,0,0,0.4));
+  overflow: hidden;
+}
+
+.pb-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--app-border-light, var(--app-border));
+}
+.pb-modal-head h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--app-text-primary);
+}
+.pb-modal-close {
+  background: transparent;
+  border: none;
+  color: var(--app-text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px;
+}
+.pb-modal-close:hover {
+  color: var(--app-text-primary);
+}
+
+.pb-modal-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pb-field label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--app-text-primary);
+}
+.pb-field input[type="text"],
+.pb-field input[type="password"],
+.pb-field input[type="number"],
+.pb-field select {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: var(--app-input-bg, var(--app-bg-main));
+  border: 1px solid var(--app-border, rgba(255,255,255,0.15));
+  color: var(--app-text-primary);
+  font-size: 12.5px;
+  font-family: inherit;
+}
+.pb-field-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--app-text-secondary, var(--app-text-primary));
+  cursor: pointer;
+}
+.pb-field-required {
+  color: #d9534f;
+}
+.pb-field-desc {
+  margin: 0;
+  font-size: 11px;
+  color: var(--app-text-muted);
+  line-height: 1.5;
+}
+
+.pb-modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--app-border-light, var(--app-border));
+}
+.pb-modal-btn {
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 7px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.pb-modal-btn-cancel {
+  background: transparent;
+  border: 1px solid var(--app-border, rgba(255,255,255,0.2));
+  color: var(--app-text-secondary, var(--app-text-primary));
+}
+.pb-modal-btn-cancel:hover {
+  background: var(--app-bg-card-hover);
+}
+.pb-modal-btn-save {
+  background: var(--app-accent);
+  border: none;
+  color: #fff;
+}
+.pb-modal-btn-save:hover:not(:disabled) {
+  background: var(--app-accent-hover, var(--app-accent));
+}
+.pb-modal-btn-save:disabled {
+  opacity: 0.65;
+  cursor: progress;
 }
 
 /* ---------- 푸터 ---------- */

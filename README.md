@@ -88,6 +88,29 @@ BookOasis 좌측 사이드바에 전용 카테고리 탭을 추가해, 직접 �
 `update_manifest`가 없는 저장소(가이드 규격을 따르지 않는 저장소)는 안전을 위해 설치를
 거부합니다.
 
+### 5. 활성화/비활성화 · 환경설정 · 삭제 — 코어 공통 API 그대로 사용
+
+설치된 카드 하단에는 관리 행이 추가로 표시됩니다.
+
+- **활성화/비활성화 스위치** — 코어 서비스 `services.plugin_service.PluginService
+  .toggle_plugin_enabled(...)`를 그대로 호출합니다. plugin_board가 직접 구현하지
+  않고 코어에 위임하므로, 다른 화면(예: 환경설정 > 플러그인 설정)에서 본 상태와
+  항상 일치합니다.
+- **환경설정(⚙) 버튼** — 설치된 플러그인의 `config_schema`가 있을 때만 표시됩니다.
+  클릭하면 모든 플러그인이 공통으로 쓰는 코어 API를 호출해 설정 폼을 엽니다.
+  - 조회: `GET /api/media/metadata/plugins/manage`
+  - 저장: `POST /api/media/metadata/plugins/save-config`
+  - text / password / number / checkbox / select 타입을 지원합니다(가이드 §4와 동일).
+  - plugin_manager가 지원하는 커스텀 `settings_ui`(HTML/CSS/JS)는 지원하지 않고,
+    표준 `config_schema` 자동 생성 폼만 지원합니다.
+- **삭제(🗑) 버튼** — 확인 대화상자 후 `plugins/metadata/{id}/` 폴더를 삭제합니다.
+  경로 검증은 설치 엔진과 동일한 함수(`_validate_plugin_id`, `_safe_join`)를
+  재사용합니다. `plugin_board` 자기 자신은 비활성화·삭제 모두 차단됩니다.
+
+이 세 기능 모두 **plugin_manager가 만든 전용 API가 아니라 BookOasis 코어가 모든
+플러그인에 공통으로 제공하는 API**를 사용하므로, plugin_manager 설치 여부와
+무관하게 동작합니다.
+
 ## 설치
 
 최종 폴더 구조는 다음과 같습니다.

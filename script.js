@@ -31,10 +31,14 @@
     '<svg viewBox="0 0 16 16"><path d="M8 2.5a5.5 5.5 0 1 0 5.163 3.606.75.75 0 1 1 1.408-.512A7 7 0 1 1 8 1v-.75a.25.25 0 0 1 .429-.176l2.5 2.5a.25.25 0 0 1 0 .354l-2.5 2.5A.25.25 0 0 1 8 5.25V3.5a.5.5 0 0 0-.5-.5H8Z"/></svg>';
   const CHECK_ICON =
     '<svg viewBox="0 0 16 16"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-6.5 6.5a.75.75 0 0 1-1.06 0l-3-3a.75.75 0 1 1 1.06-1.06L6.75 10.19l5.97-5.97a.75.75 0 0 1 1.06 0Z"/></svg>';
+  const GEAR_ICON =
+    '<svg viewBox="0 0 16 16"><path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 1 1 0-5.858 2.929 2.929 0 0 1 0 5.858z"/></svg>';
+  const TRASH_ICON =
+    '<svg viewBox="0 0 16 16"><path d="M6.5 1a1 1 0 0 0-1 1v.5H3a.75.75 0 0 0 0 1.5h.35l.6 9.03A1.75 1.75 0 0 0 5.7 14.75h4.6a1.75 1.75 0 0 0 1.75-1.72l.6-9.03H13a.75.75 0 0 0 0-1.5h-2.5V2a1 1 0 0 0-1-1h-3Zm.5 3.5a.75.75 0 0 1 .75.75v5.5a.75.75 0 0 1-1.5 0v-5.5A.75.75 0 0 1 7 4.5Zm2.75.75a.75.75 0 0 0-1.5 0v5.5a.75.75 0 0 0 1.5 0v-5.5Z"/></svg>';
 
   // ------------------------------------------------------------------
-  // 신규설치/업데이트 액션 — plugin_manager 등 외부 플러그인 없이
-  // plugin_board 자신의 apply()를 호출한다 (source: "plugin_board").
+  // 신규설치/업데이트/활성화·비활성화/삭제 액션 — 전부 plugin_board 자신의
+  // apply()를 호출한다 (source: "plugin_board"). 외부 플러그인 불필요.
   // ------------------------------------------------------------------
   async function callPluginBoardAction(dbType, actionData) {
     const res = await fetch("/api/media/books/0/apply-metadata", {
@@ -121,6 +125,295 @@
     return btn;
   }
 
+  // ------------------------------------------------------------------
+  // 환경설정 모달 — 코어 공통 API(모든 플러그인이 함께 쓰는 엔드포인트)를 사용.
+  // GET  /api/media/metadata/plugins/manage           → config_schema + 현재 설정값
+  // POST /api/media/metadata/plugins/save-config       → 저장
+  // (madnite1/plugin_manager의 환경설정 모달과 동일한 코어 API를 그대로 사용)
+  // ------------------------------------------------------------------
+  function ensureSettingsModal() {
+    let modal = document.getElementById("pb-settings-modal");
+    if (modal) return modal;
+
+    modal = document.createElement("div");
+    modal.id = "pb-settings-modal";
+    modal.className = "pb-modal-overlay";
+    modal.innerHTML = `
+      <div class="pb-modal">
+        <div class="pb-modal-head">
+          <h3 id="pb-settings-modal-title">설정</h3>
+          <button type="button" class="pb-modal-close" id="pb-settings-modal-close">&times;</button>
+        </div>
+        <div class="pb-modal-body" id="pb-settings-modal-body"></div>
+        <div class="pb-modal-foot">
+          <button type="button" class="pb-modal-btn pb-modal-btn-cancel" id="pb-settings-modal-cancel">취소</button>
+          <button type="button" class="pb-modal-btn pb-modal-btn-save" id="pb-settings-modal-save">저장</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    const close = () => modal.classList.remove("pb-modal-show");
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) close();
+    });
+    modal.querySelector("#pb-settings-modal-close").addEventListener("click", close);
+    modal.querySelector("#pb-settings-modal-cancel").addEventListener("click", close);
+    return modal;
+  }
+
+  function renderSchemaField(field, currentValue) {
+    const label = field.label || field.key;
+    const required = !!field.required;
+    const type = (field.type || "text").toLowerCase();
+    const key = field.key || "";
+    const requiredMark = required ? '<span class="pb-field-required">*</span>' : "";
+    const descHtml = field.description
+      ? `<p class="pb-field-desc"></p>`
+      : "";
+
+    const wrap = document.createElement("div");
+    wrap.className = "pb-field";
+
+    const labelEl = document.createElement("label");
+    labelEl.innerHTML = `${label} ${requiredMark}`;
+    wrap.appendChild(labelEl);
+
+    if (type === "checkbox") {
+      const row = document.createElement("label");
+      row.className = "pb-field-checkbox-row";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.name = key;
+      input.checked = currentValue === true || currentValue === "1" || currentValue === 1 || currentValue === "true";
+      row.append(input, document.createTextNode(" 사용"));
+      wrap.appendChild(row);
+    } else if (type === "select") {
+      const select = document.createElement("select");
+      select.name = key;
+      (field.options || []).forEach((opt) => {
+        const val = typeof opt === "object" ? opt.value : opt;
+        const optLabel = typeof opt === "object" ? opt.label : opt;
+        const option = document.createElement("option");
+        option.value = val;
+        option.textContent = optLabel;
+        if (String(val) === String(currentValue ?? field.default ?? "")) option.selected = true;
+        select.appendChild(option);
+      });
+      wrap.appendChild(select);
+    } else {
+      const input = document.createElement("input");
+      input.type = type === "password" ? "password" : type === "number" ? "number" : "text";
+      input.name = key;
+      input.value = currentValue ?? field.default ?? "";
+      wrap.appendChild(input);
+    }
+
+    if (field.description) {
+      const desc = document.createElement("p");
+      desc.className = "pb-field-desc";
+      desc.textContent = field.description;
+      wrap.appendChild(desc);
+    }
+
+    return wrap;
+  }
+
+  async function openSettingsModal(item, dbType) {
+    const modal = ensureSettingsModal();
+    const titleEl = modal.querySelector("#pb-settings-modal-title");
+    const bodyEl = modal.querySelector("#pb-settings-modal-body");
+    const saveBtn = modal.querySelector("#pb-settings-modal-save");
+
+    titleEl.textContent = `${item.title} (${item.id}) 설정`;
+    bodyEl.innerHTML = '<p class="pb-status" style="padding:24px 0;">설정 정보를 불러오는 중…</p>';
+    modal.classList.add("pb-modal-show");
+
+    try {
+      const res = await fetch("/api/media/metadata/plugins/manage");
+      const data = await res.json();
+      if (!data || data.success === false || !data.plugins) {
+        throw new Error((data && data.error) || "플러그인 설정 정보를 가져오지 못했습니다.");
+      }
+      const p = data.plugins.find((x) => x.id === item.id);
+      if (!p) throw new Error("선택한 플러그인 정보를 찾을 수 없습니다.");
+
+      const schema = p.config_schema || [];
+      const config = p.config || {};
+
+      bodyEl.innerHTML = "";
+      if (schema.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "pb-status";
+        empty.style.padding = "24px 0";
+        empty.textContent = "이 플러그인은 별도의 설정 항목이 없습니다.";
+        bodyEl.appendChild(empty);
+        saveBtn.hidden = true;
+        return;
+      }
+
+      saveBtn.hidden = false;
+      const form = document.createElement("form");
+      form.id = "pb-settings-form";
+      form.dataset.pluginId = item.id;
+      schema.forEach((field) => form.appendChild(renderSchemaField(field, config[field.key])));
+      bodyEl.appendChild(form);
+    } catch (err) {
+      bodyEl.innerHTML = "";
+      const errorEl = document.createElement("p");
+      errorEl.className = "pb-status pb-error";
+      errorEl.style.padding = "24px 0";
+      errorEl.textContent = err.message || "설정 정보를 불러오지 못했습니다.";
+      bodyEl.appendChild(errorEl);
+      saveBtn.hidden = true;
+    }
+  }
+
+  function wireSettingsSave(dbType) {
+    const modal = ensureSettingsModal();
+    const saveBtn = modal.querySelector("#pb-settings-modal-save");
+    if (saveBtn.dataset.wired) return;
+    saveBtn.dataset.wired = "1";
+
+    saveBtn.addEventListener("click", async () => {
+      const form = modal.querySelector("#pb-settings-form");
+      if (!form) {
+        modal.classList.remove("pb-modal-show");
+        return;
+      }
+      const pluginId = form.dataset.pluginId;
+      const config = {};
+      form.querySelectorAll("input, select").forEach((input) => {
+        if (!input.name) return;
+        config[input.name] = input.type === "checkbox" ? !!input.checked : String(input.value ?? "").trim();
+      });
+
+      const orig = saveBtn.textContent;
+      saveBtn.disabled = true;
+      saveBtn.textContent = "저장 중…";
+      try {
+        const res = await fetch("/api/media/metadata/plugins/save-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: dbType, plugin_id: pluginId, config }),
+        });
+        const data = await res.json();
+        saveBtn.disabled = false;
+        saveBtn.textContent = orig;
+        if (data && data.success) {
+          showToast(data.message || "설정이 저장되었습니다.", false);
+          modal.classList.remove("pb-modal-show");
+        } else {
+          showToast((data && data.error) || "설정 저장에 실패했습니다.", true);
+        }
+      } catch (err) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = orig;
+        showToast("설정 저장 중 통신 오류가 발생했습니다.", true);
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // 관리 행 — 활성화/비활성화 스위치 + 환경설정(gear) + 삭제(trash).
+  // 이미 설치된 카드에만 표시된다.
+  // ------------------------------------------------------------------
+  function buildManageRow(item) {
+    const row = document.createElement("div");
+    row.className = "pb-manage-row";
+
+    const left = document.createElement("div");
+    left.className = "pb-manage-left";
+
+    const switchLabel = document.createElement("label");
+    switchLabel.className = "pb-switch";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = !!item.enabled;
+    const slider = document.createElement("span");
+    slider.className = "pb-switch-slider";
+    switchLabel.append(checkbox, slider);
+
+    const statusText = document.createElement("span");
+    statusText.className = "pb-manage-status";
+    statusText.textContent = item.enabled ? "사용 중" : "중지됨";
+
+    left.append(switchLabel, statusText);
+
+    const actions = document.createElement("div");
+    actions.className = "pb-manage-actions";
+
+    if (item.has_config) {
+      const gearBtn = document.createElement("button");
+      gearBtn.type = "button";
+      gearBtn.className = "pb-icon-btn";
+      gearBtn.title = "환경설정";
+      gearBtn.innerHTML = GEAR_ICON;
+      gearBtn.addEventListener("click", () => {
+        const dbType = getDbType();
+        wireSettingsSave(dbType);
+        openSettingsModal(item, dbType);
+      });
+      actions.appendChild(gearBtn);
+    }
+
+    const trashBtn = document.createElement("button");
+    trashBtn.type = "button";
+    trashBtn.className = "pb-icon-btn pb-icon-btn-danger";
+    trashBtn.title = "삭제";
+    trashBtn.innerHTML = TRASH_ICON;
+    trashBtn.addEventListener("click", async () => {
+      if (!window.confirm(`'${item.title}' 플러그인을 삭제할까요? 이 작업은 되돌릴 수 없습니다.`)) {
+        return;
+      }
+      trashBtn.disabled = true;
+      try {
+        const result = await callPluginBoardAction(getDbType(), {
+          action: "delete",
+          plugin_id: item.id,
+        });
+        if (result && result.success) {
+          showToast(result.message || `'${item.title}'이(가) 삭제되었습니다.`, false);
+          load();
+        } else {
+          showToast((result && result.error) || "삭제에 실패했습니다.", true);
+          trashBtn.disabled = false;
+        }
+      } catch (err) {
+        showToast("삭제 요청 중 통신 오류가 발생했습니다.", true);
+        trashBtn.disabled = false;
+      }
+    });
+    actions.appendChild(trashBtn);
+
+    checkbox.addEventListener("change", async () => {
+      const nextEnabled = checkbox.checked;
+      checkbox.disabled = true;
+      try {
+        const result = await callPluginBoardAction(getDbType(), {
+          action: "toggle",
+          plugin_id: item.id,
+          enabled: nextEnabled ? "1" : "0",
+        });
+        if (result && result.success) {
+          statusText.textContent = nextEnabled ? "사용 중" : "중지됨";
+          showToast(result.message || "상태가 변경되었습니다.", false);
+        } else {
+          checkbox.checked = !nextEnabled; // 실패 시 원상복구
+          showToast((result && result.error) || "상태 변경에 실패했습니다.", true);
+        }
+      } catch (err) {
+        checkbox.checked = !nextEnabled;
+        showToast("상태 변경 요청 중 통신 오류가 발생했습니다.", true);
+      } finally {
+        checkbox.disabled = false;
+      }
+    });
+
+    row.append(left, actions);
+    return row;
+  }
+
   function buildCard(item) {
     const card = document.createElement("article");
     card.className = "pb-card" + (item.error ? " pb-card-error" : "");
@@ -159,12 +452,6 @@
       tagsWrap.appendChild(updTag);
     }
 
-    if (item.local_only) {
-      const localTag = document.createElement("span");
-      localTag.className = "pb-tag pb-tag-local";
-      localTag.textContent = "GitHub 미등록";
-      tagsWrap.appendChild(localTag);
-    }
 
     (item.tags || []).forEach((tagText) => {
       const tag = document.createElement("span");
@@ -205,9 +492,12 @@
 
     foot.append(stamp, btnGroup);
 
-    const parts = [head, desc, tagsWrap];
+    const parts = [head];
+    if (item.desc) parts.push(desc);
+    parts.push(tagsWrap);
     if ((item.features || []).length > 0) parts.push(feats);
     parts.push(foot);
+    if (item.installed) parts.push(buildManageRow(item));
     card.append(...parts);
     return card;
   }
