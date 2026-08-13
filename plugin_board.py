@@ -516,6 +516,7 @@ def _build_discovered_item(repo_json, version_info, is_enabled_fn, excluded_ids)
 
     plugin_type = TYPE_OVERRIDES.get(key, "other")
     has_config = False
+    title = repo_name
     if installed:
         local_attrs = _read_local_class_attrs(repo_name)
         if local_attrs.get("is_searchable"):
@@ -523,6 +524,7 @@ def _build_discovered_item(repo_json, version_info, is_enabled_fn, excluded_ids)
         elif local_attrs.get("category_tab"):
             plugin_type = "tab"
         has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(repo_name)
+        title = local_attrs.get("name") or repo_name
 
     remote_version = version_info["remote_version"] if version_info else None
     version_label = version_info["version_label"] if version_info else "—"
@@ -530,7 +532,7 @@ def _build_discovered_item(repo_json, version_info, is_enabled_fn, excluded_ids)
     return {
         "id": repo_name,
         "owner": owner_login,
-        "title": repo_name,
+        "title": title,
         "type": plugin_type,
         "type_label": TYPE_LABELS.get(plugin_type, TYPE_LABELS["other"]),
         "desc": repo_json.get("description") or "(GitHub에 등록된 설명이 없습니다)",
@@ -566,15 +568,17 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None):
     installed = _is_installed(repo)
     installed_version = _local_version(repo) if installed else None
     has_config = False
+    title = repo
 
     if installed:
-        # 이미 설치되어 있다면 실제 소스에서 분류·설정 여부를 더 정확히 추정
+        # 이미 설치되어 있다면 실제 소스에서 분류·설정 여부·표시 이름을 더 정확히 추정
         local_attrs = _read_local_class_attrs(repo)
         if local_attrs.get("is_searchable"):
             plugin_type = "search"
         elif local_attrs.get("category_tab"):
             plugin_type = "tab"
         has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(repo)
+        title = local_attrs.get("name") or repo
 
     # 병렬로 미리 가져온 원격 정보가 있으면 그걸 쓰고, 없으면(단건 호출 등) 직접 조회
     info = preloaded_info if preloaded_info is not None else _fetch_remote_info(owner, repo, token)
@@ -583,7 +587,7 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None):
     item = {
         "id": repo,
         "owner": owner,
-        "title": repo,
+        "title": title,
         "type": plugin_type,
         "type_label": TYPE_LABELS.get(plugin_type, TYPE_LABELS["other"]),
         "desc": info["desc"],

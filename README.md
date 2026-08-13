@@ -129,6 +129,10 @@ API 조회가 실패해도(예: rate limit) `VERSION` 파일만은 `main`/`maste
 - 설치 여부: `plugins/metadata/{repo}/` 폴더 존재 여부
 - 설치된 버전: 그 폴더의 `VERSION` 파일
 - 업데이트 필요 여부: 설치된 버전과 GitHub의 최신 버전을 비교(`x.y.z` 형식 기준)
+- **표시 제목**: 설치돼 있으면 저장소 이름(`id`) 대신 실제 클래스의 `name` 속성을
+  AST로 읽어 카드 제목으로 씁니다(예: 저장소 `kyobobook` → 카드 제목 "교보문고
+  (KyoboBook)"). 아직 설치되지 않은 카드는 `name`을 알 수 없으므로 저장소 이름을
+  그대로 씁니다.
 
 ### 4. plugin_list.txt에 없지만 서버에 설치된 플러그인도 같은 그리드에 표시
 
