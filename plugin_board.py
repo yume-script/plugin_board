@@ -895,6 +895,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             cfg = self.get_plugin_config(db_type, default={})
             token = cfg.get("GITHUB_TOKEN") or None
             urls = _fetch_repo_list(token, force=True)
+            _TOPIC_CACHE.clear()  # GitHub Topics 발견 캐시도 함께 강제 갱신
             if not urls:
                 return False, (
                     "plugin_list.txt를 다시 가져오지 못했습니다 "
