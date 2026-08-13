@@ -498,9 +498,32 @@ def _download_zip(url, dest_path, token=None):
             shutil.copyfileobj(resp, f)
 
 
+_MAX_ZIP_ENTRIES = 3000  # 파일 개수 상한 — .git 폴더 등을 통째로 담은 zip 방지
+_MAX_ZIP_UNCOMPRESSED_BYTES = 200 * 1024 * 1024  # 압축 해제 후 총 용량 상한(zip bomb 방지)
+
+
 def _extract_zip_safe(zip_path, extract_dir):
-    """Zip Slip 방지 — 모든 압축 해제 대상 경로가 extract_dir 하위인지 검증 후 해제."""
+    """Zip Slip 방지 — 모든 압축 해제 대상 경로가 extract_dir 하위인지 검증 후 해제.
+    항목 개수·압축 해제 후 총 용량도 함께 제한해, 원본 zip은 작아도 내부에
+    (예: .git 폴더처럼) 파일이 수천~수만 개거나 압축률이 비정상적으로 높은
+    경우(zip bomb) 서버 자원을 과도하게 쓰다 타임아웃/다운되는 것을 막는다."""
     with zipfile.ZipFile(zip_path) as zf:
+        infos = zf.infolist()
+
+        if len(infos) > _MAX_ZIP_ENTRIES:
+            raise ValueError(
+                "zip 안의 파일 개수가 너무 많습니다 (%d개, 최대 %d개). "
+                "'.git' 폴더 등 불필요한 항목이 포함되지 않았는지 확인해주세요."
+                % (len(infos), _MAX_ZIP_ENTRIES)
+            )
+
+        total_uncompressed = sum(info.file_size for info in infos)
+        if total_uncompressed > _MAX_ZIP_UNCOMPRESSED_BYTES:
+            raise ValueError(
+                "압축을 풀었을 때 총 용량이 너무 큽니다 (%.1fMB, 최대 %.0fMB)."
+                % (total_uncompressed / (1024 * 1024), _MAX_ZIP_UNCOMPRESSED_BYTES / (1024 * 1024))
+            )
+
         for member in zf.namelist():
             _safe_join(extract_dir, member)  # 경로 이탈 시 예외 발생
         zf.extractall(extract_dir)
@@ -894,6 +917,15 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
     # }
     # ------------------------------------------------------------------
     def apply(self, db_type, book_id, item_data):
+        """모든 액션의 진입점. 실제 처리는 _dispatch_apply에 위임하고, 여기서는
+        예상치 못한 예외가 그대로 새어나가 코어/프록시 단에서 정체불명의 500으로
+        보이지 않도록 마지막 안전망 역할만 한다."""
+        try:
+            return self._dispatch_apply(db_type, book_id, item_data)
+        except Exception as exc:
+            return False, "예상치 못한 오류가 발생했습니다: %s" % exc
+
+    def _dispatch_apply(self, db_type, book_id, item_data):
         if not isinstance(item_data, dict):
             return False, "유효하지 않은 요청 데이터 형식입니다."
 

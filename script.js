@@ -40,8 +40,10 @@
   // 신규설치/업데이트/활성화·비활성화/삭제 액션 — 전부 plugin_board 자신의
   // apply()를 호출한다 (source: "plugin_board"). 외부 플러그인 불필요.
   // ------------------------------------------------------------------
-  async function callPluginBoardAction(dbType, actionData) {
+  async function callPluginBoardAction(dbType, actionData, timeoutMs = 60000) {
     let res;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       res = await fetch("/api/media/books/0/apply-metadata", {
         method: "POST",
@@ -51,13 +53,27 @@
           source: PLUGIN_ID,
           item_data: actionData,
         }),
+        signal: controller.signal,
       });
     } catch (networkErr) {
+      if (networkErr && networkErr.name === "AbortError") {
+        // 브라우저가 응답을 아예 못 받고 있는 상태 — openresty의 기본 500 페이지처럼
+        // 프록시가 백엔드와의 연결이 끊긴 경우 이쪽으로 잡히는 경우가 많다.
+        return {
+          success: false,
+          error:
+            `요청이 ${Math.round(timeoutMs / 1000)}초 안에 응답을 받지 못해 중단했습니다. ` +
+            "서버가 아직 처리 중이거나 타임아웃/충돌했을 수 있습니다. 파일이 크다면 크기를 줄이거나 " +
+            "Git 저장소 URL 설치를 대신 사용해보세요. 잠시 후 새로고침해 실제로 설치됐는지도 확인해보세요.",
+        };
+      }
       // fetch 자체가 실패(오프라인, DNS, CORS 등) — 서버 응답조차 못 받은 경우
       return {
         success: false,
         error: `서버에 연결하지 못했습니다: ${networkErr && networkErr.message ? networkErr.message : networkErr}`,
       };
+    } finally {
+      clearTimeout(timer);
     }
 
     let bodyText = "";
@@ -72,12 +88,24 @@
       try {
         json = JSON.parse(bodyText);
       } catch (parseErr) {
-        // 서버/프록시가 JSON이 아닌 오류 페이지(예: 413 요청 크기 초과, 502 등)를
+        // 서버/프록시가 JSON이 아닌 오류 페이지(예: 413 요청 크기 초과, 502/504,
+        // 또는 openresty가 백엔드 연결 실패 시 자체 생성하는 기본 500 페이지 등)를
         // 돌려준 경우 — 상태 코드와 본문 일부를 그대로 보여줘 원인을 알 수 있게 한다.
         const snippet = bodyText.replace(/\s+/g, " ").trim().slice(0, 160);
         let hint = "";
         if (res.status === 413) {
           hint = " 파일이 너무 커서 서버(또는 앞단 프록시)가 요청을 거부한 것으로 보입니다.";
+        } else if (res.status === 502 || res.status === 504) {
+          hint = " 서버(백엔드)와 프록시 사이의 연결/응답 지연 문제로 보입니다.";
+        } else if (
+          res.status === 500 &&
+          /openresty|nginx/i.test(snippet) &&
+          !/traceback|werkzeug/i.test(snippet)
+        ) {
+          hint =
+            " 프록시가 보여주는 기본 오류 페이지입니다 — plugin_board 코드가 아니라 " +
+            "백엔드 프로세스가 타임아웃되었거나 요청 처리 중 다운되었을 가능성이 높습니다. " +
+            "서버(Gunicorn/Flask) 로그를 확인해주세요.";
         } else if (res.status >= 500) {
           hint = " 서버 내부 오류로 보입니다.";
         }
@@ -827,9 +855,14 @@
     });
 
     // zip을 base64로 인코딩해 JSON 본문에 실어 보내는 방식이라, 파일이 크면
-    // 서버 앞단 프록시(nginx 등)의 기본 요청 크기 제한(흔히 1MB)에 걸리기 쉽다.
-    // 업로드 전에 미리 경고해 "통신 오류"로만 뭉뚱그려지지 않도록 한다.
+    // (a) 서버 앞단 프록시(nginx/openresty)의 요청 크기 제한 → 413,
+    // (b) 처리 시간이 길어져 프록시/워커 타임아웃 → 연결 끊김(openresty의 기본
+    //     500 오류 페이지, Flask가 만든 오류가 아니라 응답 자체를 못 받은 경우)
+    // 둘 중 하나로 실패하기 쉽다. WARN 구간은 경고만 하고 시도하지만, BLOCK 구간은
+    // 아예 시도를 막고 Git 저장소 URL 설치로 유도한다(그 경로는 서버가 직접
+    // GitHub에서 받아오므로 이 문제 자체가 없음).
     const SIZE_WARN_BYTES = 1 * 1024 * 1024; // 1MB
+    const SIZE_BLOCK_BYTES = 8 * 1024 * 1024; // 8MB
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -842,11 +875,20 @@
         showToast(".zip 확장자 파일만 업로드할 수 있습니다.", true);
         return;
       }
-      if (file.size > SIZE_WARN_BYTES) {
-        const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+      const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+      if (file.size > SIZE_BLOCK_BYTES) {
         showToast(
-          `선택한 zip이 ${sizeMb}MB로 다소 큽니다. 서버 설정에 따라 업로드가 거부될 수 있어요 ` +
-            `— 실패하면 Git 저장소 URL 설치를 대신 사용해보세요. 지금 업로드를 시도합니다…`,
+          `선택한 zip이 ${sizeMb}MB로 너무 큽니다. 이 방식(브라우저→서버 업로드)은 ` +
+            `프록시/서버 타임아웃으로 실패하기 쉬우니, 위의 Git 저장소 URL 설치를 대신 사용해주세요.`,
+          true
+        );
+        return;
+      }
+      if (file.size > SIZE_WARN_BYTES) {
+        showToast(
+          `선택한 zip이 ${sizeMb}MB로 다소 큽니다. 서버 설정에 따라 업로드가 거부되거나 ` +
+            `시간이 오래 걸릴 수 있어요 — 실패하면 Git 저장소 URL 설치를 대신 사용해보세요. ` +
+            `지금 업로드를 시도합니다…`,
           true
         );
       }
