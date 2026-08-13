@@ -477,6 +477,16 @@
   opacity: 1;
 }
 
+/* GitHub Topics로 자동 발견된(검수를 거치지 않은) 저장소 표시 */
+.pb-tag-discovered {
+  color: #f59e0b;
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  opacity: 1;
+  font-weight: 600;
+  cursor: help;
+}
+
 /* 이미 설치되어 최신 상태인 카드에 표시되는 배지 (버튼 대체) */
 .pb-installed-badge {
   font-size: 11px;

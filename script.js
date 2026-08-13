@@ -589,6 +589,14 @@
       tagsWrap.appendChild(selfTag);
     }
 
+    if (item.discovered) {
+      const discTag = document.createElement("span");
+      discTag.className = "pb-tag pb-tag-discovered";
+      discTag.title = "plugin_list.txt에 등록되지 않고 GitHub Topics로 자동 발견된 저장소입니다. 별도 검수를 거치지 않았으니 설치 전 내용을 직접 확인하세요.";
+      discTag.textContent = "⚠ 미검수 · 토픽 발견";
+      tagsWrap.appendChild(discTag);
+    }
+
     (item.tags || []).forEach((tagText) => {
       const tag = document.createElement("span");
       tag.className = "pb-tag";
@@ -664,6 +672,7 @@
     });
     const types = Object.keys(counts).sort();
     const installedCount = allItems.filter((it) => it.installed).length;
+    const discoveredCount = allItems.filter((it) => it.discovered).length;
 
     // 집계
     tallyEl.innerHTML = "";
@@ -678,6 +687,9 @@
     };
     addTally(allItems.length, "등록 플러그인");
     addTally(installedCount, "이 서버에 설치됨");
+    if (discoveredCount > 0) {
+      addTally(discoveredCount, "토픽 발견(미검수)");
+    }
     types.forEach((t) => {
       const item = allItems.find((it) => it.type === t);
       addTally(counts[t], (item && item.type_label) || t);

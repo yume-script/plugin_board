@@ -27,6 +27,7 @@ import shutil
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -50,6 +51,28 @@ SELF_REPO_URL = "https://github.com/yume-script/plugin_board"
 
 _LIST_CACHE = {"ts": 0.0, "urls": []}
 _LIST_CACHE_TTL_SECONDS = 3600  # 1시간마다 목록을 다시 조회
+
+# ----------------------------------------------------------------------
+# 하이브리드 발견(discovery) — plugin_list.txt의 큐레이션 목록과 별개로,
+# GitHub Topics에 이 토픽이 달린 저장소를 자동으로 찾아 "미검수" 카드로 함께
+# 보여준다(Search API 사용). 기본값은 "bookoasis-plugin" 하나뿐이지만, 이
+# 리스트에 문자열을 더 추가하면(코드 배포로) 여러 토픽을 동시에 검색할 수
+# 있다. 코드를 건드리지 않고 서버별로 토픽을 추가하고 싶으면 플러그인 설정의
+# EXTRA_DISCOVERY_TOPICS(콤마 구분)를 쓰면 된다 — 둘은 합쳐져서 함께 검색된다.
+# ----------------------------------------------------------------------
+DISCOVERY_TOPICS = ["bookoasis-plugin"]
+
+# 토픽은 GitHub 전역에서 공유되는 이름이라, 흔한 단어를 추가 토픽으로 넣으면
+# 전혀 무관한 저장소가 대량으로 섞여 들어올 수 있다(실측: 흔한 이름 하나로
+# 무관한 저장소 50개 이상이 잡힌 사례 있음). 그래서 두 단계로 방어한다:
+#   1) VERSION 파일을 실제로 찾은(=BookOasis 플러그인일 가능성이 높은) 저장소만
+#      발견 카드로 인정 — 이미 설치되어 있는 저장소는 예외적으로 항상 허용
+#   2) 그래도 남는 개수를 아래 상한으로 한 번 더 자른다
+_MAX_DISCOVERED_ITEMS = 30
+
+_TOPIC_CACHE = {}  # {"topic1,topic2": (timestamp, [repo_json, ...])}
+_TOPIC_CACHE_TTL_SECONDS = 3600  # 1시간 — plugin_list.txt와 동일한 주기
+_SEARCH_REQUEST_TIMEOUT = 8
 
 # GitHub API/README만으로는 "검색형 메타데이터"인지 "카테고리 탭 UI"인지 구분할 수
 # 없어서, 분류가 필요할 때만 owner/repo 키로 지정합니다. 지정하지 않으면 화면에서
@@ -418,6 +441,113 @@ def _fetch_remote_info_parallel(owner_repo_pairs, token, max_workers=8):
     return results
 
 
+# ========================================================================
+# GitHub Topics 기반 발견(discovery) — plugin_list.txt 큐레이션과는 별개로
+# Search API로 DISCOVERY_TOPICS가 달린 저장소를 찾아 "미검수" 카드로 함께
+# 보여준다. 검증 없이 자동 노출되므로 카드에는 반드시 미검수 표시를 한다.
+# ========================================================================
+def _fetch_repos_by_topic(topics, token):
+    """GitHub Search API(`/search/repositories?q=topic:...`)로 지정된 토픽이
+    달린 공개 저장소를 찾는다. 토픽 하나가 실패해도 나머지는 계속 시도하며,
+    전체 결과는 1시간 캐시한다(Search API는 분당 요청 제한이 따로 있어
+    plugin_list.txt보다도 더 아껴 써야 한다)."""
+    topics = [t.strip() for t in topics if t and t.strip()]
+    if not topics:
+        return []
+
+    cache_key = ",".join(sorted(set(topics)))
+    now = time.time()
+    cached = _TOPIC_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _TOPIC_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    seen = {}
+    for topic in topics:
+        try:
+            query = urllib.parse.quote("topic:%s" % topic, safe="")
+            url = "https://api.github.com/search/repositories?q=%s&per_page=50" % query
+            data = _http_get_json(url, token)
+            for repo_json in data.get("items", []) or []:
+                full_name = repo_json.get("full_name")
+                if full_name and full_name not in seen:
+                    seen[full_name] = repo_json
+        except Exception:
+            continue  # 토픽 하나가 실패해도 나머지 토픽 검색은 계속한다
+
+    results = list(seen.values())
+    _TOPIC_CACHE[cache_key] = (now, results)
+    return results
+
+
+def _fetch_versions_parallel(specs, token, max_workers=8):
+    """[(owner, repo, default_branch), ...]에 대해 버전 정보를 병렬로 조회한다.
+    _fetch_version_info의 1시간 캐시를 그대로 활용한다."""
+    results = {}
+    if not specs:
+        return results
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(max_workers, len(specs))
+    ) as executor:
+        future_map = {
+            executor.submit(_fetch_version_info, owner, repo, token, branch): (owner, repo)
+            for owner, repo, branch in specs
+        }
+        for future in concurrent.futures.as_completed(future_map):
+            key = future_map[future]
+            try:
+                results[key] = future.result()
+            except Exception:
+                results[key] = {"version_label": "—", "remote_version": None, "error": True}
+    return results
+
+
+def _build_discovered_item(repo_json, version_info, is_enabled_fn, excluded_ids):
+    """GitHub Search API 결과 하나를 카드 항목으로 변환한다. 설명·토픽·URL은
+    검색 결과에 이미 포함돼 있으므로 추가 조회 없이 그대로 쓰고, 버전만
+    미리 병렬로 조회해둔 version_info를 사용한다."""
+    owner_login = ((repo_json.get("owner") or {}).get("login")) or ""
+    repo_name = repo_json.get("name") or ""
+    if not owner_login or not repo_name or repo_name in excluded_ids:
+        return None
+
+    key = owner_login + "/" + repo_name
+    installed = _is_installed(repo_name)
+    installed_version = _local_version(repo_name) if installed else None
+
+    plugin_type = TYPE_OVERRIDES.get(key, "other")
+    has_config = False
+    if installed:
+        local_attrs = _read_local_class_attrs(repo_name)
+        if local_attrs.get("is_searchable"):
+            plugin_type = "search"
+        elif local_attrs.get("category_tab"):
+            plugin_type = "tab"
+        has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(repo_name)
+
+    remote_version = version_info["remote_version"] if version_info else None
+    version_label = version_info["version_label"] if version_info else "—"
+
+    return {
+        "id": repo_name,
+        "owner": owner_login,
+        "title": repo_name,
+        "type": plugin_type,
+        "type_label": TYPE_LABELS.get(plugin_type, TYPE_LABELS["other"]),
+        "desc": repo_json.get("description") or "(GitHub에 등록된 설명이 없습니다)",
+        "tags": repo_json.get("topics") or [],
+        "features": [],
+        "version_label": version_label,
+        "url": repo_json.get("html_url") or ("https://github.com/%s" % key),
+        "error": bool(version_info and version_info.get("error")),
+        "installed": installed,
+        "installed_version": installed_version,
+        "has_update": installed and _remote_is_newer(installed_version, remote_version),
+        "has_config": has_config,
+        "enabled": is_enabled_fn(repo_name) if installed else None,
+        "discovered": True,
+    }
+
+
 def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None):
     owner, repo = _parse_owner_repo(url)
     if not owner or not repo:
@@ -693,6 +823,19 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             "type": "password",
             "required": False,
         },
+        {
+            "key": "EXTRA_DISCOVERY_TOPICS",
+            "label": "추가 발견 토픽 (콤마로 구분, 선택)",
+            "type": "text",
+            "required": False,
+            "description": (
+                "코드 수정 없이 GitHub Topics 발견 대상을 늘리고 싶을 때 사용합니다. "
+                "기본값 'bookoasis-plugin'에 더해 검색할 토픽을 콤마(,)로 구분해 입력하세요. "
+                "⚠ 토픽은 GitHub 전역에서 공유되는 이름이라, 흔한 단어를 넣으면 전혀 무관한 "
+                "저장소가 대량으로 섞여 들어올 수 있습니다(VERSION 파일이 없는 저장소는 자동 "
+                "제외되지만, 가급적 다른 곳과 겹치지 않는 구체적인 토픽 이름만 추가하세요)."
+            ),
+        },
     ]
 
     # 좌측 사이드바 1등 시민 카테고리 메뉴로 등록
@@ -853,5 +996,49 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             curated_items.append(_fetch_repo_entry(url, token, is_enabled_fn, preloaded))
 
         curated_ids = {it["id"] for it in curated_items}
-        local_items = _scan_uncurated_installed(curated_ids, is_enabled_fn)
-        return {"success": True, "items": curated_items + local_items}
+
+        # 하이브리드 발견: plugin_list.txt 큐레이션과 별개로 GitHub Topics에서
+        # 자동으로 찾아온 저장소도 "미검수" 카드로 함께 보여준다. 큐레이션
+        # 목록에 이미 있는 저장소는 여기서 제외해 카드가 중복되지 않게 한다.
+        extra_topics_raw = str(cfg.get("EXTRA_DISCOVERY_TOPICS") or "").strip()
+        extra_topics = [t.strip() for t in extra_topics_raw.split(",") if t.strip()]
+        all_topics = list(dict.fromkeys(DISCOVERY_TOPICS + extra_topics))  # 순서 유지 + 중복 제거
+
+        discovered_items = []
+        try:
+            topic_repos = _fetch_repos_by_topic(all_topics, token)
+        except Exception:
+            topic_repos = []
+
+        if topic_repos:
+            version_specs = []
+            for repo_json in topic_repos:
+                owner_login = ((repo_json.get("owner") or {}).get("login")) or ""
+                repo_name = repo_json.get("name") or ""
+                if owner_login and repo_name and repo_name not in curated_ids:
+                    version_specs.append((owner_login, repo_name, repo_json.get("default_branch")))
+            version_infos = _fetch_versions_parallel(version_specs, token)
+
+            seen_discovered_ids = set()
+            for repo_json in topic_repos:
+                owner_login = ((repo_json.get("owner") or {}).get("login")) or ""
+                repo_name = repo_json.get("name") or ""
+                vinfo = version_infos.get((owner_login, repo_name))
+                item = _build_discovered_item(
+                    repo_json, vinfo, is_enabled_fn, curated_ids | seen_discovered_ids
+                )
+                if not item:
+                    continue
+                # 노이즈 필터: VERSION 파일을 못 찾았고 이미 설치된 것도 아니면
+                # BookOasis 플러그인이 아닐 가능성이 높으므로 카드에서 제외한다.
+                if not item["installed"] and item["version_label"] == "—":
+                    continue
+                seen_discovered_ids.add(item["id"])
+                discovered_items.append(item)
+
+            if len(discovered_items) > _MAX_DISCOVERED_ITEMS:
+                discovered_items = discovered_items[:_MAX_DISCOVERED_ITEMS]
+
+        discovered_ids = {it["id"] for it in discovered_items}
+        local_items = _scan_uncurated_installed(curated_ids | discovered_ids, is_enabled_fn)
+        return {"success": True, "items": curated_items + discovered_items + local_items}
