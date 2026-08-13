@@ -31,31 +31,6 @@
     </p>
   </section>
 
-  <section class="pb-git-panel">
-    <div class="pb-git-panel-head">
-      <div class="pb-git-panel-title">
-        <span class="pb-git-panel-icon pb-zip-icon"><svg viewBox="0 0 16 16"><path d="M4.5 1A1.5 1.5 0 0 0 3 2.5v11A1.5 1.5 0 0 0 4.5 15h7a1.5 1.5 0 0 0 1.5-1.5v-8.086a1.5 1.5 0 0 0-.44-1.06L9.647 1.44A1.5 1.5 0 0 0 8.586 1H4.5ZM7 6h1v1h1v1H8v1H7V8H6V7h1V6Zm-1 3h3v1H6V9Z"/></svg></span>
-        <h2>Zip 파일 업로드 설치</h2>
-      </div>
-      <span class="pb-git-panel-badge pb-git-panel-badge-zip">ZIP 업로드</span>
-    </div>
-    <form id="pb-zip-install-form" class="pb-git-panel-form">
-      <input type="file" id="pb-zip-install-input" accept=".zip" hidden />
-      <button type="button" id="pb-zip-select-btn" class="pb-zip-select-btn">
-        <span class="pb-zip-select-icon"><svg viewBox="0 0 16 16"><path d="M1.75 2A1.75 1.75 0 0 0 0 3.75v.4c0 .45.3.833.7.967v6.633C.7 12.567 1.633 13.5 2.75 13.5h10.5c1.117 0 2.05-.933 2.05-2.05V6.8a1.75 1.75 0 0 0-1.75-1.75H7.62l-1.1-1.3A1.75 1.75 0 0 0 5.18 3H1.75Z"/></svg></span>
-        <span id="pb-zip-file-label">Zip 압축 파일 선택…</span>
-      </button>
-      <button type="submit" id="pb-zip-install-btn">Zip 설치</button>
-    </form>
-    <p class="pb-git-panel-tip">
-      💡 팁: 압축 파일 내부 폴더 깊이(최상위에 바로 있음 / 저장소 폴더 하나로 감싸짐 /
-      그보다 더 중첩됨)에 상관없이 <code>VERSION</code> 파일 또는 <code>id = "..."</code>가
-      선언된 메인 <code>.py</code> 파일을 자동으로 찾아 그 위치를 플러그인 루트로 설치합니다.
-      단, zip을 그대로 전송하는 방식이라 <strong>파일이 크면(대략 1MB 이상)</strong> 서버
-      설정에 따라 업로드가 거부될 수 있습니다 — 그럴 땐 위의 Git 저장소 URL 설치를 이용해주세요.
-    </p>
-  </section>
-
   <nav class="pb-filters" id="pb-filters"></nav>
 
   <main class="pb-board">

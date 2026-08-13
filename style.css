@@ -168,10 +168,6 @@
   white-space: nowrap;
 }
 
-.pb-zip-icon {
-  color: #f59e0b;
-}
-
 .pb-git-panel-form {
   display: flex;
   gap: 8px;
@@ -194,54 +190,6 @@
 }
 .pb-git-panel-form input:disabled {
   opacity: 0.6;
-}
-
-.pb-zip-select-btn {
-  flex: 1 1 260px;
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 12px;
-  border-radius: 8px;
-  background: var(--app-input-bg, var(--app-bg-main));
-  border: 1px solid var(--app-border, rgba(255,255,255,0.15));
-  color: var(--app-text-primary);
-  font-size: 12.5px;
-  font-family: inherit;
-  font-weight: 500;
-  cursor: pointer;
-  text-align: left;
-  transition: background .15s ease, border-color .15s ease;
-}
-.pb-zip-select-btn:hover:not(:disabled) {
-  background: var(--app-bg-card-hover);
-  border-color: var(--app-accent);
-}
-.pb-zip-select-btn:disabled {
-  opacity: 0.6;
-  cursor: progress;
-}
-.pb-zip-select-icon {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  display: inline-flex;
-  color: var(--app-text-muted);
-}
-.pb-zip-select-icon svg {
-  width: 100%;
-  height: 100%;
-  fill: currentColor;
-}
-#pb-zip-file-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pb-git-panel-badge-zip {
-  background: #f59e0b;
 }
 
 .pb-git-panel-form button {
