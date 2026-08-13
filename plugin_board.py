@@ -19,6 +19,7 @@ update_manifest를 AST로만(코드 실행 없이) 추출해 명시된 파일만
 """
 
 import ast
+import base64
 import concurrent.futures
 import json
 import os
@@ -29,6 +30,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from datetime import datetime
 
 from plugins.metadata.base import BaseMetadataProvider
 
@@ -615,6 +617,592 @@ def _delete_plugin(plugin_id):
 
 
 
+# ========================================================================
+# Zip 업로드 설치 파이프라인 (madnite1/plugin_manager의 _install_from_zip을
+# 참고해 동일한 절차·검증 항목으로 재구현)
+#   1~3. base64 디코드 → 임시 디렉토리에 압축 해제 (Zip Slip/개수/용량 검증)
+#   4~6. 플러그인 루트·ID 식별, ID 형식·예약어 검증
+#   7.   1차 검증 — 정적 소스 검증 (코드 실행 없음, AST/파일 스캔만)
+#   8~10. 배치 — 경로 검증 → 기존 폴더 삭제 → 복사 → .zip_source 메타 저장
+#   11~13. 활성화 → 핫 리로드 → 2차 검증(실제 로드 확인, 실패 시 자동 롤백)
+#   14.  완료 — 임시 폴더 정리, 검증 통과/경고 포함 성공 메시지
+# ========================================================================
+_RESERVED_PLUGIN_IDS = {"base.py", "base", "__pycache__", "plugin_manager"}
+
+
+def _is_plugin_directory(dpath):
+    """디렉토리가 유효한 플러그인 구성 요소를 포함하고 있는지 판별."""
+    if not os.path.isdir(dpath):
+        return False
+    if os.path.isfile(os.path.join(dpath, "VERSION")):
+        return True
+    try:
+        for fname in os.listdir(dpath):
+            if fname.endswith(".py") and fname not in ("base.py", "__init__.py"):
+                fpath = os.path.join(dpath, fname)
+                if os.path.isfile(fpath):
+                    with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                    if "BaseMetadataProvider" in content or "id =" in content or "id=" in content:
+                        return True
+    except Exception:
+        pass
+    return False
+
+
+def _find_plugin_root_dir(start_dir):
+    """압축 해제된 폴더 안에서 플러그인 루트 디렉토리를 지능 탐색한다.
+    zip 안에 폴더가 하나 더 감싸져 있어도(예: 저장소이름-브랜치/) 실제 루트를
+    찾고, __MACOSX·숨김 폴더는 탐색에서 제외한다."""
+    if _is_plugin_directory(start_dir):
+        return start_dir
+
+    for root, dirs, _files in os.walk(start_dir):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__MACOSX"]
+        if _is_plugin_directory(root):
+            return root
+
+    try:
+        subdirs = [
+            os.path.join(start_dir, d)
+            for d in os.listdir(start_dir)
+            if os.path.isdir(os.path.join(start_dir, d))
+            and not d.startswith(".")
+            and d != "__MACOSX"
+        ]
+    except Exception:
+        subdirs = []
+    if len(subdirs) == 1:
+        return subdirs[0]
+
+    return start_dir
+
+
+def _detect_plugin_id(plugin_dir, fallback_name=None):
+    """VERSION의 id/plugin_id → 메인 .py의 id = "..." → 폴더 이름 → zip 파일명
+    순으로 plugin_id를 결정한다."""
+    vpath = os.path.join(plugin_dir, "VERSION")
+    if os.path.isfile(vpath):
+        try:
+            with open(vpath, "r", encoding="utf-8") as f:
+                vdata = json.load(f)
+            pid = vdata.get("id") or vdata.get("plugin_id")
+            if pid and _PLUGIN_ID_RE.match(str(pid).strip()):
+                return str(pid).strip()
+        except Exception:
+            pass
+
+    try:
+        for fname in os.listdir(plugin_dir):
+            if fname.endswith(".py") and fname not in ("__init__.py", "base.py"):
+                fpath = os.path.join(plugin_dir, fname)
+                if os.path.isfile(fpath):
+                    with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                    m = re.search(r'id\s*=\s*["\']([a-zA-Z0-9_-]+)["\']', content)
+                    if m:
+                        return m.group(1).strip()
+    except Exception:
+        pass
+
+    folder_name = os.path.basename(os.path.normpath(plugin_dir))
+    if folder_name and folder_name not in ("temp", "tmp") and not folder_name.lower().startswith(
+        ("plugin_board_zip", "extract", "tmp")
+    ):
+        return folder_name
+
+    if fallback_name:
+        clean = re.sub(r"\.zip$", "", str(fallback_name), flags=re.IGNORECASE)
+        clean = re.sub(r"[^a-zA-Z0-9_-]", "_", clean).strip("_")
+        if clean:
+            return clean
+
+    return ""
+
+
+def _extract_update_manifest_files(plugin_dir):
+    """플러그인 .py 소스에서 update_manifest dict를 AST로만(코드 실행 없이)
+    추출한다. 반환: (files 리스트, manifest dict) 또는 (None, None)."""
+    try:
+        for fname in sorted(os.listdir(plugin_dir)):
+            if not fname.endswith(".py") or fname in ("__init__.py", "base.py"):
+                continue
+            fpath = os.path.join(plugin_dir, fname)
+            if not os.path.isfile(fpath):
+                continue
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    tree = ast.parse(f.read(), filename=fpath)
+            except SyntaxError:
+                continue
+
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                for stmt in node.body:
+                    value_node = None
+                    if isinstance(stmt, ast.Assign):
+                        for target in stmt.targets:
+                            if isinstance(target, ast.Name) and target.id == "update_manifest":
+                                value_node = stmt.value
+                                break
+                    elif (
+                        isinstance(stmt, ast.AnnAssign)
+                        and isinstance(stmt.target, ast.Name)
+                        and stmt.target.id == "update_manifest"
+                    ):
+                        value_node = stmt.value
+                    if value_node is None:
+                        continue
+                    try:
+                        value = ast.literal_eval(value_node)
+                    except Exception:
+                        value = None
+                    if not isinstance(value, dict):
+                        continue
+                    raw_files = value.get("files")
+                    if isinstance(raw_files, list):
+                        files_clean = [str(x).strip() for x in raw_files if str(x).strip()]
+                        if files_clean:
+                            return files_clean, value
+    except Exception:
+        pass
+    return None, None
+
+
+def _validate_plugin_source(plugin_dir, detected_id):
+    """설치 대상 플러그인 소스 정적 검증 (코드 실행 없음 — AST/파일 스캔만).
+    개발 가이드(guide_plugins.md) 규격 기반.
+
+    검증 항목:
+      1. VERSION: update_manifest 선언 시 필수 (JSON + 'plugin version' 키).
+         미선언 시 VERSION 없음/비표준은 경고만 (업데이트 미지원 플러그인 허용)
+      2. 메인 .py 존재 (BaseMetadataProvider 상속 클래스)
+      3. 클래스 id == 감지된 plugin_id (폴더명과 일치해야 목록/카테고리 표시)
+      4. 필수 클래스 필드: name(str), is_searchable(bool), config_schema(list)
+      5. 필수 메서드 search/apply 구현 (AST 클래스 본문 검사)
+      6. 금지 패턴 없음 (eval/exec/subprocess/os.system/os.popen/shell=True)
+      7. 심볼릭 링크 없음
+      8. update_manifest 규격: provider=='github-raw' + version_file/version_key/
+         files 존재 + raw_base_url 비어있지 않음 + files 실제 존재
+      9. category_tab 선언 시 UI 번들(index.html/script.js/style.css) 필수
+
+    반환: (성공 여부, 체크 결과 리스트 [{'name','ok','detail','warn'?}])
+    """
+    if os.path.basename(os.path.normpath(plugin_dir)) == "__pycache__":
+        return False, []
+
+    checks = []
+    base_names = ("base.py", "__init__.py")
+
+    manifest_files, manifest = _extract_update_manifest_files(plugin_dir)
+
+    # 1. VERSION 파일 검사
+    vpath = os.path.join(plugin_dir, "VERSION")
+    vfile_ok = False
+    vdetail = ""
+    if os.path.isfile(vpath):
+        try:
+            with open(vpath, "r", encoding="utf-8") as f:
+                vdata = json.load(f)
+            vkey = vdata.get("plugin version") or vdata.get("version")
+            if vkey:
+                vfile_ok = True
+                vdetail = "버전 %s" % vkey
+            else:
+                vdetail = "'plugin version' 키가 없습니다 (업데이트 체크 불가)"
+        except Exception:
+            vdetail = "VERSION 형식이 표준 JSON이 아닙니다 (업데이트 체크 불가)"
+    else:
+        vdetail = "VERSION 파일 없음"
+
+    if manifest_files:
+        if vfile_ok:
+            checks.append({"name": "VERSION", "ok": True, "detail": vdetail})
+        else:
+            checks.append({"name": "VERSION", "ok": False,
+                            "detail": "update_manifest 선언 시 VERSION 필수 — " + vdetail})
+    elif vfile_ok:
+        checks.append({"name": "VERSION", "ok": True, "detail": vdetail})
+    else:
+        checks.append({"name": "VERSION", "ok": True, "warn": True,
+                        "detail": "경고: " + vdetail + " (업데이트 체크 불가)"})
+
+    # 2~6. 파이썬 소스 AST 분석
+    try:
+        py_files = [
+            f for f in sorted(os.listdir(plugin_dir))
+            if f.endswith(".py") and f not in base_names
+            and os.path.isfile(os.path.join(plugin_dir, f))
+        ]
+    except Exception:
+        py_files = []
+
+    provider_found = False
+    class_id = None
+    cls_attrs = set()
+    has_search = False
+    has_apply = False
+    forbidden_hits = []
+
+    for fname in py_files:
+        fpath = os.path.join(plugin_dir, fname)
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            tree = ast.parse(content, filename=fpath)
+        except SyntaxError:
+            forbidden_hits.append("%s: 파이썬 구문 오류" % fname)
+            continue
+
+        # 금지 패턴 검사 (AST 기반 — 실제 호출/import만 차단, 주석/문자열은 무시)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                fn = node.func
+                if isinstance(fn, ast.Name) and fn.id in ("eval", "exec"):
+                    forbidden_hits.append("%s: %s() 호출 발견" % (fname, fn.id))
+                elif isinstance(fn, ast.Attribute) and fn.attr in ("system", "popen"):
+                    forbidden_hits.append("%s: os.%s() 호출 발견" % (fname, fn.attr))
+            elif isinstance(node, ast.Import):
+                for a in node.names:
+                    if a.name == "subprocess" or a.name.startswith("subprocess."):
+                        forbidden_hits.append("%s: subprocess import 발견" % fname)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module == "subprocess":
+                    forbidden_hits.append("%s: subprocess import 발견" % fname)
+            elif isinstance(node, ast.keyword) and node.arg == "shell":
+                try:
+                    if ast.literal_eval(node.value) is True:
+                        forbidden_hits.append("%s: shell=True 사용" % fname)
+                except Exception:
+                    pass
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            bases = []
+            for b in node.bases:
+                try:
+                    bases.append(ast.unparse(b))
+                except Exception:
+                    bases.append("")
+
+            cls_id = None
+            cls_fields = set()
+            cls_search = False
+            cls_apply = False
+            for stmt in node.body:
+                if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+                    targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+                    for t in targets:
+                        if not isinstance(t, ast.Name):
+                            continue
+                        val = stmt.value
+                        if t.id == "id":
+                            if isinstance(val, ast.Constant) and isinstance(val.value, str):
+                                cls_id = val.value
+                        elif t.id == "name":
+                            if isinstance(val, ast.Constant) and isinstance(val.value, str):
+                                cls_fields.add("name")
+                        elif t.id == "is_searchable":
+                            if isinstance(val, ast.Constant) and isinstance(val.value, bool):
+                                cls_fields.add("is_searchable")
+                        elif t.id == "config_schema":
+                            if isinstance(val, (ast.List, ast.Tuple)):
+                                cls_fields.add("config_schema")
+                        elif t.id in ("category_tab", "update_manifest", "dashboard_widget"):
+                            if isinstance(val, ast.Dict):
+                                cls_fields.add(t.id)
+                elif isinstance(stmt, ast.FunctionDef):
+                    if stmt.name == "search":
+                        cls_search = True
+                    elif stmt.name == "apply":
+                        cls_apply = True
+
+            is_provider = any("BaseMetadataProvider" in b for b in bases)
+            if not is_provider and cls_id is not None:
+                is_provider = True
+
+            if is_provider and cls_id is not None and class_id is None:
+                class_id = cls_id
+
+            if is_provider:
+                provider_found = True
+                cls_attrs.update(cls_fields)
+                if cls_search:
+                    has_search = True
+                if cls_apply:
+                    has_apply = True
+
+    if not py_files:
+        checks.append({"name": "소스", "ok": False, "detail": "메인 .py 파일이 없습니다"})
+    elif not provider_found:
+        checks.append({"name": "소스", "ok": False,
+                        "detail": "BaseMetadataProvider 상속 클래스를 찾을 수 없습니다"})
+    else:
+        checks.append({"name": "소스", "ok": True,
+                        "detail": "%d개 .py 파일, BaseMetadataProvider 클래스 발견" % len(py_files)})
+
+    # 3. 클래스 id 일치 검사
+    if class_id is not None:
+        if str(class_id).strip() == str(detected_id).strip():
+            checks.append({"name": "클래스 id", "ok": True, "detail": class_id})
+        else:
+            checks.append({"name": "클래스 id", "ok": False,
+                            "detail": "코드 내 id='%s' \u2260 감지된 id='%s' — 설치 후 목록에 "
+                                      "표시되지 않을 수 있습니다" % (class_id, detected_id)})
+    elif provider_found:
+        checks.append({"name": "클래스 id", "ok": False, "detail": "플러그인 클래스에 id 속성이 없습니다"})
+    else:
+        checks.append({"name": "클래스 id", "ok": False, "detail": "클래스를 찾을 수 없어 검사 불가"})
+
+    # 4. 필수 클래스 필드
+    if provider_found:
+        missing_fields = [f for f in ("name", "is_searchable", "config_schema") if f not in cls_attrs]
+        if missing_fields:
+            checks.append({"name": "필수 필드", "ok": False, "detail": "클래스에 없음: " + ", ".join(missing_fields)})
+        else:
+            checks.append({"name": "필수 필드", "ok": True, "detail": "name/is_searchable/config_schema 확인"})
+    else:
+        checks.append({"name": "필수 필드", "ok": False, "detail": "클래스 없음"})
+
+    # 5. 필수 메서드
+    if provider_found:
+        missing = []
+        if not has_search:
+            missing.append("search")
+        if not has_apply:
+            missing.append("apply")
+        if missing:
+            checks.append({"name": "필수 메서드", "ok": False, "detail": "구현 안 됨: " + ", ".join(missing)})
+        else:
+            checks.append({"name": "필수 메서드", "ok": True, "detail": "search/apply 확인"})
+    else:
+        checks.append({"name": "필수 메서드", "ok": False, "detail": "클래스 없음"})
+
+    # 6. 금지 패턴
+    if forbidden_hits:
+        checks.append({"name": "금지 패턴", "ok": False, "detail": "; ".join(forbidden_hits[:3])})
+    else:
+        checks.append({"name": "금지 패턴", "ok": True, "detail": "eval/exec/subprocess 없음"})
+
+    # __init__.py 존재 여부 (없으면 폴백 로드 — 경고만)
+    if os.path.isfile(os.path.join(plugin_dir, "__init__.py")):
+        checks.append({"name": "__init__.py", "ok": True, "detail": "확인"})
+    else:
+        checks.append({"name": "__init__.py", "ok": True, "warn": True,
+                        "detail": "경고: __init__.py 없음 (폴백 로드 사용)"})
+
+    # 7. 심볼릭 링크 검사
+    symlinks = []
+    try:
+        for root_dir, dirs, files in os.walk(plugin_dir):
+            for entry in dirs + files:
+                p = os.path.join(root_dir, entry)
+                if os.path.islink(p):
+                    symlinks.append(os.path.relpath(p, plugin_dir))
+    except Exception:
+        pass
+    if symlinks:
+        checks.append({"name": "심볼릭 링크", "ok": False,
+                        "detail": "플러그인 폴더 내 심볼릭 링크 금지: " + ", ".join(symlinks[:3])})
+    else:
+        checks.append({"name": "심볼릭 링크", "ok": True, "detail": "없음"})
+
+    # 8. update_manifest 규격 검사 (선언된 경우에만)
+    if manifest_files:
+        problems = []
+        m_provider = str(manifest.get("provider") or "").strip()
+        if m_provider != "github-raw":
+            problems.append("provider='%s' (github-raw만 지원)" % (m_provider or "없음"))
+        if not str(manifest.get("version_file") or "").strip():
+            problems.append("version_file 없음")
+        if not str(manifest.get("version_key") or "").strip():
+            problems.append("version_key 없음")
+        missing_files = [rel for rel in manifest_files
+                          if not os.path.isfile(os.path.join(plugin_dir, rel))]
+        if missing_files:
+            problems.append("files에 선언된 파일이 없음: " + ", ".join(missing_files[:3]))
+        if not str(manifest.get("raw_base_url") or "").strip():
+            problems.append("raw_base_url이 비어 있음")
+        if problems:
+            checks.append({"name": "update_manifest", "ok": False, "detail": "; ".join(problems[:4])})
+        else:
+            checks.append({"name": "update_manifest", "ok": True,
+                            "detail": "provider/files %d개/raw_base_url/version_file/version_key 확인"
+                                      % len(manifest_files)})
+    else:
+        checks.append({"name": "update_manifest", "ok": True, "detail": "미선언 (업데이트 미지원)"})
+
+    # 9. UI 번들 검사 (category_tab 선언 시 index.html/script.js/style.css 필수)
+    ui_files = {f: os.path.isfile(os.path.join(plugin_dir, f)) for f in ("index.html", "script.js", "style.css")}
+    if "category_tab" in cls_attrs:
+        missing_ui = [f for f, ok in ui_files.items() if not ok]
+        if missing_ui:
+            checks.append({"name": "UI 번들", "ok": False,
+                            "detail": "category_tab 선언 시 필수: " + ", ".join(missing_ui)})
+        else:
+            checks.append({"name": "UI 번들", "ok": True, "detail": "index/script/style 확인"})
+    else:
+        present_ui = [f for f, ok in ui_files.items() if ok]
+        if present_ui and len(present_ui) < 3:
+            checks.append({"name": "UI 번들", "ok": True, "warn": True,
+                            "detail": "경고: UI 파일 일부만 존재 (" + ", ".join(present_ui) + ")"})
+        elif present_ui:
+            checks.append({"name": "UI 번들", "ok": True, "detail": "UI 번들 확인"})
+        else:
+            checks.append({"name": "UI 번들", "ok": True, "detail": "미선언"})
+
+    all_ok = all(c.get("ok") for c in checks)
+    return all_ok, checks
+
+
+def _validate_plugin_path(plugin_id):
+    """플러그인 ID 및 경로 안전성 검증. 반환: (target_path, None) 또는 (None, 오류메시지)."""
+    pid = str(plugin_id or "").strip()
+    if not pid or not _PLUGIN_ID_RE.match(pid):
+        return None, "유효하지 않은 플러그인 ID입니다 (영문, 숫자, 언더바, 하이픈만 허용)."
+    try:
+        target = _safe_join(_plugins_metadata_dir(), pid)
+    except ValueError as exc:
+        return None, str(exc)
+    return target, None
+
+
+def _verify_plugin_loaded(plugin_id):
+    """2차 검증 — 코어가 실제로 이 플러그인을 로드했는지 확인한다.
+    확인 자체가 불가능한 경우도 안전하게 '로드 실패'로 간주한다(fail-closed)."""
+    try:
+        from services.metadata_factory import MetadataFactory
+        providers = MetadataFactory.get_available_providers()
+        return any(str(p.get("id")) == plugin_id for p in providers)
+    except Exception:
+        return False
+
+
+def _install_from_zip(zip_data_b64, filename, db_type):
+    """업로드된 zip(base64)으로 플러그인을 설치한다. 모듈 상단 주석의 14단계
+    절차를 그대로 따른다."""
+    if not zip_data_b64:
+        return False, "압축 파일 데이터가 누락되었습니다."
+
+    if "," in zip_data_b64:
+        zip_data_b64 = zip_data_b64.split(",", 1)[1]  # data:...;base64, 접두어 제거
+
+    try:
+        zip_bytes = base64.b64decode(zip_data_b64)
+    except Exception as exc:
+        return False, "zip 데이터를 해석하지 못했습니다: %s" % exc
+
+    tmp_dir = tempfile.mkdtemp(prefix="plugin_board_zip_")
+    try:
+        # 1~3. 임시 파일로 저장 후 압축 해제 (Zip Slip·개수·용량 검증 포함)
+        zip_path = os.path.join(tmp_dir, "upload.zip")
+        with open(zip_path, "wb") as f:
+            f.write(zip_bytes)
+
+        extract_dir = os.path.join(tmp_dir, "extract")
+        os.makedirs(extract_dir, exist_ok=True)
+        try:
+            _extract_zip_safe(zip_path, extract_dir)
+        except zipfile.BadZipFile:
+            return False, "올바른 zip 압축 파일 형식이 아닙니다."
+        except Exception as exc:
+            return False, "zip 압축 해제에 실패했습니다: %s" % exc
+
+        # 4. 플러그인 루트 지능 탐색
+        plugin_root = _find_plugin_root_dir(extract_dir)
+
+        # 5. 플러그인 ID 식별
+        plugin_id = _detect_plugin_id(plugin_root, fallback_name=filename)
+        if not plugin_id:
+            return False, (
+                "플러그인 ID를 식별할 수 없습니다. "
+                "(BaseMetadataProvider 클래스 또는 VERSION 파일 필요)"
+            )
+
+        # 6. ID 형식 검증 + 예약어 가드 (plugin_manager 등 핵심 플러그인 보호)
+        if not _PLUGIN_ID_RE.match(plugin_id):
+            return False, "유효하지 않은 플러그인 ID입니다 (영문/숫자/언더바/하이픈만 허용): %s" % plugin_id
+        if plugin_id in _RESERVED_PLUGIN_IDS or plugin_id == "plugin_board":
+            return False, "시스템 예약어 또는 핵심 플러그인은 덮어쓸 수 없습니다: %s" % plugin_id
+
+        # 7. 1차 검증 — 정적 소스 검증 (코드 실행 없음)
+        source_ok, source_checks = _validate_plugin_source(plugin_root, plugin_id)
+        if not source_ok:
+            failed_items = ["- %s: %s" % (c["name"], c["detail"]) for c in source_checks if not c.get("ok")]
+            return False, (
+                "플러그인 검증 실패 — 설치를 중단했습니다 (기존 폴더는 변경되지 않음):\n"
+                + "\n".join(failed_items)
+            )
+
+        # 8. 대상 경로 확인
+        dest_dir, path_err = _validate_plugin_path(plugin_id)
+        if path_err or not dest_dir:
+            return False, path_err or "유효하지 않은 플러그인 경로입니다."
+
+        # 9. 기존 폴더 삭제 후 복사 (.git/.github/__pycache__/__MACOSX/.DS_Store 제외)
+        if os.path.exists(dest_dir):
+            shutil.rmtree(dest_dir)
+        shutil.copytree(
+            plugin_root,
+            dest_dir,
+            ignore=shutil.ignore_patterns(
+                ".git", ".github", "__pycache__", "*.pyc", "__MACOSX", ".DS_Store"
+            ),
+        )
+
+        # 10. zip 출처 메타 정보 저장
+        zip_source_info = {
+            "source_type": "zip_upload",
+            "filename": filename or "plugin.zip",
+            "installed_at": datetime.now().isoformat(),
+        }
+        try:
+            with open(os.path.join(dest_dir, ".zip_source"), "w", encoding="utf-8") as f:
+                json.dump(zip_source_info, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass  # 메타 저장 실패는 설치 자체를 막을 이유가 아님
+
+        for cache in (_DESC_CACHE, _VERSION_CACHE):
+            for key in [k for k in cache if k.endswith("/" + plugin_id)]:
+                cache.pop(key, None)
+
+        # 11. 즉시 활성화
+        _toggle_plugin_enabled(plugin_id, "1", db_type)
+
+        # 12. 핫 리로드
+        _try_hot_reload(plugin_id)
+
+        # 13. 2차 검증 — 실제 로드 확인, 실패 시 자동 롤백(설치 폴더 삭제)
+        if not _verify_plugin_loaded(plugin_id):
+            shutil.rmtree(dest_dir, ignore_errors=True)
+            return False, (
+                "검증 실패: '%s' 플러그인이 설치 후 로드되지 않았습니다. "
+                "(클래스 id와 폴더명이 일치하는지 확인 필요) — 설치 폴더를 삭제했습니다."
+                % plugin_id
+            )
+
+        # 14. 완료
+        passed = [c["name"] for c in source_checks if c.get("ok") and not c.get("warn")]
+        warns = [c["detail"] for c in source_checks if c.get("warn")]
+        new_version = _local_version(plugin_id) or "?"
+        result_msg = (
+            "zip 압축 파일을 통해 '%s' 플러그인이 성공적으로 설치 및 활성화되었습니다! "
+            "(버전 v%s, 검증 통과: %s)" % (plugin_id, new_version, ", ".join(passed))
+        )
+        if warns:
+            result_msg += " 경고: " + "; ".join(warns)
+        return True, result_msg
+
+    except zipfile.BadZipFile:
+        return False, "올바른 zip 압축 파일 형식이 아닙니다."
+    except Exception as exc:
+        return False, "zip 플러그인 설치 중 오류가 발생했습니다: %s" % exc
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def _install_or_update(owner, repo, token=None):
     """저장소 zip을 받아 plugins/metadata/{repo}/를 통째로 교체한다.
     update_manifest.files 화이트리스트로 파일을 골라내지 않고, 검증에 성공한
@@ -758,6 +1346,13 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                     "(%s 조회 실패)" % REMOTE_PLUGIN_LIST_URL
                 )
             return True, "플러그인 목록을 새로 불러왔습니다 (%d개 저장소)." % len(urls)
+
+        if action == "install_zip":
+            zip_data = str(item_data.get("zip_data", "")).strip()
+            filename = str(item_data.get("filename", "")).strip()
+            if not zip_data:
+                return False, "zip_data가 필요합니다."
+            return _install_from_zip(zip_data, filename, db_type)
 
         if action == "toggle":
             if not plugin_id:
