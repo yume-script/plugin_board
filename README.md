@@ -153,64 +153,6 @@ GitHub 저장소 주소를 모르므로 이 카드들은:
 로직이 추가된 것은 아닙니다. 설치가 끝나면 목록을 새로고침하며, `plugin_list.txt`에
 없는 저장소이므로 §4에서 설명한 "미등록 설치 플러그인" 카드로 표시됩니다.
 
-### 6-1. Zip 파일 업로드 설치 — plugin_manager와 동일한 14단계 검증 파이프라인
-
-Git 저장소 URL 설치 패널 바로 아래에 zip 파일 업로드 패널도 있습니다. UI 패턴은
-[madnite1/plugin_manager](https://github.com/madnite1/plugin_manager)와 동일하고,
-백엔드 검증 로직도 plugin_manager의 `_install_from_zip`/`_validate_plugin_source`를
-그대로 참고해 재구현했습니다(단순 복사·설치가 아니라, 코드 실행 없이 소스를 정적으로
-검사하는 1차 검증과, 설치 후 실제로 로드됐는지 확인하는 2차 검증까지 갖춘 방식).
-
-**전체 흐름**
-
-1~3. 브라우저에서 zip을 base64로 인코딩해 전송 → 서버가 디코드해 임시 폴더에
-압축 해제 (Zip Slip 방지, 항목 개수 3,000개/압축 해제 후 200MB 상한 검증 포함 —
-`_extract_zip_safe`)
-
-4~6. **플러그인 루트·ID 식별**
-- `_find_plugin_root_dir`: zip 안에 폴더가 하나 더 감싸져 있어도 플러그인 루트를
-  지능 탐색 (`__MACOSX` 등 제외)
-- `_detect_plugin_id`: 메인 `.py`의 `BaseMetadataProvider` 상속 클래스 `id` 또는
-  `VERSION` 파일에서 ID 추출 (실패 시 파일명 폴백)
-- ID 형식 검증(영문/숫자/`_`/`-`만) + 예약어 가드: `base.py`, `base`, `__pycache__`,
-  `plugin_manager`, `plugin_board`는 덮어쓰기 거부 (핵심 플러그인 보호)
-
-7. **1차 검증 — 정적 소스 검증** (`_validate_plugin_source`, 코드 실행 없이
-AST/파일 스캔만)
-- `VERSION`: `update_manifest` 선언 시 필수 (미선언이면 경고만)
-- 메인 `.py` + `BaseMetadataProvider` 상속 클래스 존재
-- **클래스 `id` == 폴더명(감지된 ID) 일치** — 안 맞으면 설치 후 목록/카테고리에
-  안 나오는 문제를 사전에 차단
-- 필수 필드(`name`/`is_searchable`/`config_schema`) + 필수 메서드(`search`/`apply`)
-- 금지 패턴: `eval`/`exec`/`subprocess`/`os.system`/`os.popen`/`shell=True`
-- 심볼릭 링크 없음, `update_manifest` 규격(provider/version_file/version_key/
-  raw_base_url/files 실재), `category_tab` 선언 시 UI 번들(index.html/script.js/
-  style.css) 존재 확인
-- **실패 시 설치 중단 — 기존 폴더는 전혀 변경되지 않습니다**
-
-8~10. **배치**
-- `_validate_plugin_path`로 대상 경로 확인(경계 이탈 차단) → 기존 폴더 있으면
-  삭제 → `copytree`로 복사(`.git`/`.github`/`__pycache__`/`__MACOSX`/`.DS_Store`
-  제외)
-- 설치 폴더에 `.zip_source` 메타 파일 저장(`source_type: "zip_upload"`, 원본
-  파일명, 설치 시각)
-
-11~13. **활성화 + 2차 검증**
-- `PluginService.toggle_plugin_enabled`로 즉시 활성화
-- `MetadataFactory.hot_reload_plugin`으로 핫 리로드
-- **2차 검증**: `MetadataFactory.get_available_providers()`에서 실제로 로드됐는지
-  확인 — 실패하면 **설치 폴더를 자동 삭제**하고 "클래스 id와 폴더명 일치 확인"
-  안내 (부분 설치 방지)
-
-14. **완료** — 임시 폴더 정리, 검증 통과 항목 + 경고를 포함한 성공 메시지 반환
-
-**핵심 보호 장치 3가지**: Zip Slip 차단, 예약어(`plugin_manager`/`plugin_board`)
-덮어쓰기 방지, 설치 후 로드 검증 실패 시 자동 롤백.
-
-실제로 정상 설치, 클래스 `id`와 `VERSION`의 `id`가 다른 경우, `plugin_manager`
-예약어 덮어쓰기 시도, `os.system` 포함 코드, 2차 로드 검증 강제 실패까지 다섯 가지
-시나리오로 테스트해 각각 의도대로(성공/거부/자동 롤백) 동작하는 것을 확인했습니다.
-
 ### 7. 활성화/비활성화 · 환경설정 · 삭제 — 코어 공통 API 그대로 사용
 
 설치된 카드 하단에는 관리 행이 추가로 표시됩니다.
@@ -352,12 +294,6 @@ GitHub의 `VERSION`이 로컬보다 높을 때만 환경설정 화면의 샘플 
 - **커스텀 설정 UI 실행**: `settings.html`/`settings.js`는 신뢰된 관리자 화면(환경설정)에서만
   삽입·실행되며, plugin_manager와 동일하게 `new Function(...)`으로 실행됩니다. 이미 설치를
   허용한 플러그인의 코드이므로 별도로 샌드박싱하지 않습니다.
-- **Zip 업로드 3단 방어**: (1) Zip Slip·항목 개수·용량 제한(`_extract_zip_safe`),
-  (2) 예약어(`plugin_manager`, `plugin_board` 등) 덮어쓰기 차단, (3) 설치 후
-  `MetadataFactory.get_available_providers()`로 실제 로드 여부를 재확인해 실패
-  시 자동 롤백. 정적 소스 검증(`_validate_plugin_source`)은 AST/파일 스캔만
-  사용하며 업로드된 코드를 import/exec 하지 않습니다 — 단, 검증을 통과해 최종
-  설치되면 그 코드는 BookOasis가 정상적으로 로드해 실행합니다.
 
 ## 제한 사항
 
@@ -366,7 +302,5 @@ GitHub의 `VERSION`이 로컬보다 높을 때만 환경설정 화면의 샘플 
 - 기능 목록(`features`)은 GitHub API로 자동 추출하지 않으므로 기본적으로 비어 있습니다.
 - Git URL 설치 패널·`신규설치`/`업데이트` 버튼 모두 저장소에 `{repo}.py` 메인 모듈이
   있어야 동작합니다(가이드의 폴더형 플러그인 구조 관례).
-- Zip 업로드는 정적 소스 검증(§6-1)을 통과해야 하며, 클래스 `id`와 감지된 플러그인
-  ID가 다르면 설치 자체가 거부됩니다.
 - 설치/업데이트는 대상 폴더를 **완전히 교체**합니다. 설치 폴더 안에 수동으로 넣어둔
   파일이 있다면 다음 업데이트 때 사라집니다.
