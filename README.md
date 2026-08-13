@@ -155,9 +155,14 @@ GitHub 저장소 주소를 모르므로 이 카드들은:
 
 ### 6-1. Zip 파일 업로드 설치 — 폴더 깊이에 상관없이 자동 인식
 
-Git 저장소 URL 설치 패널 바로 아래에 zip 파일 업로드 패널도 있습니다. 파일을 선택하고
-`Zip 설치`를 누르면 브라우저에서 base64로 인코딩해 `apply({"action": "install_zip",
-"zip_data": ..., "filename": ...})`로 전송하고, 서버에서 압축을 풀어 설치합니다.
+Git 저장소 URL 설치 패널 바로 아래에 zip 파일 업로드 패널도 있습니다. UI는
+[madnite1/plugin_manager](https://github.com/madnite1/plugin_manager)의 "ZIP 파일
+업로드 설치" 패널과 동일한 패턴입니다 — 숨겨진 실제 파일 입력을 "Zip 압축 파일
+선택…" 버튼이 대신 열고, 고른 파일명이 버튼 라벨에 표시된 뒤, 별도의 `Zip 설치`
+버튼으로 전송합니다. 파일을 선택하고 `Zip 설치`를 누르면 브라우저에서 base64로
+인코딩해 `apply({"action": "install_zip", "zip_data": ..., "filename": ...})`로
+전송하고, 서버에서 압축을 풀어 설치합니다(plugin_manager도 같은 `install_zip`
+액션·같은 base64 전송 방식을 씁니다).
 
 zip 내부 구조는 아래처럼 어떤 형태든 상관없이 자동으로 인식합니다.
 

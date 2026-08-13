@@ -812,8 +812,19 @@
   function wireZipInstallPanel() {
     const form = document.getElementById("pb-zip-install-form");
     const input = document.getElementById("pb-zip-install-input");
+    const selectBtn = document.getElementById("pb-zip-select-btn");
+    const fileLabel = document.getElementById("pb-zip-file-label");
     const btn = document.getElementById("pb-zip-install-btn");
-    if (!form || !input || !btn) return;
+    if (!form || !input || !selectBtn || !fileLabel || !btn) return;
+
+    const DEFAULT_LABEL = fileLabel.textContent;
+
+    // "파일 선택" 버튼(plugin_manager와 동일한 패턴)을 누르면 숨겨진 실제 input을 연다
+    selectBtn.addEventListener("click", () => input.click());
+    input.addEventListener("change", () => {
+      const file = input.files && input.files[0];
+      fileLabel.textContent = file ? file.name : DEFAULT_LABEL;
+    });
 
     // zip을 base64로 인코딩해 JSON 본문에 실어 보내는 방식이라, 파일이 크면
     // 서버 앞단 프록시(nginx 등)의 기본 요청 크기 제한(흔히 1MB)에 걸리기 쉽다.
@@ -824,11 +835,11 @@
       e.preventDefault();
       const file = input.files && input.files[0];
       if (!file) {
-        showToast("설치할 zip 파일을 선택해주세요.", true);
+        showToast("업로드할 zip 압축 파일을 선택해주세요.", true);
         return;
       }
       if (!/\.zip$/i.test(file.name)) {
-        showToast("zip 파일만 업로드할 수 있습니다.", true);
+        showToast(".zip 확장자 파일만 업로드할 수 있습니다.", true);
         return;
       }
       if (file.size > SIZE_WARN_BYTES) {
@@ -842,7 +853,7 @@
 
       const origText = btn.textContent;
       btn.disabled = true;
-      input.disabled = true;
+      selectBtn.disabled = true;
       btn.textContent = "설치 중…";
 
       try {
@@ -855,6 +866,7 @@
         if (result && result.success) {
           showToast(result.message || "설치가 완료되었습니다.", false);
           form.reset();
+          fileLabel.textContent = DEFAULT_LABEL;
           load();
         } else {
           showToast((result && result.error) || "설치에 실패했습니다.", true);
@@ -867,7 +879,7 @@
         );
       } finally {
         btn.disabled = false;
-        input.disabled = false;
+        selectBtn.disabled = false;
         btn.textContent = origText;
       }
     });

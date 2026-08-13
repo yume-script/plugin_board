@@ -34,13 +34,17 @@
   <section class="pb-git-panel">
     <div class="pb-git-panel-head">
       <div class="pb-git-panel-title">
-        <span class="pb-git-panel-icon"><svg viewBox="0 0 16 16"><path d="M4.5 1A1.5 1.5 0 0 0 3 2.5v11A1.5 1.5 0 0 0 4.5 15h7a1.5 1.5 0 0 0 1.5-1.5v-8.086a1.5 1.5 0 0 0-.44-1.06L9.647 1.44A1.5 1.5 0 0 0 8.586 1H4.5ZM7 6h1v1h1v1H8v1H7V8H6V7h1V6Zm-1 3h3v1H6V9Z"/></svg></span>
-        <h2>Zip 파일 설치</h2>
+        <span class="pb-git-panel-icon pb-zip-icon"><svg viewBox="0 0 16 16"><path d="M4.5 1A1.5 1.5 0 0 0 3 2.5v11A1.5 1.5 0 0 0 4.5 15h7a1.5 1.5 0 0 0 1.5-1.5v-8.086a1.5 1.5 0 0 0-.44-1.06L9.647 1.44A1.5 1.5 0 0 0 8.586 1H4.5ZM7 6h1v1h1v1H8v1H7V8H6V7h1V6Zm-1 3h3v1H6V9Z"/></svg></span>
+        <h2>Zip 파일 업로드 설치</h2>
       </div>
-      <span class="pb-git-panel-badge">ZIP 설치</span>
+      <span class="pb-git-panel-badge pb-git-panel-badge-zip">ZIP 업로드</span>
     </div>
     <form id="pb-zip-install-form" class="pb-git-panel-form">
-      <input type="file" id="pb-zip-install-input" accept=".zip,application/zip" />
+      <input type="file" id="pb-zip-install-input" accept=".zip" hidden />
+      <button type="button" id="pb-zip-select-btn" class="pb-zip-select-btn">
+        <span class="pb-zip-select-icon"><svg viewBox="0 0 16 16"><path d="M1.75 2A1.75 1.75 0 0 0 0 3.75v.4c0 .45.3.833.7.967v6.633C.7 12.567 1.633 13.5 2.75 13.5h10.5c1.117 0 2.05-.933 2.05-2.05V6.8a1.75 1.75 0 0 0-1.75-1.75H7.62l-1.1-1.3A1.75 1.75 0 0 0 5.18 3H1.75Z"/></svg></span>
+        <span id="pb-zip-file-label">Zip 압축 파일 선택…</span>
+      </button>
       <button type="submit" id="pb-zip-install-btn">Zip 설치</button>
     </form>
     <p class="pb-git-panel-tip">
