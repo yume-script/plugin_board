@@ -635,7 +635,7 @@
       const localTag = document.createElement("span");
       localTag.className = "pb-tag pb-tag-local";
       localTag.title = "GitHub 저장소 정보 없이, 이 서버에 설치된 파일에서만 확인한 플러그인입니다.";
-      localTag.textContent = "[로컬플러그인]";
+      localTag.textContent = "로컬플러그인";
       tagsWrap.appendChild(localTag);
     }
 

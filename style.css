@@ -499,9 +499,9 @@
 
 /* 이 서버에 설치된 파일에서만 확인된(GitHub 저장소 정보 없는) 로컬 플러그인 표시 */
 .pb-tag-local {
-  color: var(--app-text-secondary, var(--app-text-muted));
-  border-color: var(--app-border, rgba(255,255,255,0.3));
-  background: color-mix(in srgb, var(--app-text-muted) 10%, transparent);
+  color: color-mix(in srgb, #5b84ab 85%, var(--app-text-primary));
+  border-color: color-mix(in srgb, #5b84ab 50%, transparent);
+  background: color-mix(in srgb, #5b84ab 14%, transparent);
   opacity: 1;
   font-weight: 600;
 }
