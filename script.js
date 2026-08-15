@@ -11,6 +11,41 @@
   let allItems = [];
   let activeFilter = "all";
 
+  // ------------------------------------------------------------------
+  // 설치/업데이트가 끝난 뒤 Ctrl+F5(강력 새로고침)와 동등한 효과를 낸다.
+  // 새로 설치된 플러그인의 사이드바 항목·JS/CSS가 실제로 동작하려면
+  // 단순 location.reload()로는 부족한 경우가 있어(브라우저가 캐시된
+  // 리소스를 그대로 쓸 수 있음), 캐시 스토리지를 정리하고 URL에
+  // 캐시 무효화용 쿼리 파라미터를 붙여 완전히 새로운 요청으로 페이지
+  // 전체를 다시 불러온다.
+  // ------------------------------------------------------------------
+  function hardReloadPage() {
+    const doReload = () => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("_pb_reload", Date.now().toString());
+      window.location.replace(url.toString());
+    };
+
+    try {
+      if (window.caches && typeof caches.keys === "function") {
+        caches
+          .keys()
+          .then((names) => Promise.all(names.map((name) => caches.delete(name))))
+          .catch(() => {})
+          .finally(doReload);
+        return;
+      }
+    } catch (err) {
+      // 무시 — 캐시 정리 실패해도 새로고침 자체는 진행한다
+    }
+    doReload();
+  }
+
+  function reloadAfterInstall(message) {
+    showToast((message || "설치가 완료되었습니다.") + " 잠시 후 페이지를 새로고침합니다…", false);
+    setTimeout(hardReloadPage, 1200); // 토스트 메시지를 읽을 시간을 준 뒤 새로고침
+  }
+
   function getDbType() {
     const params = new URLSearchParams(window.location.search);
     return params.get("db_type") || "general";
@@ -181,8 +216,7 @@
         });
 
         if (result && result.success) {
-          showToast(result.message || `'${item.title}' 처리가 완료되었습니다.`, false);
-          load(); // 설치 상태가 바뀌었으므로 전체 카드 새로고침
+          reloadAfterInstall(result.message || `'${item.title}' 처리가 완료되었습니다.`);
         } else {
           showToast((result && result.error) || "요청이 실패했습니다.", true);
           btn.disabled = false;
@@ -782,9 +816,8 @@
           git_url: url,
         });
         if (result && result.success) {
-          showToast(result.message || "설치가 완료되었습니다.", false);
           input.value = "";
-          load();
+          reloadAfterInstall(result.message || "설치가 완료되었습니다.");
         } else {
           showToast((result && result.error) || "설치에 실패했습니다.", true);
         }
