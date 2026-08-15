@@ -631,6 +631,14 @@
       tagsWrap.appendChild(discTag);
     }
 
+    if (item.local_only) {
+      const localTag = document.createElement("span");
+      localTag.className = "pb-tag pb-tag-local";
+      localTag.title = "GitHub 저장소 정보 없이, 이 서버에 설치된 파일에서만 확인한 플러그인입니다.";
+      localTag.textContent = "[로컬플러그인]";
+      tagsWrap.appendChild(localTag);
+    }
+
     (item.tags || []).forEach((tagText) => {
       const tag = document.createElement("span");
       tag.className = "pb-tag";
@@ -668,7 +676,13 @@
       btnGroup.appendChild(link);
     }
 
-    foot.append(stamp, btnGroup);
+    // 설치됨+최신 상태에서는 "설치됨 · vX.X.X" 배지가 버전을 이미 보여주므로,
+    // 상단 버전 스탬프를 또 붙이면 같은 버전이 두 번 표시된다. 그 경우에만 생략한다.
+    const showStamp = !(item.installed && !item.has_update);
+    if (showStamp) {
+      foot.appendChild(stamp);
+    }
+    foot.appendChild(btnGroup);
 
     const parts = [head];
     if (item.desc) parts.push(desc);
