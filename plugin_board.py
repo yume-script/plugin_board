@@ -99,6 +99,62 @@ _VERSION_CACHE_TTL_SECONDS = 3600  # 1시간 — 버전은 더 자주 바뀔 수
 _REQUEST_TIMEOUT = 6
 _DOWNLOAD_TIMEOUT = 30
 
+# ----------------------------------------------------------------------
+# 캐시 디스크 영속화 — GITHUB_TOKEN을 설정하지 않은 사용자(무인증 시간당 60회
+# 한도)는 서버가 재시작될 때마다 메모리 캐시가 전부 사라져 다시 "콜드 스타트"로
+# GitHub를 두드리게 되는 게 rate limit을 가장 빨리 소진시키는 원인이었다.
+# 그래서 캐시를 이 플러그인 폴더의 .cache.json에도 저장해, 재시작 후에도
+# TTL이 남아있는 동안은 다시 조회하지 않도록 한다. 저장/로드가 실패해도
+# 기능에는 영향이 없도록 전부 조용히 무시한다(순수 성능 최적화용 캐시일 뿐).
+# ----------------------------------------------------------------------
+_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache.json")
+
+
+def _save_disk_cache():
+    try:
+        data = {
+            "list": {"ts": _LIST_CACHE.get("ts", 0.0), "urls": _LIST_CACHE.get("urls", [])},
+            "desc": {k: [ts, v] for k, (ts, v) in _DESC_CACHE.items()},
+            "version": {k: [ts, v] for k, (ts, v) in _VERSION_CACHE.items()},
+            "topic": {k: [ts, v] for k, (ts, v) in _TOPIC_CACHE.items()},
+        }
+        tmp_path = _CACHE_FILE + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp_path, _CACHE_FILE)
+    except Exception:
+        pass
+
+
+def _load_disk_cache():
+    try:
+        if not os.path.isfile(_CACHE_FILE):
+            return
+        with open(_CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        list_data = data.get("list") or {}
+        if isinstance(list_data.get("urls"), list):
+            _LIST_CACHE["ts"] = float(list_data.get("ts", 0.0))
+            _LIST_CACHE["urls"] = list_data["urls"]
+
+        for k, pair in (data.get("desc") or {}).items():
+            if isinstance(pair, list) and len(pair) == 2:
+                _DESC_CACHE[k] = (float(pair[0]), pair[1])
+
+        for k, pair in (data.get("version") or {}).items():
+            if isinstance(pair, list) and len(pair) == 2:
+                _VERSION_CACHE[k] = (float(pair[0]), pair[1])
+
+        for k, pair in (data.get("topic") or {}).items():
+            if isinstance(pair, list) and len(pair) == 2:
+                _TOPIC_CACHE[k] = (float(pair[0]), pair[1])
+    except Exception:
+        pass  # 손상된 캐시 파일은 조용히 무시하고 콜드 스타트로 진행
+
+
+_load_disk_cache()  # 모듈이 처음 임포트될 때(서버 시작 시) 1회 복원
+
 _PLUGIN_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
 
@@ -744,6 +800,7 @@ def _delete_plugin(plugin_id):
 
     _DESC_CACHE.clear()  # 삭제된 플러그인이 GitHub 캐시에 남아 잘못된 정보를 주지 않도록
     _VERSION_CACHE.clear()
+    _save_disk_cache()
     _try_hot_reload(plugin_id)
     return True, "'%s' 플러그인이 삭제되었습니다." % plugin_id
 
@@ -755,14 +812,13 @@ def _install_or_update(owner, repo, token=None):
     새 소스로 기존 설치 폴더를 완전히 대체한다(전체 재다운로드 방식)."""
     _validate_plugin_id(repo)
 
-    default_branch = None
-    try:
-        api_data = _http_get_json(
-            "https://api.github.com/repos/%s/%s" % (owner, repo), token
-        )
-        default_branch = api_data.get("default_branch")
-    except Exception:
-        pass
+    # default_branch는 카드 목록을 불러올 때(_fetch_description_info, 24시간 캐시)
+    # 이미 조회해둔 값을 그대로 재사용한다. 여기서 별도로 api.github.com을 다시
+    # 부르면 신규설치/업데이트 버튼을 누를 때마다 코어 API 호출이 하나씩 더
+    # 늘어나는데, GITHUB_TOKEN을 설정하지 않은 사용자(무인증 시간당 60회)에게는
+    # 이 중복 호출이 rate limit을 훨씬 빨리 소진시키는 주요 원인이었다.
+    info = _fetch_description_info(owner, repo, token)
+    default_branch = info.get("default_branch")
 
     last_error = None
     for branch in _candidate_branches(default_branch):
@@ -801,6 +857,7 @@ def _install_or_update(owner, repo, token=None):
             key = owner + "/" + repo
             _DESC_CACHE.pop(key, None)  # 설치 직후 카드가 최신 상태를 반영하도록 캐시 무효화
             _VERSION_CACHE.pop(key, None)
+            _save_disk_cache()
             _try_hot_reload(repo)
 
             new_version = _local_version(repo) or "?"
@@ -900,6 +957,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             token = cfg.get("GITHUB_TOKEN") or None
             urls = _fetch_repo_list(token, force=True)
             _TOPIC_CACHE.clear()  # GitHub Topics 발견 캐시도 함께 강제 갱신
+            _save_disk_cache()
             if not urls:
                 return False, (
                     "plugin_list.txt를 다시 가져오지 못했습니다 "
@@ -1046,4 +1104,5 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
 
         discovered_ids = {it["id"] for it in discovered_items}
         local_items = _scan_uncurated_installed(curated_ids | discovered_ids, is_enabled_fn)
+        _save_disk_cache()  # 이번 요청에서 새로 채워진 캐시를 재시작에도 살아남도록 저장
         return {"success": True, "items": curated_items + discovered_items + local_items}
