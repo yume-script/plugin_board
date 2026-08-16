@@ -775,8 +775,8 @@
 
 .pb-modal {
   width: 100%;
-  max-width: 440px;
-  max-height: 80vh;
+  max-width: 560px;
+  max-height: 86vh;
   display: flex;
   flex-direction: column;
   background: var(--app-bg-card);
@@ -790,12 +790,12 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 18px;
+  padding: 16px 22px;
   border-bottom: 1px solid var(--app-border-light, var(--app-border));
 }
 .pb-modal-head h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--app-text-primary);
 }
@@ -803,7 +803,7 @@
   background: transparent;
   border: none;
   color: var(--app-text-muted);
-  font-size: 18px;
+  font-size: 20px;
   line-height: 1;
   cursor: pointer;
   padding: 4px;
@@ -813,11 +813,11 @@
 }
 
 .pb-modal-body {
-  padding: 16px 18px;
+  padding: 20px 22px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
 }
 
 .pb-field {
@@ -826,7 +826,7 @@
   gap: 4px;
 }
 .pb-field label {
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--app-text-primary);
 }
@@ -835,14 +835,52 @@
 .pb-field input[type="number"],
 .pb-field select {
   width: 100%;
-  padding: 7px 10px;
+  padding: 10px 12px;
   border-radius: 6px;
   background: var(--app-input-bg, var(--app-bg-main));
   border: 1px solid var(--app-border, rgba(255,255,255,0.15));
   color: var(--app-text-primary);
-  font-size: 12.5px;
+  font-size: 13.5px;
   font-family: inherit;
+  letter-spacing: 0.02em;
 }
+
+/* 비밀번호(토큰 등) 필드 — 값을 점으로 가려 잘 안 보인다는 피드백에 따라
+   보기/숨기기 토글 버튼을 입력창 안쪽 오른쪽에 겹쳐 배치한다. */
+.pb-field-password-wrap {
+  position: relative;
+  display: flex;
+}
+.pb-field-password-wrap input {
+  padding-right: 40px !important;
+  flex: 1;
+}
+.pb-field-password-toggle {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--app-text-muted);
+  cursor: pointer;
+}
+.pb-field-password-toggle:hover {
+  color: var(--app-text-primary);
+  background: var(--app-bg-card-hover);
+}
+.pb-field-password-toggle svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
 .pb-field-checkbox-row {
   display: flex;
   align-items: center;
@@ -865,11 +903,11 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 12px 18px;
+  padding: 14px 22px;
   border-top: 1px solid var(--app-border-light, var(--app-border));
 }
 .pb-modal-btn {
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   font-family: inherit;
   padding: 7px 14px;

@@ -1051,6 +1051,12 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         if "plugin_board" not in existing_repo_names:
             repo_urls = repo_urls + [SELF_REPO_URL]
 
+        # plugin_board 자기 자신은(plugin_list.txt 어디에 적혀있든, 혹은 위에서
+        # 자동 추가됐든) 항상 카드 목록 맨 앞에 오도록 재정렬한다.
+        self_urls = [u for u in repo_urls if _parse_owner_repo(u)[1] == "plugin_board"]
+        other_urls = [u for u in repo_urls if _parse_owner_repo(u)[1] != "plugin_board"]
+        repo_urls = self_urls + other_urls
+
         try:
             gateway = self.get_db_gateway(db_type)
         except Exception:

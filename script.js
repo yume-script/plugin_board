@@ -70,6 +70,10 @@
     '<svg viewBox="0 0 16 16"><path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 1 1 0-5.858 2.929 2.929 0 0 1 0 5.858z"/></svg>';
   const TRASH_ICON =
     '<svg viewBox="0 0 16 16"><path d="M6.5 1a1 1 0 0 0-1 1v.5H3a.75.75 0 0 0 0 1.5h.35l.6 9.03A1.75 1.75 0 0 0 5.7 14.75h4.6a1.75 1.75 0 0 0 1.75-1.72l.6-9.03H13a.75.75 0 0 0 0-1.5h-2.5V2a1 1 0 0 0-1-1h-3Zm.5 3.5a.75.75 0 0 1 .75.75v5.5a.75.75 0 0 1-1.5 0v-5.5A.75.75 0 0 1 7 4.5Zm2.75.75a.75.75 0 0 0-1.5 0v5.5a.75.75 0 0 0 1.5 0v-5.5Z"/></svg>';
+  const EYE_ICON =
+    '<svg viewBox="0 0 16 16"><path d="M8 3C4.5 3 1.73 5.11.5 8c1.23 2.89 4 5 7.5 5s6.27-2.11 7.5-5C14.27 5.11 11.5 3 8 3Zm0 8.5A3.5 3.5 0 1 1 8 4.5a3.5 3.5 0 0 1 0 7Zm0-5.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>';
+  const EYE_OFF_ICON =
+    '<svg viewBox="0 0 16 16"><path d="M13.36 2.22 2.22 13.36l.7.7L4.6 12.4A8.26 8.26 0 0 0 8 13c3.5 0 6.27-2.11 7.5-5a9.4 9.4 0 0 0-2.66-3.54l1.82-1.82-.7-.7ZM8 11.5a3.48 3.48 0 0 1-1.87-.55l1.02-1.02a2 2 0 0 0 2.36-2.36l1.02-1.02c.34.53.55 1.16.55 1.83a3.5 3.5 0 0 1-3.5 3.5.5.5 0 0 1-.5 0Zm-6-3.5c1.1-2.09 3.19-3.7 5.7-3.98L6.3 5.42A3.5 3.5 0 0 0 4.42 7.3L2.9 8.83A9.4 9.4 0 0 1 2 8Z"/></svg>';
 
   // ------------------------------------------------------------------
   // 신규설치/업데이트/활성화·비활성화/삭제 액션 — 전부 plugin_board 자신의
@@ -314,7 +318,27 @@
       input.type = type === "password" ? "password" : type === "number" ? "number" : "text";
       input.name = key;
       input.value = currentValue ?? field.default ?? "";
-      wrap.appendChild(input);
+
+      if (type === "password") {
+        // 비밀번호 타입 필드는 값이 점(•)으로 가려져 잘 안 보인다는 피드백을 반영해,
+        // 눈 모양 버튼으로 평문 확인을 토글할 수 있게 한다.
+        const passWrap = document.createElement("div");
+        passWrap.className = "pb-field-password-wrap";
+        const toggleBtn = document.createElement("button");
+        toggleBtn.type = "button";
+        toggleBtn.className = "pb-field-password-toggle";
+        toggleBtn.title = "값 표시/숨기기";
+        toggleBtn.innerHTML = EYE_ICON;
+        toggleBtn.addEventListener("click", () => {
+          const showing = input.type === "text";
+          input.type = showing ? "password" : "text";
+          toggleBtn.innerHTML = showing ? EYE_ICON : EYE_OFF_ICON;
+        });
+        passWrap.append(input, toggleBtn);
+        wrap.appendChild(passWrap);
+      } else {
+        wrap.appendChild(input);
+      }
     }
 
     if (field.description) {
@@ -483,26 +507,35 @@
   // 이미 설치된 카드에만 표시된다.
   // ------------------------------------------------------------------
   function buildManageRow(item) {
+    // plugin_board 자기 자신은 삭제·비활성화가 백엔드에서 항상 거부되므로 그
+    // 두 컨트롤만 숨긴다. 설정(⚙) 버튼은 막혀있지 않고 정상 동작하므로(예:
+    // GITHUB_TOKEN 같은 자기 자신의 설정값도 편집 가능) 계속 보여준다.
+    const isSelf = item.id === "plugin_board";
+
     const row = document.createElement("div");
     row.className = "pb-manage-row";
 
     const left = document.createElement("div");
     left.className = "pb-manage-left";
+    let checkbox = null;
+    let statusText = null;
 
-    const switchLabel = document.createElement("label");
-    switchLabel.className = "pb-switch";
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = !!item.enabled;
-    const slider = document.createElement("span");
-    slider.className = "pb-switch-slider";
-    switchLabel.append(checkbox, slider);
+    if (!isSelf) {
+      const switchLabel = document.createElement("label");
+      switchLabel.className = "pb-switch";
+      checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = !!item.enabled;
+      const slider = document.createElement("span");
+      slider.className = "pb-switch-slider";
+      switchLabel.append(checkbox, slider);
 
-    const statusText = document.createElement("span");
-    statusText.className = "pb-manage-status";
-    statusText.textContent = item.enabled ? "사용 중" : "중지됨";
+      statusText = document.createElement("span");
+      statusText.className = "pb-manage-status";
+      statusText.textContent = item.enabled ? "사용 중" : "중지됨";
 
-    left.append(switchLabel, statusText);
+      left.append(switchLabel, statusText);
+    }
 
     const actions = document.createElement("div");
     actions.className = "pb-manage-actions";
@@ -521,58 +554,60 @@
       actions.appendChild(gearBtn);
     }
 
-    const trashBtn = document.createElement("button");
-    trashBtn.type = "button";
-    trashBtn.className = "pb-icon-btn pb-icon-btn-danger";
-    trashBtn.title = "삭제";
-    trashBtn.innerHTML = TRASH_ICON;
-    trashBtn.addEventListener("click", async () => {
-      if (!window.confirm(`'${item.title}' 플러그인을 삭제할까요? 이 작업은 되돌릴 수 없습니다.`)) {
-        return;
-      }
-      trashBtn.disabled = true;
-      try {
-        const result = await callPluginBoardAction(getDbType(), {
-          action: "delete",
-          plugin_id: item.id,
-        });
-        if (result && result.success) {
-          showToast(result.message || `'${item.title}'이(가) 삭제되었습니다.`, false);
-          load();
-        } else {
-          showToast((result && result.error) || "삭제에 실패했습니다.", true);
+    if (!isSelf) {
+      const trashBtn = document.createElement("button");
+      trashBtn.type = "button";
+      trashBtn.className = "pb-icon-btn pb-icon-btn-danger";
+      trashBtn.title = "삭제";
+      trashBtn.innerHTML = TRASH_ICON;
+      trashBtn.addEventListener("click", async () => {
+        if (!window.confirm(`'${item.title}' 플러그인을 삭제할까요? 이 작업은 되돌릴 수 없습니다.`)) {
+          return;
+        }
+        trashBtn.disabled = true;
+        try {
+          const result = await callPluginBoardAction(getDbType(), {
+            action: "delete",
+            plugin_id: item.id,
+          });
+          if (result && result.success) {
+            showToast(result.message || `'${item.title}'이(가) 삭제되었습니다.`, false);
+            load();
+          } else {
+            showToast((result && result.error) || "삭제에 실패했습니다.", true);
+            trashBtn.disabled = false;
+          }
+        } catch (err) {
+          showToast(`삭제 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
           trashBtn.disabled = false;
         }
-      } catch (err) {
-        showToast(`삭제 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
-        trashBtn.disabled = false;
-      }
-    });
-    actions.appendChild(trashBtn);
+      });
+      actions.appendChild(trashBtn);
 
-    checkbox.addEventListener("change", async () => {
-      const nextEnabled = checkbox.checked;
-      checkbox.disabled = true;
-      try {
-        const result = await callPluginBoardAction(getDbType(), {
-          action: "toggle",
-          plugin_id: item.id,
-          enabled: nextEnabled ? "1" : "0",
-        });
-        if (result && result.success) {
-          statusText.textContent = nextEnabled ? "사용 중" : "중지됨";
-          showToast(result.message || "상태가 변경되었습니다.", false);
-        } else {
-          checkbox.checked = !nextEnabled; // 실패 시 원상복구
-          showToast((result && result.error) || "상태 변경에 실패했습니다.", true);
+      checkbox.addEventListener("change", async () => {
+        const nextEnabled = checkbox.checked;
+        checkbox.disabled = true;
+        try {
+          const result = await callPluginBoardAction(getDbType(), {
+            action: "toggle",
+            plugin_id: item.id,
+            enabled: nextEnabled ? "1" : "0",
+          });
+          if (result && result.success) {
+            statusText.textContent = nextEnabled ? "사용 중" : "중지됨";
+            showToast(result.message || "상태가 변경되었습니다.", false);
+          } else {
+            checkbox.checked = !nextEnabled; // 실패 시 원상복구
+            showToast((result && result.error) || "상태 변경에 실패했습니다.", true);
+          }
+        } catch (err) {
+          checkbox.checked = !nextEnabled;
+          showToast(`상태 변경 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
+        } finally {
+          checkbox.disabled = false;
         }
-      } catch (err) {
-        checkbox.checked = !nextEnabled;
-        showToast(`상태 변경 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
-      } finally {
-        checkbox.disabled = false;
-      }
-    });
+      });
+    }
 
     row.append(left, actions);
     return row;
@@ -691,7 +726,12 @@
     parts.push(foot);
     // plugin_board 자기 자신은 삭제/비활성화가 백엔드에서 항상 거부되므로,
     // 혼란을 주지 않도록 관리 행(스위치·삭제) 자체를 표시하지 않는다.
-    if (item.installed && item.id !== "plugin_board") parts.push(buildManageRow(item));
+    // plugin_board 자기 자신은 삭제/비활성화 컨트롤은 buildManageRow 안에서
+    // 자체적으로 숨기지만(백엔드에서 항상 거부되므로), 설정(⚙) 버튼은 정상
+    // 동작하므로 has_config가 있으면 그 행 자체는 계속 표시한다.
+    if (item.installed && (item.id !== "plugin_board" || item.has_config)) {
+      parts.push(buildManageRow(item));
+    }
     card.append(...parts);
     return card;
   }
