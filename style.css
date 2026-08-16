@@ -514,14 +514,12 @@
 }
 
 .pb-card-desc {
-  padding-left: 46px;
   font-size: 12.5px;
   line-height: 1.65;
   color: var(--app-text-secondary, var(--app-text-muted));
 }
 
 .pb-card-tags {
-  padding-left: 46px;
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
@@ -539,7 +537,6 @@
 }
 
 .pb-card-feats {
-  padding-left: 46px;
   margin: 0;
   list-style: none;
   display: flex;
@@ -565,7 +562,6 @@
 
 .pb-card-foot {
   margin-top: auto;
-  padding-left: 46px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -709,7 +705,7 @@
 /* ---------- 관리 행 (활성화/비활성화 · 환경설정 · 삭제) ---------- */
 .pb-manage-row {
   margin-top: 4px;
-  padding: 10px 18px 4px 46px;
+  padding: 10px 18px 4px 0;
   border-top: 1px dashed var(--app-border-light, var(--app-border));
   display: flex;
   align-items: center;
