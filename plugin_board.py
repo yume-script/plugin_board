@@ -977,6 +977,42 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         action = str(item_data.get("action", "")).strip().lower()
         plugin_id = str(item_data.get("plugin_id", "")).strip()
 
+        if action == "get_config":
+            # /api/media/metadata/plugins/manage 응답의 config 필드만 믿지 않고,
+            # 가이드 문서(§4)에 명시된 저장 위치(settings 테이블의
+            # PLUGIN_CONFIG_{id}, JSON 문자열)를 DB 게이트웨이로 직접 조회한다.
+            # 어떤 플러그인이 설정을 저장했는데도 /manage가 그 값을 안 돌려주는
+            # 경우에 대비한 더 확실한(authoritative) 조회 경로다.
+            if not plugin_id:
+                return False, "plugin_id가 필요합니다."
+            try:
+                gateway = self.get_db_gateway(db_type)
+            except Exception as exc:
+                return False, "DB 게이트웨이를 가져오지 못했습니다: %s" % exc
+            try:
+                raw = gateway.get_setting("PLUGIN_CONFIG_%s" % plugin_id, default=None)
+            except Exception as exc:
+                return False, "설정 조회 중 오류가 발생했습니다: %s" % exc
+
+            if raw is None:
+                return True, {}
+            if isinstance(raw, dict):
+                # 일부 게이트웨이 구현은 {"value": "...json..."} 형태로 감싸서
+                # 반환하기도 하므로(예: plugin_manager의 gateway.get_setting 사용 예),
+                # 그 경우까지 함께 처리한다.
+                if "value" in raw and isinstance(raw.get("value"), str):
+                    try:
+                        parsed = json.loads(raw["value"])
+                        return True, parsed if isinstance(parsed, dict) else {}
+                    except Exception:
+                        return True, {}
+                return True, raw
+            try:
+                parsed = json.loads(raw)
+                return True, parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return True, {}
+
         if action == "refresh_list":
             cfg = self.get_plugin_config(db_type, default={})
             token = cfg.get("GITHUB_TOKEN") or None

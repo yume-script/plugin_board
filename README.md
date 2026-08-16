@@ -233,19 +233,39 @@ GitHub 저장소 주소를 모르므로 이 카드들은:
   플러그인이 공통으로 쓰는 코어 API를 호출해 설정 화면을 엽니다.
   - 조회: `GET /api/media/metadata/plugins/manage`
   - 저장: `POST /api/media/metadata/plugins/save-config`
+  - **설정값 조회는 두 경로를 병합합니다(v2.27.2부터)** — `/manage` API의 `config`
+    필드만 믿지 않고, 가이드 문서(§4)가 명시한 저장 위치(`settings` 테이블의
+    `PLUGIN_CONFIG_{id}`, JSON 문자열)를 `self.get_db_gateway(db_type)`로 plugin_board가
+    직접 한 번 더 조회해서(`apply({"action": "get_config", "plugin_id": ...})`)
+    `/manage`의 값과 병합합니다. **겹치는 키는 DB 게이트웨이 조회 결과가 우선**합니다
+    — `/manage`가 값을 못 돌려주는 경우에도 실제 DB에 저장된 값이라면 화면에
+    반영되도록 하기 위함입니다. 게이트웨이 조회 자체가 실패해도 `/manage`의 값으로
+    안전하게 폴백하며, 저장 형식(순수 JSON 문자열 / `{"value": "...json..."}`로
+    감싸진 형태) 두 가지를 모두 인식합니다.
   - **`settings.html`이 있으면 그 커스텀 UI를 최우선으로 사용합니다.** 코어가
     렌더링해 내려주는 `settings_ui.html`/`.css`/`.js`를 그대로 모달에 삽입·실행합니다
     (madnite1/plugin_manager의 환경설정 모달과 동일한 방식). `settings.html`이 없으면
     `config_schema` 기반 자동 생성 폼(text / password / number / checkbox / select,
     가이드 §4와 동일)으로 대체합니다.
-  - **저장된 값은 두 경로로 커스텀 UI에 전달됩니다** — ① `settings.js` 함수 호출 시
-    네 번째 인자(`config`), ② 루트 요소의 `data-plugin-config` DOM 속성(JSON 문자열,
-    `data-plugin-settings-root` 속성과 함께 설정됨). 일부 플러그인의 `settings.js`가
-    ②번 방식으로만 값을 읽어가도록 작성돼 있어서(예: `unified_book`), ①번만
-    지원했던 v2.26.2 이전 버전에서는 저장된 값이 화면에 채워지지 않는 문제가
-    있었습니다(v2.27.0에서 수정). `data-plugin-config`는 HTML 문자열 조립이 아니라
-    `setAttribute`로 직접 심으므로 별도 HTML 이스케이프 없이 JSON 문자열을 그대로
-    넣습니다 — 미리 이스케이프하면 오히려 다시 읽을 때 깨집니다.
+  - **위에서 병합된 최종 값은 세 가지 경로로 커스텀 UI에 반영됩니다:**
+    1. **`name` 속성 기준 범용 자동 채우기** — 커스텀 HTML을 삽입한 직후, 별도 JS 없이도
+       `input[name]`/`select[name]`/체크박스를 병합된 설정과 같은 키로 자동 매칭해
+       채웁니다. `unified_book`처럼 `settings.js` 자체가 아예 없고 `name` 속성만으로
+       값을 저장하도록 만들어진 플러그인은 이 경로로만 채워집니다. 저장된 값이 없는
+       필드는 건드리지 않아 플러그인이 HTML에 정해둔 기본값(`selected`/`checked`)이
+       그대로 유지됩니다.
+    2. `settings.js` 함수 호출 시 네 번째 인자(`config`)
+    3. 루트 요소의 `data-plugin-config` DOM 속성(JSON 문자열, `data-plugin-settings-root`
+       속성과 함께 설정됨) — 일부 플러그인의 `settings.js`는 함수 인자 대신 이 속성에서
+       직접 읽어갑니다.
+
+    1번(범용 채우기)이 가장 먼저 적용되고, 그 다음 2·3번 경로로 플러그인 자체 JS가
+    실행되며 필요하면 값을 다시 덮어쓸 수 있습니다. `data-plugin-config`는 HTML
+    문자열 조립이 아니라 `setAttribute`로 직접 심으므로 별도 HTML 이스케이프 없이
+    JSON 문자열을 그대로 넣습니다 — 미리 이스케이프하면 오히려 다시 읽을 때 깨집니다.
+    실제 `unified_book`의 공개 저장소 `settings.html`(JS 없음)로 jsdom 검증까지
+    마쳤습니다: 저장된 값이 있으면 하드코딩된 기본 `selected`/`checked`까지 정확히
+    덮어쓰고, 저장 이력이 전혀 없으면 플러그인의 기본값을 그대로 보존합니다.
   - 저장은 두 경우 모두 동일하게 폼 안의 `name` 속성이 있는 input/select 값을
     모아 `save-config`로 전송합니다 — `settings.html` 작성 시 입력 요소의 `name`을
     저장하려는 설정 키와 맞추면 됩니다.

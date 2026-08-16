@@ -387,6 +387,36 @@
   // - settings_ui.js와 삽입된 HTML 안의 <script> 태그는 new Function으로 실행
   //   (window, pluginId, root, config 인자 전달)
   // ------------------------------------------------------------------
+  function prefillNamedFieldsFromConfig(root, config) {
+    // unified_book처럼 별도 settings.js 없이 name 속성만으로 값을 저장/복원하도록
+    // 작성된(=우리 자동 생성 폼과 동일한 관례를 따르는) 커스텀 UI를 위한 범용
+    // 채우기 로직. 저장된 값이 실제로 있는 필드만 건드리고, 값이 없는 필드는
+    // 플러그인이 HTML에 하드코딩해둔 기본값(예: 기본 selected 옵션)을 그대로
+    // 둔다 — 없는 값을 빈 문자열로 덮어써서 의도된 기본값을 지우지 않기 위함이다.
+    if (!config) return;
+    root.querySelectorAll("[name]").forEach((el) => {
+      const key = el.name;
+      if (!key || !Object.prototype.hasOwnProperty.call(config, key)) return;
+      const val = config[key];
+
+      if (el.tagName === "SELECT") {
+        let matched = false;
+        Array.from(el.options).forEach((opt) => {
+          const isMatch = String(opt.value) === String(val);
+          opt.selected = isMatch;
+          if (isMatch) matched = true;
+        });
+        if (!matched) el.value = val == null ? "" : String(val);
+      } else if (el.type === "checkbox") {
+        el.checked = val === true || val === "true" || val === "1" || val === 1;
+      } else if (el.type === "radio") {
+        el.checked = String(el.value) === String(val);
+      } else {
+        el.value = val == null ? "" : val;
+      }
+    });
+  }
+
   function renderCustomSettingsUi(bodyEl, p, config) {
     const form = document.createElement("form");
     form.id = "pb-settings-form";
@@ -417,6 +447,11 @@
     } catch (err) {
       console.warn(`${LOG_PREFIX} data-plugin-config 파싱 실패, 원본 config로 대체 (${p.id}):`, err);
     }
+
+    // 자체 settings.js가 없는 플러그인(예: unified_book)도 저장된 값이 보이도록,
+    // name 속성 기준 범용 채우기를 먼저 적용한다. 플러그인 자체 JS가 있다면
+    // 아래에서 실행되며 이 결과를 덮어쓸 수 있다.
+    prefillNamedFieldsFromConfig(root, pluginConfig);
 
     if (p.settings_ui.css) {
       const styleEl = document.createElement("style");
@@ -464,8 +499,25 @@
       if (!p) throw new Error("선택한 플러그인 정보를 찾을 수 없습니다.");
 
       const schema = p.config_schema || [];
-      const config = p.config || {};
+      const configFromManage = p.config || {};
       const hasCustomUi = !!(p.settings_ui && p.settings_ui.html);
+
+      // /manage API의 config 필드만 믿지 않고, DB 게이트웨이(가이드 §4의
+      // settings 테이블 PLUGIN_CONFIG_{id})에서 직접 한 번 더 조회해 병합한다.
+      // 값이 있는 쪽(DB 게이트웨이)을 우선시켜, /manage가 값을 못 돌려주는
+      // 경우에도 실제 저장된 설정이 화면에 반영되도록 한다.
+      let config = configFromManage;
+      try {
+        const gwResult = await callPluginBoardAction(dbType, {
+          action: "get_config",
+          plugin_id: item.id,
+        });
+        if (gwResult && gwResult.success && gwResult.message && typeof gwResult.message === "object") {
+          config = Object.assign({}, configFromManage, gwResult.message);
+        }
+      } catch (err) {
+        console.warn(`${LOG_PREFIX} DB 게이트웨이 설정 조회 실패, /manage 값만 사용 (${item.id}):`, err);
+      }
 
       bodyEl.innerHTML = "";
 
