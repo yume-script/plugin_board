@@ -238,6 +238,14 @@ GitHub 저장소 주소를 모르므로 이 카드들은:
     (madnite1/plugin_manager의 환경설정 모달과 동일한 방식). `settings.html`이 없으면
     `config_schema` 기반 자동 생성 폼(text / password / number / checkbox / select,
     가이드 §4와 동일)으로 대체합니다.
+  - **저장된 값은 두 경로로 커스텀 UI에 전달됩니다** — ① `settings.js` 함수 호출 시
+    네 번째 인자(`config`), ② 루트 요소의 `data-plugin-config` DOM 속성(JSON 문자열,
+    `data-plugin-settings-root` 속성과 함께 설정됨). 일부 플러그인의 `settings.js`가
+    ②번 방식으로만 값을 읽어가도록 작성돼 있어서(예: `unified_book`), ①번만
+    지원했던 v2.26.2 이전 버전에서는 저장된 값이 화면에 채워지지 않는 문제가
+    있었습니다(v2.27.0에서 수정). `data-plugin-config`는 HTML 문자열 조립이 아니라
+    `setAttribute`로 직접 심으므로 별도 HTML 이스케이프 없이 JSON 문자열을 그대로
+    넣습니다 — 미리 이스케이프하면 오히려 다시 읽을 때 깨집니다.
   - 저장은 두 경우 모두 동일하게 폼 안의 `name` 속성이 있는 input/select 값을
     모아 `save-config`로 전송합니다 — `settings.html` 작성 시 입력 요소의 `name`을
     저장하려는 설정 키와 맞추면 됩니다.

@@ -394,10 +394,29 @@
 
     const root = document.createElement("div");
     root.className = "pb-settings-ui-root";
+    // plugin_manager와 동일한 규격으로 저장된 설정값을 data 속성에도 함께 심어둔다.
+    // 일부 플러그인의 settings.js는 함수 인자(config)가 아니라 이 DOM 속성에서
+    // 직접 읽어가도록 작성돼 있어서, 함수 인자만 넘기면 저장된 값이 화면에
+    // 채워지지 않는 문제가 있었다. 두 경로 모두 지원해 호환성을 맞춘다.
+    // 주의: setAttribute는 HTML 파싱을 거치지 않으므로(plugin_manager가 innerHTML
+    // 문자열 조립 방식이라 값을 미리 HTML 이스케이프하는 것과 달리) 여기서는
+    // JSON 문자열을 그대로 넣어야 한다 — 이스케이프하면 다시 읽을 때 깨진다.
+    root.setAttribute("data-plugin-settings-root", p.id);
+    root.setAttribute("data-plugin-config", JSON.stringify(config || {}));
     root.innerHTML = p.settings_ui.html; // 플러그인 제작자가 제공하는 신뢰된 관리자용 UI
 
     form.appendChild(root);
     bodyEl.appendChild(form);
+
+    // DOM에 실제로 붙은 뒤, data 속성을 다시 파싱해 최종 config로 사용한다
+    // (plugin_manager와 동일하게 — 파싱 실패 시 원래 config로 폴백).
+    let pluginConfig = config || {};
+    try {
+      const rawConfig = root.dataset.pluginConfig;
+      if (rawConfig) pluginConfig = JSON.parse(rawConfig);
+    } catch (err) {
+      console.warn(`${LOG_PREFIX} data-plugin-config 파싱 실패, 원본 config로 대체 (${p.id}):`, err);
+    }
 
     if (p.settings_ui.css) {
       const styleEl = document.createElement("style");
@@ -408,7 +427,7 @@
     if (p.settings_ui.js) {
       try {
         const fn = new Function("window", "pluginId", "root", "config", p.settings_ui.js);
-        fn(window, p.id, root, config);
+        fn(window, p.id, root, pluginConfig);
       } catch (err) {
         console.error(`${LOG_PREFIX} settings.js 실행 오류 (${p.id}):`, err);
       }
@@ -418,7 +437,7 @@
     root.querySelectorAll("script").forEach((script) => {
       try {
         const fn = new Function("window", "pluginId", "root", "config", script.textContent);
-        fn(window, p.id, root, config);
+        fn(window, p.id, root, pluginConfig);
       } catch (err) {
         console.error(`${LOG_PREFIX} settings.html 인라인 스크립트 오류 (${p.id}):`, err);
       }
