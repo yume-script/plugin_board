@@ -75,6 +75,33 @@
   const EYE_OFF_ICON =
     '<svg viewBox="0 0 16 16"><path d="M13.36 2.22 2.22 13.36l.7.7L4.6 12.4A8.26 8.26 0 0 0 8 13c3.5 0 6.27-2.11 7.5-5a9.4 9.4 0 0 0-2.66-3.54l1.82-1.82-.7-.7ZM8 11.5a3.48 3.48 0 0 1-1.87-.55l1.02-1.02a2 2 0 0 0 2.36-2.36l1.02-1.02c.34.53.55 1.16.55 1.83a3.5 3.5 0 0 1-3.5 3.5.5.5 0 0 1-.5 0Zm-6-3.5c1.1-2.09 3.19-3.7 5.7-3.98L6.3 5.42A3.5 3.5 0 0 0 4.42 7.3L2.9 8.83A9.4 9.4 0 0 1 2 8Z"/></svg>';
 
+  // 카드 종류별 아이콘 — 직접 그리지 않고 Lucide 아이콘(ISC 라이선스, 자유 재사용
+  // 가능)의 실제 path를 그대로 사용한다. 필채우기가 아니라 선(stroke) 기반이라
+  // 다른 아이콘들과 속성이 다르다.
+  const LUCIDE_ATTRS = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+  const TYPE_ICON_SEARCH = // lucide "search"
+    `<svg ${LUCIDE_ATTRS}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`;
+  const TYPE_ICON_TAB = // lucide "layout-grid"
+    `<svg ${LUCIDE_ATTRS}><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>`;
+  const TYPE_ICON_OTHER = // lucide "puzzle"
+    `<svg ${LUCIDE_ATTRS}><path d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.315 8.685a.97.97 0 0 1 .837-.276c.47.07.802.48.968.925a2.501 2.501 0 1 0 3.214-3.214c-.446-.166-.855-.497-.925-.968a.979.979 0 0 1 .276-.837l1.61-1.61A2.402 2.402 0 0 1 12 1.998c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.237 3.237c-.464.18-.894.527-.967 1.02Z"/></svg>`;
+
+  function buildCardIcon(item) {
+    const badge = document.createElement("div");
+    let markup = TYPE_ICON_OTHER;
+    let modifier = "pb-card-icon-other";
+    if (item.type === "search") {
+      markup = TYPE_ICON_SEARCH;
+      modifier = "pb-card-icon-search";
+    } else if (item.type === "tab") {
+      markup = TYPE_ICON_TAB;
+      modifier = "pb-card-icon-tab";
+    }
+    badge.className = "pb-card-icon " + modifier;
+    badge.innerHTML = markup;
+    return badge;
+  }
+
   // ------------------------------------------------------------------
   // 신규설치/업데이트/활성화·비활성화/삭제 액션 — 전부 plugin_board 자신의
   // apply()를 호출한다 (source: "plugin_board"). 외부 플러그인 불필요.
@@ -507,9 +534,8 @@
   // 이미 설치된 카드에만 표시된다.
   // ------------------------------------------------------------------
   function buildManageRow(item) {
-    // plugin_board 자기 자신은 삭제·비활성화가 백엔드에서 항상 거부되므로 그
-    // 두 컨트롤만 숨긴다. 설정(⚙) 버튼은 막혀있지 않고 정상 동작하므로(예:
-    // GITHUB_TOKEN 같은 자기 자신의 설정값도 편집 가능) 계속 보여준다.
+    // plugin_board 자기 자신은 삭제·비활성화가 백엔드에서 항상 거부되므로 이
+    // 함수 자체가 자기 카드에는 호출되지 않는다(buildCard에서 걸러짐).
     const isSelf = item.id === "plugin_board";
 
     const row = document.createElement("div");
@@ -539,20 +565,6 @@
 
     const actions = document.createElement("div");
     actions.className = "pb-manage-actions";
-
-    if (item.has_config) {
-      const gearBtn = document.createElement("button");
-      gearBtn.type = "button";
-      gearBtn.className = "pb-icon-btn";
-      gearBtn.title = "환경설정";
-      gearBtn.innerHTML = GEAR_ICON;
-      gearBtn.addEventListener("click", () => {
-        const dbType = getDbType();
-        wireSettingsSave(dbType);
-        openSettingsModal(item, dbType);
-      });
-      actions.appendChild(gearBtn);
-    }
 
     if (!isSelf) {
       const trashBtn = document.createElement("button");
@@ -621,6 +633,14 @@
     const head = document.createElement("div");
     head.className = "pb-card-head";
 
+    const headMain = document.createElement("div");
+    headMain.className = "pb-card-head-main";
+
+    const iconBadge = buildCardIcon(item);
+
+    const titleGroup = document.createElement("div");
+    titleGroup.className = "pb-card-title-group";
+
     const owner = document.createElement("p");
     owner.className = "pb-card-owner";
     owner.textContent = item.owner ? `${item.owner} / ${item.id}` : (item.id || "");
@@ -629,7 +649,25 @@
     title.className = "pb-card-title";
     title.textContent = item.title || "";
 
-    head.append(owner, title);
+    titleGroup.append(owner, title);
+    headMain.append(iconBadge, titleGroup);
+    head.appendChild(headMain);
+
+    // 설정(⚙) 버튼은 설치 여부·하단 관리 행 유무와 무관하게 항상 카드 헤더
+    // 우측 상단 같은 자리에 고정한다(찾기 쉽게).
+    if (item.installed && item.has_config) {
+      const headGearBtn = document.createElement("button");
+      headGearBtn.type = "button";
+      headGearBtn.className = "pb-icon-btn pb-card-head-gear";
+      headGearBtn.title = "환경설정";
+      headGearBtn.innerHTML = GEAR_ICON;
+      headGearBtn.addEventListener("click", () => {
+        const dbType = getDbType();
+        wireSettingsSave(dbType);
+        openSettingsModal(item, dbType);
+      });
+      head.appendChild(headGearBtn);
+    }
 
     const desc = document.createElement("p");
     desc.className = "pb-card-desc";
@@ -676,8 +714,8 @@
 
     (item.tags || []).forEach((tagText) => {
       const tag = document.createElement("span");
-      tag.className = "pb-tag";
-      tag.textContent = tagText; // textContent로만 삽입 (XSS 방지)
+      tag.className = "pb-tag pb-tag-topic";
+      tag.textContent = "#" + tagText; // GitHub Topics 출처임을 해시태그 표기로 구분 (textContent로만 삽입, XSS 방지)
       tagsWrap.appendChild(tag);
     });
 
@@ -724,12 +762,10 @@
     parts.push(tagsWrap);
     if ((item.features || []).length > 0) parts.push(feats);
     parts.push(foot);
-    // plugin_board 자기 자신은 삭제/비활성화가 백엔드에서 항상 거부되므로,
-    // 혼란을 주지 않도록 관리 행(스위치·삭제) 자체를 표시하지 않는다.
-    // plugin_board 자기 자신은 삭제/비활성화 컨트롤은 buildManageRow 안에서
-    // 자체적으로 숨기지만(백엔드에서 항상 거부되므로), 설정(⚙) 버튼은 정상
-    // 동작하므로 has_config가 있으면 그 행 자체는 계속 표시한다.
-    if (item.installed && (item.id !== "plugin_board" || item.has_config)) {
+    // plugin_board 자기 자신은 삭제/비활성화가 백엔드에서 항상 거부되므로
+    // 관리 행(스위치·삭제) 자체를 표시하지 않는다. 설정(⚙) 버튼은 이제
+    // 카드 헤더 우측 상단에 항상 고정 표시되므로 이 행과는 무관하다.
+    if (item.installed && item.id !== "plugin_board") {
       parts.push(buildManageRow(item));
     }
     card.append(...parts);
