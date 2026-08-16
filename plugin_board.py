@@ -270,12 +270,31 @@ def _remote_is_newer(local_v, remote_v):
     return rt > lt
 
 
+def _find_module_file(plugin_dir, plugin_id):
+    """GitHub 저장소 이름은 하이픈을 흔히 쓰지만(예: bookoasis-tk), 파이썬 파일명은
+    하이픈을 쓸 수 없어 언더스코어로 짓는 경우가 많다(예: bookoasis_tk.py). 폴더
+    이름(plugin_id) 그대로의 파일명뿐 아니라 하이픈↔언더스코어를 서로 바꾼 표기도
+    함께 시도해 실제 메인 모듈 파일을 찾는다. 찾으면 그 경로를, 못 찾으면 None을
+    반환한다."""
+    candidates = []
+    seen = set()
+    for candidate_id in (plugin_id, plugin_id.replace("-", "_"), plugin_id.replace("_", "-")):
+        if candidate_id and candidate_id not in seen:
+            seen.add(candidate_id)
+            candidates.append(candidate_id)
+    for candidate_id in candidates:
+        path = os.path.join(plugin_dir, candidate_id + ".py")
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 def _read_local_class_attrs(plugin_id):
-    """설치된 플러그인의 {plugin_id}.py에서 name/id/is_searchable/category_tab 등
+    """설치된 플러그인의 메인 .py에서 name/id/is_searchable/category_tab 등
     주요 클래스 속성을 AST로만(코드 실행 없이) 읽어온다. plugin_list.txt 목록에 없는
     플러그인의 표시 이름·분류를 최대한 정확히 추정하는 데 사용한다."""
-    path = os.path.join(_plugins_metadata_dir(), plugin_id, plugin_id + ".py")
-    if not os.path.isfile(path):
+    path = _find_module_file(os.path.join(_plugins_metadata_dir(), plugin_id), plugin_id)
+    if not path:
         return {}
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -835,15 +854,21 @@ def _install_or_update(owner, repo, token=None):
             _extract_zip_safe(zip_path, extract_dir)
             src_root = _find_extracted_root(extract_dir)
 
-            # 최소한의 신원 확인: 저장소 이름과 같은 메인 모듈 파일이 있어야
-            # BookOasis 플러그인 저장소로 간주한다(가이드의 폴더형 구조 관례).
-            module_py = os.path.join(src_root, repo + ".py")
-            if not os.path.isfile(module_py):
-                last_error = (
-                    "'%s.py' 파일을 찾지 못했습니다 — BookOasis 플러그인 저장소가 맞는지, "
-                    "메인 모듈 파일명이 저장소 이름과 같은지 확인해주세요." % repo
+            # 최소한의 신원 확인: 저장소 이름(또는 하이픈↔언더스코어를 바꾼 표기)과
+            # 같은 메인 모듈 파일이 있어야 BookOasis 플러그인 저장소로 간주한다.
+            # GitHub 저장소명은 하이픈을 흔히 쓰지만 파이썬 파일명은 하이픈을 못 써서
+            # 언더스코어로 짓는 경우가 많다(예: bookoasis-tk 저장소 → bookoasis_tk.py).
+            module_py = _find_module_file(src_root, repo)
+            if not module_py:
+                # 다운로드·압축 해제까지는 성공했으므로, 이후 브랜치를 더 시도해도
+                # 같은 이유로 실패할 뿐이다. 다른 브랜치의 무관한 오류(예: 존재하지
+                # 않는 브랜치의 404)가 이 더 정확한 원인을 덮어쓰지 않도록 여기서
+                # 바로 반환한다.
+                return False, (
+                    "'%s.py'(또는 '%s.py') 파일을 찾지 못했습니다 — BookOasis 플러그인 "
+                    "저장소가 맞는지, 메인 모듈 파일명이 저장소 이름과 같은지(하이픈은 "
+                    "언더스코어로 바꿔서도 확인함) 확인해주세요." % (repo, repo.replace("-", "_"))
                 )
-                continue
 
             base_dir = _plugins_metadata_dir()
             target_dir = _safe_join(base_dir, repo)
