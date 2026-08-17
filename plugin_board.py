@@ -922,6 +922,20 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 "제외되지만, 가급적 다른 곳과 겹치지 않는 구체적인 토픽 이름만 추가하세요)."
             ),
         },
+        {
+            "key": "AUTO_UPDATE_ENABLED",
+            "label": "사용 중인 플러그인 자동 업데이트",
+            "type": "checkbox",
+            "required": False,
+            "default": False,
+            "description": (
+                "체크하면, 활성화(사용 중)된 플러그인에 새 버전이 있을 때 이 화면을 열 때마다 "
+                "자동으로 업데이트를 시도합니다(plugin_board 자기 자신도 대상에 포함됩니다). "
+                "기본값은 꺼짐이며, 체크 전까지는 지금처럼 `업데이트` 버튼을 직접 눌러야만 "
+                "갱신됩니다. 자동 업데이트도 §5의 전체 재다운로드 방식(검증 후 폴더 교체)을 "
+                "그대로 사용합니다."
+            ),
+        },
     ]
 
     # 좌측 사이드바 1등 시민 카테고리 메뉴로 등록
@@ -1070,6 +1084,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
     def get_dashboard_data(self, db_type, limit=10):
         cfg = self.get_plugin_config(db_type, default={})
         token = cfg.get("GITHUB_TOKEN") or None
+        auto_update_enabled = bool(cfg.get("AUTO_UPDATE_ENABLED"))
 
         repo_urls = _fetch_repo_list(token)
         if not repo_urls:
@@ -1172,4 +1187,8 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         discovered_ids = {it["id"] for it in discovered_items}
         local_items = _scan_uncurated_installed(curated_ids | discovered_ids, is_enabled_fn)
         _save_disk_cache()  # 이번 요청에서 새로 채워진 캐시를 재시작에도 살아남도록 저장
-        return {"success": True, "items": curated_items + discovered_items + local_items}
+        return {
+            "success": True,
+            "items": curated_items + discovered_items + local_items,
+            "auto_update_enabled": auto_update_enabled,
+        }

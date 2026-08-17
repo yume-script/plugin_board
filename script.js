@@ -938,12 +938,76 @@
         `${LOG_PREFIX} 카드 ${allItems.length}개 렌더링 완료` +
           (errorCount ? ` (GitHub 조회 실패 ${errorCount}건)` : "")
       );
+
+      if (json.auto_update_enabled) {
+        runAutoUpdates();
+      }
     } catch (err) {
       console.error(`${LOG_PREFIX} 로드 실패:`, err);
       statusEl.textContent = "플러그인 목록을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.";
       statusEl.classList.add("pb-error");
       statusEl.hidden = false;
       gridEl.hidden = true;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // 사용 중인(활성화된) 플러그인에 업데이트가 있으면 자동으로 설치한다.
+  // 설정(⚙)의 "사용 중인 플러그인 자동 업데이트" 체크박스로만 켜지며 기본은
+  // 꺼짐이다. 같은 세션에서 너무 자주 반복 실행되지 않도록 쿨다운을 둔다.
+  // ------------------------------------------------------------------
+  let autoUpdateInFlight = false;
+  let lastAutoUpdateAt = 0;
+  const AUTO_UPDATE_COOLDOWN_MS = 5 * 60 * 1000; // 5분
+
+  async function runAutoUpdates() {
+    if (autoUpdateInFlight) return;
+    const now = Date.now();
+    if (now - lastAutoUpdateAt < AUTO_UPDATE_COOLDOWN_MS) return;
+
+    const targets = allItems.filter(
+      (it) => it.installed && it.enabled && it.has_update && it.url
+    );
+    if (targets.length === 0) return;
+
+    autoUpdateInFlight = true;
+    lastAutoUpdateAt = now;
+    const dbType = getDbType();
+    const succeeded = [];
+    const failed = [];
+
+    console.log(`${LOG_PREFIX} 자동 업데이트 대상 ${targets.length}개:`, targets.map((it) => it.id));
+
+    // 동시에 여러 저장소를 받으면 자원을 많이 쓰므로 순차적으로 하나씩 처리한다.
+    for (const item of targets) {
+      try {
+        const result = await callPluginBoardAction(dbType, {
+          action: "update",
+          plugin_id: item.id,
+          git_url: item.url,
+        });
+        if (result && result.success) {
+          succeeded.push(item.title || item.id);
+        } else {
+          failed.push(item.title || item.id);
+        }
+      } catch (err) {
+        console.error(`${LOG_PREFIX} 자동 업데이트 실패 (${item.id}):`, err);
+        failed.push(item.title || item.id);
+      }
+    }
+
+    autoUpdateInFlight = false;
+
+    if (succeeded.length > 0) {
+      showToast(
+        `자동 업데이트 완료: ${succeeded.join(", ")}` +
+          (failed.length ? ` (실패: ${failed.join(", ")})` : ""),
+        false
+      );
+      load(); // 카드 상태 새로고침 (자동 업데이트이므로 강제 새로고침은 하지 않음)
+    } else if (failed.length > 0) {
+      showToast(`자동 업데이트 실패: ${failed.join(", ")}`, true);
     }
   }
 
