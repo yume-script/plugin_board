@@ -59,6 +59,11 @@
   const GITHUB_ICON =
     '<svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>';
 
+  // Gitea(자체 호스팅) 저장소 표시용 — 특정 브랜드 로고 대신 범용 git-branch
+  // 아이콘(Lucide, ISC 라이선스)을 사용한다.
+  const GITEA_ICON =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>';
+
   // 설치 아이콘(다운로드), 업데이트 아이콘(리프레시), 완료 아이콘(체크) — 전부 자체 SVG
   const INSTALL_ICON =
     '<svg viewBox="0 0 16 16"><path d="M8 0a.75.75 0 0 1 .75.75v7.19l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V.75A.75.75 0 0 1 8 0Z"/><path d="M1.5 10.5a.75.75 0 0 1 .75.75v2A.75.75 0 0 0 3 14h10a.75.75 0 0 0 .75-.75v-2a.75.75 0 0 1 1.5 0v2A2.25 2.25 0 0 1 13 15.5H3A2.25 2.25 0 0 1 .75 13.25v-2a.75.75 0 0 1 .75-.75Z"/></svg>';
@@ -775,6 +780,14 @@
       tagsWrap.appendChild(discTag);
     }
 
+    if (item.user_registered) {
+      const regTag = document.createElement("span");
+      regTag.className = "pb-tag pb-tag-registered";
+      regTag.title = "plugin_list.txt에도 없고 GitHub Topics로도 발견되지 않았지만, 이 서버에서 Git URL로 직접 설치한 이력이 있어 계속 추적 중인 저장소입니다.";
+      regTag.textContent = "직접 설치됨";
+      tagsWrap.appendChild(regTag);
+    }
+
     if (item.local_only) {
       const localTag = document.createElement("span");
       localTag.className = "pb-tag pb-tag-local";
@@ -809,14 +822,14 @@
     btnGroup.className = "pb-btn-group";
     btnGroup.appendChild(buildActionControl(item));
 
-    // GitHub 저장소 주소를 모르는(local_only) 항목은 GitHub 버튼을 표시하지 않음
+    // GitHub/Gitea 저장소 주소를 모르는(local_only) 항목은 이 버튼을 표시하지 않음
     if (item.url) {
       const link = document.createElement("a");
       link.className = "pb-link";
       link.href = item.url;
       link.target = "_blank";
       link.rel = "noopener";
-      link.innerHTML = `${GITHUB_ICON}GitHub`;
+      link.innerHTML = item.gitea ? `${GITEA_ICON}Gitea` : `${GITHUB_ICON}GitHub`;
       btnGroup.appendChild(link);
     }
 

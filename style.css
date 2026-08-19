@@ -653,6 +653,15 @@
   font-weight: 600;
 }
 
+/* plugin_list.txt/토픽 없이 github.txt 이력만으로 추적 중인 저장소 표시 */
+.pb-tag-registered {
+  color: color-mix(in srgb, #6a8f5b 88%, var(--app-text-primary));
+  border-color: color-mix(in srgb, #6a8f5b 50%, transparent);
+  background: color-mix(in srgb, #6a8f5b 14%, transparent);
+  opacity: 1;
+  font-weight: 600;
+}
+
 /* GitHub Topics에서 그대로 가져온 태그는 #해시태그 표기로 시각적으로 구분
    (plugin_manager의 카드 표기 방식을 참고) */
 .pb-tag-topic {

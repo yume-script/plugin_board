@@ -138,6 +138,94 @@ API 조회가 실패해도(예: rate limit) `VERSION` 파일만은 `main`/`maste
   §4의 밋밋한 "미등록 설치 플러그인" 카드 대신 설명·버전이 채워진 발견 카드로
   자동 승격됩니다.
 
+### 2-2. 직접 설치 이력(github.txt) — plugin_list.txt·토픽 없이도 계속 추적
+
+`plugin_list.txt`(큐레이션)와 GitHub Topics(커뮤니티 자율 태그)는 둘 다 이
+플러그인이 통제할 수 없는 **외부 신호**입니다 — 저장소 소유자가 목록에서 빼거나
+토픽을 지우면 그 카드는 다시 §4의 밋밋한 "미등록 설치 플러그인"(GitHub 정보 없음)
+카드로 강등됩니다. 이를 막기 위해, **Git 저장소 URL로 직접 설치(또는 업데이트)에
+성공한 저장소 주소는 이 서버에 독자적으로 기록**해둡니다.
+
+- **기록 위치**: `plugins/data/plugin_board/github.txt` (한 줄에 저장소 주소 하나,
+  `plugins/metadata/plugin_board/`와는 별개의 위치입니다 — 코드가 아니라 이
+  서버만의 설치 이력 데이터이므로, plugin_board 자기 자신을 업데이트해도
+  건드리지 않고 배포 zip에도 포함되지 않습니다).
+- **기록 시점**: 카드의 `신규설치`/`업데이트` 버튼이든 상단 Git 저장소 URL 설치
+  패널이든, `_install_or_update`가 성공할 때마다 자동으로 기록됩니다(이미 같은
+  저장소 이름이 등록돼 있으면 중복 추가하지 않음). 별도 설정 없이 항상 동작합니다.
+  기록 자체가 실패해도(디스크 쓰기 실패 등) 설치 성공 여부에는 영향을 주지 않습니다.
+- **표시**: `plugin_list.txt`에도 없고 토픽으로도 발견되지 않았지만 이 레지스트리에
+  있는 저장소는 다른 큐레이션 카드와 동일하게 설명·최신 버전·업데이트 확인이 되는
+  카드로 표시되며, `직접 설치됨` 태그가 붙어 출처를 구분합니다.
+- **우선순위**: `plugin_list.txt` > GitHub Topics 발견 > github.txt 레지스트리 >
+  파일시스템만으로 확인한 미등록 카드(§4) 순으로 병합되며, 상위 출처에 이미 있는
+  저장소는 레지스트리 카드로 중복 표시되지 않습니다.
+
+### 2-3. 비공개(private) 저장소 설치 — GITHUB_TOKEN 필수
+
+GitHub는 더 이상 아이디+비밀번호 방식 인증을 지원하지 않습니다(2021년 폐지). 대신
+**Personal Access Token(PAT)**을 발급해 `GITHUB_TOKEN` 설정에 넣으면, 그 토큰이 읽기
+권한을 가진 비공개 저장소도 설치·업데이트·추적할 수 있습니다.
+
+- **공개 저장소용 토큰과의 차이**: §헤더의 "GitHub 토큰 발급 안내" 패널에서 안내하는
+  토큰은 *아무 권한도 없는(Repository access: None)* 토큰이라 공개 저장소 API
+  한도만 늘려줍니다. 비공개 저장소를 설치하려면 **그 저장소에 대한 읽기 권한이
+  실제로 있는 토큰**이 필요합니다 — Fine-grained PAT라면 `Repository access`에서
+  해당 저장소를 선택하고 `Contents: Read-only` 권한을 부여하세요.
+- **내부 동작**: `api.github.com`, `raw.githubusercontent.com`(VERSION 파일),
+  `codeload.github.com`(zip 다운로드) 세 곳 모두에 같은 `GITHUB_TOKEN`을
+  `Authorization: token <PAT>` 헤더로 실어 보냅니다. `api.github.com`은
+  `Authorization: Bearer`도 인식하지만, `raw.githubusercontent.com`과
+  `codeload.github.com`은 `token` 표기만 확실히 동작해서 세 서비스 모두에서
+  통하는 `token` 표기로 통일했습니다(v2.30.0에서 수정 — 이전 버전은 `Bearer`만
+  써서 비공개 저장소의 VERSION 조회·zip 다운로드가 실패했을 수 있습니다).
+- **한계**: `codeload.github.com`의 zip 다운로드는 `/zip/refs/heads/{branch}`
+  형식을 사용합니다. GitHub 커뮤니티에서 확인된 예시는 `/legacy.zip/{branch}`
+  형식 기준이라, 조직(organization) 소유의 비공개 저장소나 SSO가 강제된
+  조직에서는 추가 설정(토큰에 조직 SSO 인가 등)이 필요할 수 있습니다. 문제가
+  있으면 GitHub 조직 설정에서 토큰에 대한 SSO 인가 여부를 확인해주세요.
+
+### 2-4. 자체 호스팅 Gitea/Forgejo 서버 지원 (v2.31.0부터)
+
+GitHub뿐 아니라, **설정에 `GITEA_HOST`를 지정하면 그 호스트의 Gitea(또는 Forgejo 등
+호환 포크) 서버 저장소도 동일하게 카드로 보여주고 설치·업데이트할 수 있습니다.**
+공식 Gitea REST API 문서를 기준으로 별도 구현했으며, GitHub 경로는 전혀 건드리지
+않고 완전히 독립적으로 동작합니다.
+
+**설정**
+
+| 키 | 설명 |
+| --- | --- |
+| `GITEA_HOST` | 서버 호스트명만 입력(`https://` 없이). 예: `gitea.example.com`. 이 값과 정확히 일치하는 호스트의 저장소만 Gitea 경로로 처리됩니다 |
+| `GITEA_TOKEN` | 액세스 토큰(있으면 우선 사용, `Authorization: token` 방식) |
+| `GITEA_USERNAME` / `GITEA_PASSWORD` | 토큰이 없을 때 Basic Auth로 사용됩니다 — **GitHub와 달리 Gitea는 아이디+비밀번호 인증을 여전히 지원**하므로, 토큰 발급 없이 계정 정보만으로도 동작합니다 |
+
+**내부적으로 쓰는 Gitea API 엔드포인트** (전부 공식 문서/커뮤니티 사례로 확인한 형식)
+
+- 저장소 정보(설명·기본 브랜치): `GET /api/v1/repos/{owner}/{repo}`
+- 버전 파일(`VERSION`): `GET /api/v1/repos/{owner}/{repo}/raw/{branch}/VERSION` — 브랜치를
+  쿼리 파라미터(`?ref=`)가 아니라 **경로에 직접 포함**하는 형식을 씁니다. Gitea
+  1.23부터 `?ref=` 방식이 제거되었기 때문에, 구버전·신버전 모두에서 동작하는
+  경로 방식으로 통일했습니다.
+- 소스 다운로드: `GET /api/v1/repos/{owner}/{repo}/archive/{branch}.zip`
+- 인증 헤더: `GITEA_TOKEN`이 있으면 `Authorization: token <TOKEN>`, 없으면
+  `GITEA_USERNAME`/`GITEA_PASSWORD`로 `Authorization: Basic <base64>`. **Gitea
+  1.23부터 Basic Auth가 폐지 예정**이라는 공지가 있어, 가능하면 비밀번호 대신
+  토큰 사용을 권장하는 안내를 설정 설명에 넣어뒀습니다.
+
+**GitHub와의 차이점(현재 지원 범위)**
+
+- **GitHub Topics 방식의 자동 발견(§2-1)은 Gitea에는 적용되지 않습니다.** Gitea
+  저장소는 Git 저장소 URL 설치 패널로 직접 설치하거나 `plugin_list.txt`에 직접
+  주소를 추가하는 방식으로만 등록할 수 있습니다. 한 번 설치하면 §2-2의
+  `github.txt` 레지스트리에 기록되어 이후에도 계속 추적됩니다(GitHub 저장소와
+  동일하게 동작 — 이 파일은 호스트를 가리지 않고 저장소 주소를 그대로 저장합니다).
+- 카드에 표시되는 태그(토픽)는 Gitea 저장소에 대해서는 비어 있습니다(v1 미지원).
+- GitHub 저장소용 캐시(`_DESC_CACHE`/`_VERSION_CACHE`)와 키를 분리(`gitea:호스트/...`
+  접두어)해서 같은 저장소 이름이라도 서로 캐시가 섞이지 않습니다.
+- 카드 하단 링크는 GitHub 저장소면 `GitHub` 버튼, Gitea 저장소면 `Gitea` 버튼으로
+  자동 구분됩니다.
+
 ### 3. 설치 여부 — 서버 파일시스템을 직접 확인
 
 `plugin_board.py`는 자기 자신도 `plugins/metadata/plugin_board/`에 위치한다는 점을
@@ -340,9 +428,13 @@ Repository access: None)** 개인 액세스 토큰만 넣어도 시간당 5,000�
 
 | 키             | UI 유형     | 필수 | 설명                                             |
 | ------------- | --------- | -- | ------------------------------------------------ |
-| `GITHUB_TOKEN` | password | 선택 | GitHub Personal Access Token. 설명/토픽 조회(`api.github.com`)의 무인증 한도(60/시간)를 늘리는 용도. 목록 조회(`raw.githubusercontent.com`)와 설치용 소스 다운로드(`codeload.github.com`)는 공개 저장소라면 토큰 없이도 동작 |
+| `GITHUB_TOKEN` | password | 선택 | GitHub Personal Access Token. 설명/토픽 조회(`api.github.com`)의 무인증 한도(60/시간)를 늘리는 용도. 목록 조회(`raw.githubusercontent.com`)와 설치용 소스 다운로드(`codeload.github.com`)는 공개 저장소라면 토큰 없이도 동작. **비공개(private) 저장소를 설치/추적하려면 이 토큰이 필수**이며, 그 저장소에 대한 읽기 권한이 있어야 함(§2-3 참고) |
 | `EXTRA_DISCOVERY_TOPICS` | text | 선택 | GitHub Topics 발견(§2-1) 대상에 추가할 토픽(콤마 구분). 기본 `bookoasis-plugin`에 더해집니다. 흔한 단어는 무관한 저장소를 대량으로 끌어올 수 있어 구체적인 이름만 권장 |
 | `AUTO_UPDATE_ENABLED` | checkbox | 선택 | **기본값 꺼짐.** 켜면 활성화(사용 중)된 플러그인에 새 버전이 있을 때 화면을 열 때마다 자동으로 업데이트를 시도합니다(§9 참고) |
+| `GITEA_HOST` | text | 선택 | 자체 호스팅 Gitea/Forgejo 서버 호스트명(`https://` 없이). 설정하면 이 호스트의 저장소는 GitHub 대신 Gitea API로 처리됩니다(§2-4) |
+| `GITEA_TOKEN` | password | 선택 | Gitea 액세스 토큰. 있으면 아래 사용자명/비밀번호보다 우선 사용 |
+| `GITEA_USERNAME` | text | 선택 | Gitea 사용자명. `GITEA_TOKEN`이 없을 때 비밀번호와 함께 Basic Auth로 사용 |
+| `GITEA_PASSWORD` | password | 선택 | Gitea 비밀번호. `GITEA_TOKEN`이 없을 때만 사용(Basic Auth) |
 
 ### 사용 중인 플러그인 자동 업데이트 (선택, 기본 꺼짐)
 

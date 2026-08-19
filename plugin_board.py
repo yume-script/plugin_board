@@ -19,6 +19,7 @@ update_manifest를 AST로만(코드 실행 없이) 추출해 명시된 파일만
 """
 
 import ast
+import base64
 import concurrent.futures
 import json
 import os
@@ -174,7 +175,11 @@ def _headers(token):
         "User-Agent": "BookOasis-Plugin-Board",
     }
     if token:
-        headers["Authorization"] = "Bearer " + token
+        # api.github.com은 "Bearer"/"token" 둘 다 인식하지만, 비공개 저장소의
+        # raw.githubusercontent.com(VERSION 파일)과 codeload.github.com(zip
+        # 다운로드)은 "token" 방식만 확실히 동작한다("Bearer"는 무시되거나
+        # 실패하는 사례가 보고됨). 세 서비스 모두에서 동작하는 공통 표기를 쓴다.
+        headers["Authorization"] = "token " + token
     return headers
 
 
@@ -190,11 +195,156 @@ def _http_get_text(url, token=None):
         return resp.read().decode("utf-8")
 
 
-def _parse_owner_repo(url):
-    m = re.search(r"github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", (url or "").strip())
+_REPO_URL_RE = re.compile(r"^https?://([^/]+)/([^/]+)/([^/]+?)(?:\.git)?/?$")
+
+
+def _parse_repo_url(url):
+    """URL에서 (host, owner, repo)를 호스트 무관하게 추출한다(GitHub·Gitea 등
+    어떤 Git 호스팅이든 동일한 owner/repo 형태의 주소라고 가정). 실패하면
+    (None, None, None)."""
+    m = _REPO_URL_RE.match((url or "").strip())
     if not m:
+        return None, None, None
+    return m.group(1), m.group(2), m.group(3)
+
+
+def _is_github_host(host):
+    return (host or "").lower() in ("github.com", "www.github.com")
+
+
+def _parse_owner_repo(url):
+    """GitHub 저장소 URL에서만 (owner, repo)를 추출한다. GitHub가 아닌 호스트는
+    (None, None)을 반환한다(Gitea 등은 _parse_repo_url + _gitea_settings로 별도 처리)."""
+    host, owner, repo = _parse_repo_url(url)
+    if not host or not _is_github_host(host):
         return None, None
-    return m.group(1), m.group(2)
+    return owner, repo
+
+
+# ------------------------------------------------------------------
+# Gitea(및 호환 포크) 지원 — 자체 호스팅 Git 서버를 GITEA_HOST로 지정하면
+# 그 호스트의 저장소는 GitHub API 대신 Gitea REST API(Gitea 1.23+에서도 동작이
+# 확인된 형태)로 처리한다. GitHub는 아이디+비밀번호 인증을 2021년에 폐지했지만
+# Gitea는 여전히 지원하므로, 토큰이 없는 사용자를 위해 Basic Auth(사용자명+
+# 비밀번호)도 함께 지원한다.
+# ------------------------------------------------------------------
+def _gitea_settings(cfg):
+    """플러그인 설정에서 Gitea 접속 정보를 정리해 돌려준다. GITEA_HOST가 비어
+    있으면 Gitea 지원 자체가 꺼진 것으로 간주한다."""
+    host = re.sub(r"^https?://", "", str(cfg.get("GITEA_HOST") or "").strip()).rstrip("/")
+    return {
+        "host": host,
+        "token": str(cfg.get("GITEA_TOKEN") or "").strip() or None,
+        "username": str(cfg.get("GITEA_USERNAME") or "").strip() or None,
+        "password": str(cfg.get("GITEA_PASSWORD") or "").strip() or None,
+    }
+
+
+def _is_gitea_host(host, gitea_cfg):
+    return bool(gitea_cfg and gitea_cfg.get("host") and host and host.lower() == gitea_cfg["host"].lower())
+
+
+def _gitea_headers(gitea_cfg):
+    headers = {"Accept": "application/json", "User-Agent": "BookOasis-Plugin-Board"}
+    if not gitea_cfg:
+        return headers
+    # 토큰이 있으면 우선 사용(Gitea 1.23+에서 Basic Auth가 폐지 예정이라 더 안전),
+    # 없으면 사용자명+비밀번호로 Basic Auth를 시도한다(GitHub와 달리 Gitea는
+    # 여전히 지원 — 사용자가 "아이디/비밀번호"만 갖고 있는 경우를 위함).
+    if gitea_cfg.get("token"):
+        headers["Authorization"] = "token " + gitea_cfg["token"]
+    elif gitea_cfg.get("username") and gitea_cfg.get("password"):
+        raw = ("%s:%s" % (gitea_cfg["username"], gitea_cfg["password"])).encode("utf-8")
+        headers["Authorization"] = "Basic " + base64.b64encode(raw).decode("ascii")
+    return headers
+
+
+def _gitea_get_json(host, path, gitea_cfg):
+    req = urllib.request.Request("https://%s%s" % (host, path), headers=_gitea_headers(gitea_cfg))
+    with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _gitea_get_text(host, path, gitea_cfg):
+    req = urllib.request.Request("https://%s%s" % (host, path), headers=_gitea_headers(gitea_cfg))
+    with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT) as resp:
+        return resp.read().decode("utf-8")
+
+
+def _gitea_download_zip(host, path, dest_path, gitea_cfg):
+    req = urllib.request.Request("https://%s%s" % (host, path), headers=_gitea_headers(gitea_cfg))
+    with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT) as resp:
+        with open(dest_path, "wb") as f:
+            shutil.copyfileobj(resp, f)
+
+
+def _gitea_fetch_description_info(host, owner, repo, gitea_cfg):
+    """Gitea REST API(`GET /api/v1/repos/{owner}/{repo}`)로 설명·기본 브랜치를
+    조회한다. GitHub 캐시와 섞이지 않도록 키에 "gitea:호스트/" 접두어를 쓴다."""
+    key = "gitea:%s/%s/%s" % (host, owner, repo)
+    cached = _DESC_CACHE.get(key)
+    if cached and (time.time() - cached[0]) < _DESC_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    fallback_url = "https://%s/%s/%s" % (host, owner, repo)
+    try:
+        data = _gitea_get_json(host, "/api/v1/repos/%s/%s" % (owner, repo), gitea_cfg)
+        info = {
+            "desc": data.get("description") or "(등록된 설명이 없습니다)",
+            "tags": [],  # Gitea 토픽 발견은 v1 미지원(GitHub Topics 전용 기능)
+            "url": data.get("html_url") or fallback_url,
+            "default_branch": data.get("default_branch"),
+            "error": False,
+        }
+    except urllib.error.HTTPError as exc:
+        hint = " (인증 정보를 확인해주세요)" if exc.code in (401, 403) else ""
+        info = {
+            "desc": "Gitea API 호출 오류 (HTTP %s)%s" % (exc.code, hint),
+            "tags": [], "url": fallback_url, "default_branch": None, "error": True,
+        }
+    except Exception as exc:
+        info = {
+            "desc": "Gitea 저장소 정보를 불러오지 못했습니다 (%s)" % exc,
+            "tags": [], "url": fallback_url, "default_branch": None, "error": True,
+        }
+
+    _DESC_CACHE[key] = (time.time(), info)
+    return info
+
+
+def _gitea_fetch_version(host, owner, repo, default_branch, gitea_cfg):
+    """저장소의 VERSION 파일을 Gitea raw API로 조회한다.
+    `/api/v1/repos/{owner}/{repo}/raw/{branch}/{filepath}` 형식(브랜치를 쿼리
+    파라미터가 아니라 경로에 직접 포함)을 쓴다 — Gitea 1.23부터 `?ref=` 방식이
+    제거되었기 때문에, 구버전·신버전 모두에서 동작하는 경로 방식으로 통일했다."""
+    for branch in _candidate_branches(default_branch):
+        try:
+            text = _gitea_get_text(
+                host, "/api/v1/repos/%s/%s/raw/%s/VERSION" % (owner, repo, branch), gitea_cfg
+            )
+            data = json.loads(text)
+            version = data.get("plugin version")
+            if version:
+                return str(version)
+        except Exception:
+            continue
+    return None
+
+
+def _gitea_fetch_version_info(host, owner, repo, default_branch, gitea_cfg):
+    key = "gitea:%s/%s/%s" % (host, owner, repo)
+    cached = _VERSION_CACHE.get(key)
+    if cached and (time.time() - cached[0]) < _VERSION_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    remote_version = _gitea_fetch_version(host, owner, repo, default_branch, gitea_cfg)
+    info = {
+        "version_label": ("v" + remote_version) if remote_version else "—",
+        "remote_version": remote_version,
+        "error": remote_version is None,
+    }
+    _VERSION_CACHE[key] = (time.time(), info)
+    return info
 
 
 def _fetch_repo_list(token, force=False):
@@ -228,6 +378,59 @@ def _fetch_repo_list(token, force=False):
 def _plugins_metadata_dir():
     """plugins/metadata 루트 경로 (plugin_board 자신의 부모 디렉토리)"""
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _plugins_root_dir():
+    """plugins/ 루트 경로 (plugins/metadata의 부모)."""
+    return os.path.dirname(_plugins_metadata_dir())
+
+
+def _github_registry_path():
+    """Git URL로 설치(또는 업데이트)한 저장소 주소를 기록해두는 파일 경로.
+    plugin_list.txt(큐레이션)나 GitHub Topics(커뮤니티 자율 태그)에 없어도 —
+    둘 다 이 플러그인이 통제할 수 없는 외부 신호라 사라지거나 바뀔 수 있음 —
+    이 서버에서 실제로 설치했던 이력만큼은 독자적으로 보존해, 이후에도 계속
+    업데이트 확인 대상에 남도록 한다."""
+    return os.path.join(_plugins_root_dir(), "data", "plugin_board", "github.txt")
+
+
+def _load_github_registry():
+    """github.txt에 기록된 저장소 주소 목록을 읽는다. 파일이 없거나 읽기에
+    실패하면 빈 목록을 반환한다(레지스트리는 성능/편의용 부가 기능이라
+    실패해도 플러그인 동작 자체를 막지 않는다)."""
+    path = _github_registry_path()
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return [
+                line.strip() for line in f
+                if line.strip() and not line.strip().startswith("#")
+            ]
+    except Exception:
+        return []
+
+
+def _remember_repo_install(url):
+    """설치/업데이트에 성공한 저장소 주소(GitHub든 Gitea든)를 github.txt에
+    기록한다(이미 같은 저장소 이름이 등록돼 있으면 중복 추가하지 않음). 기록
+    실패는 설치 자체를 막을 이유가 아니므로 예외를 조용히 무시한다."""
+    try:
+        _, _, repo = _parse_repo_url(url)
+        if not repo:
+            return
+        existing = _load_github_registry()
+        existing_repo_names = {
+            _parse_repo_url(u)[2] for u in existing if _parse_repo_url(u)[2]
+        }
+        if repo in existing_repo_names:
+            return
+        path = _github_registry_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(url + "\n")
+    except Exception:
+        pass
 
 
 def _is_installed(plugin_id):
@@ -625,9 +828,9 @@ def _build_discovered_item(repo_json, version_info, is_enabled_fn, excluded_ids)
     }
 
 
-def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None):
-    owner, repo = _parse_owner_repo(url)
-    if not owner or not repo:
+def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None, gitea_cfg=None):
+    host, owner, repo = _parse_repo_url(url)
+    if not host or not owner or not repo:
         return {
             "id": url, "owner": "", "title": url, "type": "other",
             "type_label": TYPE_LABELS["other"],
@@ -636,6 +839,24 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None):
             "url": url, "error": True,
             "installed": False, "installed_version": None, "has_update": False,
             "has_config": False, "enabled": None,
+        }
+
+    if not _is_github_host(host) and _is_gitea_host(host, gitea_cfg):
+        return _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg)
+
+    if not _is_github_host(host):
+        # GitHub도 아니고 설정된 GITEA_HOST도 아닌 호스트 — 지원 대상이 아님
+        return {
+            "id": repo, "owner": owner, "title": repo, "type": "other",
+            "type_label": TYPE_LABELS["other"],
+            "desc": (
+                "지원하지 않는 Git 호스트입니다 (%s). GitHub가 아니라면 설정의 "
+                "GITEA_HOST를 이 호스트와 일치하도록 지정해야 합니다." % host
+            ),
+            "tags": [], "features": [], "version_label": "—",
+            "url": url, "error": True,
+            "installed": _is_installed(repo), "installed_version": _local_version(repo),
+            "has_update": False, "has_config": False, "enabled": None,
         }
 
     key = owner + "/" + repo
@@ -678,6 +899,49 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None):
         "enabled": is_enabled_fn(repo) if installed else None,
     }
     return item
+
+
+def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg):
+    """GitHub 카드와 동일한 형태의 item dict를 Gitea API로 채워 만든다."""
+    key = owner + "/" + repo
+    plugin_type = TYPE_OVERRIDES.get(key, "other")
+    installed = _is_installed(repo)
+    installed_version = _local_version(repo) if installed else None
+    has_config = False
+    title = repo
+
+    if installed:
+        local_attrs = _read_local_class_attrs(repo)
+        if local_attrs.get("is_searchable"):
+            plugin_type = "search"
+        elif local_attrs.get("category_tab"):
+            plugin_type = "tab"
+        has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(repo)
+        title = local_attrs.get("name") or repo
+
+    desc_info = _gitea_fetch_description_info(host, owner, repo, gitea_cfg)
+    version_info = _gitea_fetch_version_info(host, owner, repo, desc_info.get("default_branch"), gitea_cfg)
+    remote_version = version_info["remote_version"]
+
+    return {
+        "id": repo,
+        "owner": owner,
+        "title": title,
+        "type": plugin_type,
+        "type_label": TYPE_LABELS.get(plugin_type, TYPE_LABELS["other"]),
+        "desc": desc_info["desc"],
+        "tags": desc_info["tags"],
+        "features": [],
+        "version_label": version_info["version_label"],
+        "url": desc_info["url"],
+        "error": desc_info["error"] or version_info["error"],
+        "installed": installed,
+        "installed_version": installed_version,
+        "has_update": installed and _remote_is_newer(installed_version, remote_version),
+        "has_config": has_config,
+        "enabled": is_enabled_fn(repo) if installed else None,
+        "gitea": True,
+    }
 
 
 # ========================================================================
@@ -883,6 +1147,7 @@ def _install_or_update(owner, repo, token=None):
             _DESC_CACHE.pop(key, None)  # 설치 직후 카드가 최신 상태를 반영하도록 캐시 무효화
             _VERSION_CACHE.pop(key, None)
             _save_disk_cache()
+            _remember_repo_install("https://github.com/%s/%s" % (owner, repo))  # plugin_list.txt/토픽 유무와 무관하게 이력 보존
             _try_hot_reload(repo)
 
             new_version = _local_version(repo) or "?"
@@ -895,6 +1160,83 @@ def _install_or_update(owner, repo, token=None):
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
     return False, "설치/업데이트 실패: %s" % (last_error or "알 수 없는 오류")
+
+
+def _install_or_update_gitea(host, owner, repo, gitea_cfg):
+    """Gitea 저장소를 설치/업데이트한다. GitHub용 _install_or_update와 동일한
+    전체 재다운로드 방식(검증 후 폴더 교체)을 쓰되, 다운로드/조회 경로만
+    Gitea API로 바꾼 버전이다."""
+    _validate_plugin_id(repo)
+
+    desc_info = _gitea_fetch_description_info(host, owner, repo, gitea_cfg)
+    default_branch = desc_info.get("default_branch")
+
+    last_error = None
+    for branch in _candidate_branches(default_branch):
+        zip_path_on_server = "/api/v1/repos/%s/%s/archive/%s.zip" % (owner, repo, branch)
+        tmp_dir = tempfile.mkdtemp(prefix="plugin_board_gitea_")
+        try:
+            zip_path = os.path.join(tmp_dir, "src.zip")
+            _gitea_download_zip(host, zip_path_on_server, zip_path, gitea_cfg)
+
+            extract_dir = os.path.join(tmp_dir, "extract")
+            os.makedirs(extract_dir, exist_ok=True)
+            _extract_zip_safe(zip_path, extract_dir)
+            src_root = _find_extracted_root(extract_dir)
+
+            module_py = _find_module_file(src_root, repo)
+            if not module_py:
+                return False, (
+                    "'%s.py'(또는 '%s.py') 파일을 찾지 못했습니다 — BookOasis 플러그인 "
+                    "저장소가 맞는지, 메인 모듈 파일명이 저장소 이름과 같은지(하이픈은 "
+                    "언더스코어로 바꿔서도 확인함) 확인해주세요." % (repo, repo.replace("-", "_"))
+                )
+
+            base_dir = _plugins_metadata_dir()
+            target_dir = _safe_join(base_dir, repo)
+
+            if os.path.isdir(target_dir):
+                shutil.rmtree(target_dir)
+            shutil.copytree(src_root, target_dir)
+
+            key = "gitea:%s/%s/%s" % (host, owner, repo)
+            _DESC_CACHE.pop(key, None)
+            _VERSION_CACHE.pop(key, None)
+            _save_disk_cache()
+            _remember_repo_install("https://%s/%s/%s" % (host, owner, repo))
+            _try_hot_reload(repo)
+
+            new_version = _local_version(repo) or "?"
+            return True, "'%s' 설치/업데이트 완료 (Gitea %s, 브랜치: %s, 버전: v%s, 저장소 전체 교체)" % (
+                repo, host, branch, new_version,
+            )
+        except urllib.error.HTTPError as exc:
+            hint = " (인증 정보를 확인해주세요)" if exc.code in (401, 403) else ""
+            last_error = "HTTP %s%s" % (exc.code, hint)
+        except Exception as exc:
+            last_error = str(exc)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return False, "설치/업데이트 실패: %s" % (last_error or "알 수 없는 오류")
+
+
+def _install_or_update_from_url(url, token, gitea_cfg):
+    """URL의 호스트를 보고 GitHub/Gitea 중 맞는 설치 엔진으로 위임한다."""
+    host, owner, repo = _parse_repo_url(url)
+    if not host or not owner or not repo:
+        return False, "Git 저장소 주소를 해석하지 못했습니다: %s" % url
+
+    if _is_github_host(host):
+        return _install_or_update(owner, repo, token)
+
+    if _is_gitea_host(host, gitea_cfg):
+        return _install_or_update_gitea(host, owner, repo, gitea_cfg)
+
+    return False, (
+        "지원하지 않는 Git 호스트입니다 (%s). GitHub 저장소가 아니라면, 설정의 "
+        "GITEA_HOST를 이 주소의 호스트와 정확히 일치하도록 지정해주세요." % host
+    )
 
 
 class PluginBoardMetadataProvider(BaseMetadataProvider):
@@ -936,6 +1278,48 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 "그대로 사용합니다."
             ),
         },
+        {
+            "key": "GITEA_HOST",
+            "label": "Gitea 서버 주소 (선택)",
+            "type": "text",
+            "required": False,
+            "description": (
+                "자체 호스팅 Gitea/Forgejo 서버가 있다면 호스트명만 입력하세요 "
+                "(https:// 없이, 예: gitea.example.com). 이 호스트의 저장소 주소는 "
+                "GitHub API 대신 Gitea REST API로 처리됩니다. GitHub Topics 발견(§2-1)은 "
+                "Gitea에는 적용되지 않으며, Git 저장소 URL 설치 패널이나 plugin_list.txt에 "
+                "직접 주소를 추가하는 방식으로만 등록할 수 있습니다."
+            ),
+        },
+        {
+            "key": "GITEA_TOKEN",
+            "label": "Gitea 액세스 토큰 (선택, 있으면 우선 사용)",
+            "type": "password",
+            "required": False,
+            "description": (
+                "설정하면 아래 사용자명/비밀번호보다 우선 사용됩니다(Authorization: token 방식). "
+                "Gitea 1.23부터 Basic Auth가 폐지 예정이라, 가능하면 비밀번호 대신 이 토큰을 "
+                "권장합니다."
+            ),
+        },
+        {
+            "key": "GITEA_USERNAME",
+            "label": "Gitea 사용자명 (선택)",
+            "type": "text",
+            "required": False,
+            "description": "GITEA_TOKEN이 없을 때, 아래 비밀번호와 함께 Basic Auth로 사용됩니다.",
+        },
+        {
+            "key": "GITEA_PASSWORD",
+            "label": "Gitea 비밀번호 (선택)",
+            "type": "password",
+            "required": False,
+            "description": (
+                "GITEA_TOKEN이 없을 때만 사용됩니다(Basic Auth). Gitea 버전에 따라 "
+                "비밀번호 인증이 막혀 있을 수 있으니, 안 되면 액세스 토큰을 발급해 "
+                "GITEA_TOKEN에 넣어주세요."
+            ),
+        },
     ]
 
     # 좌측 사이드바 1등 시민 카테고리 메뉴로 등록
@@ -943,7 +1327,6 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         "title": "플러그인게시판",
         "icon": "fa-solid fa-layer-group",
         "order": 90,
-        "sessions": "all", 
     }
 
     # GitHub raw 기반 자동 업데이트 계약 (plugin_board 자기 자신의 업데이트용)
@@ -1055,23 +1438,24 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         if action in ("install_git", "update"):
             cfg = self.get_plugin_config(db_type, default={})
             token = cfg.get("GITHUB_TOKEN") or None
+            gitea_cfg = _gitea_settings(cfg)
 
             git_url = str(item_data.get("git_url", "")).strip()
-            owner, repo = _parse_owner_repo(git_url) if git_url else (None, None)
-            if not owner or not repo:
-                # git_url 없이 plugin_id만 온 경우, 원격 목록(plugin_list.txt)에서
-                # 대응하는 주소를 찾는다
+            if not git_url and plugin_id:
+                # git_url 없이 plugin_id만 온 경우, plugin_list.txt 또는 github.txt
+                # 레지스트리(GitHub/Gitea 어느 쪽이든)에서 대응하는 주소를 찾는다.
+                candidates = _fetch_repo_list(token) + _load_github_registry()
                 match = next(
-                    (u for u in _fetch_repo_list(token) if _parse_owner_repo(u)[1] == plugin_id),
+                    (u for u in candidates if _parse_repo_url(u)[2] == plugin_id),
                     None,
                 )
                 if match:
-                    owner, repo = _parse_owner_repo(match)
+                    git_url = match
 
-            if not owner or not repo:
+            if not git_url:
                 return False, "Git 저장소 정보를 확인할 수 없습니다."
 
-            return _install_or_update(owner, repo, token)
+            return _install_or_update_from_url(git_url, token, gitea_cfg)
 
         return False, "지원하지 않는 액션입니다: %s" % action
 
@@ -1086,6 +1470,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         cfg = self.get_plugin_config(db_type, default={})
         token = cfg.get("GITHUB_TOKEN") or None
         auto_update_enabled = bool(cfg.get("AUTO_UPDATE_ENABLED"))
+        gitea_cfg = _gitea_settings(cfg)
 
         repo_urls = _fetch_repo_list(token)
         if not repo_urls:
@@ -1139,7 +1524,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         for url in repo_urls:
             owner, repo = _parse_owner_repo(url)
             preloaded = remote_infos.get((owner, repo)) if owner and repo else None
-            curated_items.append(_fetch_repo_entry(url, token, is_enabled_fn, preloaded))
+            curated_items.append(_fetch_repo_entry(url, token, is_enabled_fn, preloaded, gitea_cfg))
 
         curated_ids = {it["id"] for it in curated_items}
 
@@ -1186,10 +1571,30 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 discovered_items = discovered_items[:_MAX_DISCOVERED_ITEMS]
 
         discovered_ids = {it["id"] for it in discovered_items}
-        local_items = _scan_uncurated_installed(curated_ids | discovered_ids, is_enabled_fn)
+
+        # 직접 설치 이력(github.txt) — plugin_list.txt에도 없고 GitHub Topics로도
+        # 발견되지 않았지만, 이 서버에서 Git URL로 직접 설치했던 저장소는 여기서
+        # 계속 추적한다(원격 목록/토픽 유무와 무관하게 업데이트 확인을 이어가기 위함).
+        registry_items = []
+        seen_registry_ids = set()
+        excluded_for_registry = curated_ids | discovered_ids
+        for url in _load_github_registry():
+            _, owner, repo = _parse_repo_url(url)  # 호스트 무관(GitHub/Gitea 둘 다 처리)
+            if not owner or not repo:
+                continue
+            if repo in excluded_for_registry or repo in seen_registry_ids:
+                continue
+            item = _fetch_repo_entry(url, token, is_enabled_fn, gitea_cfg=gitea_cfg)
+            item["user_registered"] = True
+            seen_registry_ids.add(repo)
+            registry_items.append(item)
+
+        local_items = _scan_uncurated_installed(
+            curated_ids | discovered_ids | seen_registry_ids, is_enabled_fn
+        )
         _save_disk_cache()  # 이번 요청에서 새로 채워진 캐시를 재시작에도 살아남도록 저장
         return {
             "success": True,
-            "items": curated_items + discovered_items + local_items,
+            "items": curated_items + discovered_items + registry_items + local_items,
             "auto_update_enabled": auto_update_enabled,
         }
