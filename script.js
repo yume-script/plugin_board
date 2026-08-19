@@ -1025,8 +1025,10 @@
   }
 
   // ------------------------------------------------------------------
-  // "Git 저장소 URL 설치" 패널 — plugin_list.txt에 없는 임의의 GitHub 저장소도
-  // URL만 입력하면 바로 설치할 수 있다(update_manifest 규격을 따르는 저장소만).
+  // "Git 저장소 URL 설치" 패널 — plugin_list.txt에 없는 임의의 저장소도 URL만
+  // 입력하면 바로 설치할 수 있다(update_manifest 규격을 따르는 저장소만).
+  // GitHub뿐 아니라 다른 호스트(Gitea 등)도 지원하며, 인증이 필요하면
+  // https://아이디:비밀번호@host/owner/repo 형식으로 URL에 직접 담는다.
   // ------------------------------------------------------------------
   function wireGitInstallPanel() {
     const form = document.getElementById("pb-git-install-form");
@@ -1038,8 +1040,15 @@
       e.preventDefault();
       const url = input.value.trim();
       if (!url) return;
-      if (!/^https?:\/\/github\.com\/[^/]+\/[^/]+/i.test(url)) {
-        showToast("올바른 GitHub 저장소 주소를 입력해주세요. (예: https://github.com/user/repo)", true);
+      // GitHub뿐 아니라 어떤 호스트든(Gitea 등) 받아들인다. 자격증명이 담긴
+      // https://아이디:비밀번호@host/owner/repo 형식도 통과해야 하므로, 호스트
+      // 부분은 github.com으로 제한하지 않고 "owner/repo" 구조만 검사한다.
+      if (!/^https?:\/\/[^/]+\/[^/]+\/[^/]+/i.test(url)) {
+        showToast(
+          "올바른 저장소 주소를 입력해주세요. (예: https://github.com/user/repo 또는 " +
+            "https://아이디:비밀번호@gitea.example.com/user/repo)",
+          true
+        );
         return;
       }
 

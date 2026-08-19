@@ -203,6 +203,12 @@ GitHub뿐 아니라, **GitHub가 아닌 모든 호스트의 저장소를 Gitea �
 https://아이디:비밀번호@gitea.example.com/owner/repo
 ```
 
+**v2.32.1**: 위 방식으로 백엔드는 이미 지원하고 있었는데, "Git 저장소 URL 설치"
+패널의 **프론트엔드 입력 검증이 여전히 `github.com` 호스트만 허용하는 옛 정규식**을
+쓰고 있어서, Gitea 주소를 입력하면 백엔드까지 가지도 못하고 "올바른 GitHub 저장소
+주소를 입력해주세요" 오류로 막혔습니다. 호스트를 가리지 않는 정규식으로 고쳤고,
+입력창 placeholder도 두 형식을 모두 예시로 보여주도록 갱신했습니다.
+
 **왜 서버 설정(`GITEA_HOST` 등) 방식을 쓰지 않았나** — 초기 버전(v2.31.0)은
 `GITEA_HOST`/`GITEA_USERNAME`/`GITEA_PASSWORD`/`GITEA_TOKEN` 설정 필드로 Gitea
 서버 하나를 지정하는 방식이었습니다. 하지만 이러면 **Gitea 서버를 하나만 쓸 수
