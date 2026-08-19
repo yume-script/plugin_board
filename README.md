@@ -161,11 +161,19 @@ API 조회가 실패해도(예: rate limit) `VERSION` 파일만은 `main`/`maste
   파일시스템만으로 확인한 미등록 카드(§4) 순으로 병합되며, 상위 출처에 이미 있는
   저장소는 레지스트리 카드로 중복 표시되지 않습니다.
 
-### 2-3. 비공개(private) 저장소 설치 — GITHUB_TOKEN 필수
+### 2-3. 비공개(private) 저장소 설치 — GITHUB_TOKEN 또는 URL 내장 토큰
 
 GitHub는 더 이상 아이디+비밀번호 방식 인증을 지원하지 않습니다(2021년 폐지). 대신
-**Personal Access Token(PAT)**을 발급해 `GITHUB_TOKEN` 설정에 넣으면, 그 토큰이 읽기
-권한을 가진 비공개 저장소도 설치·업데이트·추적할 수 있습니다.
+**Personal Access Token(PAT)**이 필요하며, 두 가지 방법으로 쓸 수 있습니다.
+
+1. **설정의 `GITHUB_TOKEN`** — 공개 저장소 API 한도를 늘리는 용도로도 함께 쓰이는
+   범용 설정입니다. 이 토큰이 읽기 권한을 가진 비공개 저장소라면 별도 조치 없이
+   그대로 설치·업데이트·추적됩니다.
+2. **URL에 직접 담기** — `https://아이디:토큰@github.com/owner/repo` 형식으로 Git
+   저장소 URL 설치 패널에 붙여넣으면, 그 저장소만 이 토큰으로 인증합니다(§2-4에서
+   Gitea와 동일한 방식으로 자세히 설명). 서로 다른 계정의 비공개 저장소를 여러 개
+   섞어 쓸 때 유용합니다 — 저장소마다 다른 토큰을 URL에 담으면 되므로, 전역 설정
+   하나로는 안 되는 "저장소별로 다른 자격증명"을 지원합니다.
 
 - **공개 저장소용 토큰과의 차이**: §헤더의 "GitHub 토큰 발급 안내" 패널에서 안내하는
   토큰은 *아무 권한도 없는(Repository access: None)* 토큰이라 공개 저장소 API
@@ -185,20 +193,46 @@ GitHub는 더 이상 아이디+비밀번호 방식 인증을 지원하지 않습
   조직에서는 추가 설정(토큰에 조직 SSO 인가 등)이 필요할 수 있습니다. 문제가
   있으면 GitHub 조직 설정에서 토큰에 대한 SSO 인가 여부를 확인해주세요.
 
-### 2-4. 자체 호스팅 Gitea/Forgejo 서버 지원 (v2.31.0부터)
+### 2-4. 자체 호스팅 Gitea/Forgejo 서버 지원 — URL 자체가 곧 인증 정보 (v2.32.0)
 
-GitHub뿐 아니라, **설정에 `GITEA_HOST`를 지정하면 그 호스트의 Gitea(또는 Forgejo 등
-호환 포크) 서버 저장소도 동일하게 카드로 보여주고 설치·업데이트할 수 있습니다.**
-공식 Gitea REST API 문서를 기준으로 별도 구현했으며, GitHub 경로는 전혀 건드리지
-않고 완전히 독립적으로 동작합니다.
+GitHub뿐 아니라, **GitHub가 아닌 모든 호스트의 저장소를 Gitea 호환 REST API로
+자동 처리합니다.** `github.com`이 아닌 호스트는 서버별 허용 목록 없이 전부
+시도하며, 인증이 필요하면 **URL 자체에 자격증명을 담아서** 씁니다:
 
-**설정**
+```
+https://아이디:비밀번호@gitea.example.com/owner/repo
+```
 
-| 키 | 설명 |
-| --- | --- |
-| `GITEA_HOST` | 서버 호스트명만 입력(`https://` 없이). 예: `gitea.example.com`. 이 값과 정확히 일치하는 호스트의 저장소만 Gitea 경로로 처리됩니다 |
-| `GITEA_TOKEN` | 액세스 토큰(있으면 우선 사용, `Authorization: token` 방식) |
-| `GITEA_USERNAME` / `GITEA_PASSWORD` | 토큰이 없을 때 Basic Auth로 사용됩니다 — **GitHub와 달리 Gitea는 아이디+비밀번호 인증을 여전히 지원**하므로, 토큰 발급 없이 계정 정보만으로도 동작합니다 |
+**왜 서버 설정(`GITEA_HOST` 등) 방식을 쓰지 않았나** — 초기 버전(v2.31.0)은
+`GITEA_HOST`/`GITEA_USERNAME`/`GITEA_PASSWORD`/`GITEA_TOKEN` 설정 필드로 Gitea
+서버 하나를 지정하는 방식이었습니다. 하지만 이러면 **Gitea 서버를 하나만 쓸 수
+있고, 새로운 도메인이나 다른 계정을 추가로 쓰려면 설정을 계속 바꿔야 하는
+근본적인 한계**가 있었습니다. v2.32.0부터는 이 설정 필드들을 전부 없애고, 저장소
+주소(URL) 자체에 자격증명을 담아 쓰는 방식으로 바꿨습니다 — 저장소마다 완전히
+다른 Gitea 서버·다른 계정을 자유롭게 섞어 써도 서로 전혀 간섭하지 않습니다.
+**GitHub도 동일한 방식을 씁니다**: `https://아이디:토큰@github.com/owner/repo`
+형식으로 저장소별로 다른 자격증명(예: 다른 계정의 비공개 저장소)을 줄 수 있습니다.
+
+**동작 방식**
+
+1. URL에 `아이디:비밀번호@`(또는 `토큰@`, 아이디 자리만 채운 경우)가 있으면
+   `_extract_url_credentials()`가 분리해냅니다.
+2. **설치에 성공하면 자격증명이 담긴 URL을 그대로(정제하지 않고) `github.txt`
+   레지스트리에 기록**해, 다음에 대시보드를 열어 업데이트를 확인할 때도 같은
+   자격증명을 그대로 재사용합니다. 별도 서버 설정이 전혀 필요 없습니다. 이미
+   등록된 저장소를 자격증명이 담긴 URL로 다시 설치하면, 그 최신 URL로 갱신되어
+   계속 인증이 유지됩니다.
+   - ⚠️ **이 파일에는 비밀번호가 평문으로 저장됩니다.** 개인적으로 운영하는
+     서버라 문제가 없다는 전제로 선택한 방식입니다 — 여러 사람이 접근하는
+     서버라면 이 파일(`plugins/data/plugin_board/github.txt`)의 파일 권한을
+     직접 제한해두는 걸 권장합니다.
+3. GitHub 저장소는 URL의 `비밀번호` 자리(없으면 `아이디` 자리)를 API 토큰으로
+   사용합니다. 자격증명이 없는 URL은 여전히 설정의 `GITHUB_TOKEN`(공개 저장소
+   API 한도를 늘리는 범용 토큰)으로 폴백합니다 — 이 설정은 "특정 저장소 하나"가
+   아니라 "공개 저장소 전체"에 적용되는 서로 다른 성격이라 그대로 남겨뒀습니다.
+4. Gitea(비 GitHub) 저장소는 URL의 `아이디`+`비밀번호`를 그대로 Basic Auth로,
+   `아이디` 자리만 있으면(비밀번호 없이) 액세스 토큰(`Authorization: token`)으로
+   간주해 사용합니다.
 
 **내부적으로 쓰는 Gitea API 엔드포인트** (전부 공식 문서/커뮤니티 사례로 확인한 형식)
 
@@ -208,10 +242,6 @@ GitHub뿐 아니라, **설정에 `GITEA_HOST`를 지정하면 그 호스트의 G
   1.23부터 `?ref=` 방식이 제거되었기 때문에, 구버전·신버전 모두에서 동작하는
   경로 방식으로 통일했습니다.
 - 소스 다운로드: `GET /api/v1/repos/{owner}/{repo}/archive/{branch}.zip`
-- 인증 헤더: `GITEA_TOKEN`이 있으면 `Authorization: token <TOKEN>`, 없으면
-  `GITEA_USERNAME`/`GITEA_PASSWORD`로 `Authorization: Basic <base64>`. **Gitea
-  1.23부터 Basic Auth가 폐지 예정**이라는 공지가 있어, 가능하면 비밀번호 대신
-  토큰 사용을 권장하는 안내를 설정 설명에 넣어뒀습니다.
 
 **GitHub와의 차이점(현재 지원 범위)**
 
@@ -225,6 +255,11 @@ GitHub뿐 아니라, **설정에 `GITEA_HOST`를 지정하면 그 호스트의 G
   접두어)해서 같은 저장소 이름이라도 서로 캐시가 섞이지 않습니다.
 - 카드 하단 링크는 GitHub 저장소면 `GitHub` 버튼, Gitea 저장소면 `Gitea` 버튼으로
   자동 구분됩니다.
+
+**실제 검증한 시나리오** — 완전히 다른 두 Gitea 서버(도메인 자체가 다름)를 각각
+다른 계정으로, 설정에 아무것도 등록하지 않고 동시에 설치·추적하는 것까지
+테스트해 정상 동작을 확인했습니다. GitHub 저장소 설치/업데이트 회귀 테스트도
+함께 통과했습니다.
 
 ### 3. 설치 여부 — 서버 파일시스템을 직접 확인
 
@@ -428,13 +463,9 @@ Repository access: None)** 개인 액세스 토큰만 넣어도 시간당 5,000�
 
 | 키             | UI 유형     | 필수 | 설명                                             |
 | ------------- | --------- | -- | ------------------------------------------------ |
-| `GITHUB_TOKEN` | password | 선택 | GitHub Personal Access Token. 설명/토픽 조회(`api.github.com`)의 무인증 한도(60/시간)를 늘리는 용도. 목록 조회(`raw.githubusercontent.com`)와 설치용 소스 다운로드(`codeload.github.com`)는 공개 저장소라면 토큰 없이도 동작. **비공개(private) 저장소를 설치/추적하려면 이 토큰이 필수**이며, 그 저장소에 대한 읽기 권한이 있어야 함(§2-3 참고) |
+| `GITHUB_TOKEN` | password | 선택 | GitHub Personal Access Token. 설명/토픽 조회(`api.github.com`)의 무인증 한도(60/시간)를 늘리는 용도. 목록 조회(`raw.githubusercontent.com`)와 설치용 소스 다운로드(`codeload.github.com`)는 공개 저장소라면 토큰 없이도 동작. 자격증명이 담기지 않은 URL의 폴백 토큰으로도 쓰입니다. **저장소별로 다른 자격증명이 필요하면(비공개 저장소 등) URL에 직접 담는 방식(§2-3, §2-4)을 쓰세요** |
 | `EXTRA_DISCOVERY_TOPICS` | text | 선택 | GitHub Topics 발견(§2-1) 대상에 추가할 토픽(콤마 구분). 기본 `bookoasis-plugin`에 더해집니다. 흔한 단어는 무관한 저장소를 대량으로 끌어올 수 있어 구체적인 이름만 권장 |
 | `AUTO_UPDATE_ENABLED` | checkbox | 선택 | **기본값 꺼짐.** 켜면 활성화(사용 중)된 플러그인에 새 버전이 있을 때 화면을 열 때마다 자동으로 업데이트를 시도합니다(§9 참고) |
-| `GITEA_HOST` | text | 선택 | 자체 호스팅 Gitea/Forgejo 서버 호스트명(`https://` 없이). 설정하면 이 호스트의 저장소는 GitHub 대신 Gitea API로 처리됩니다(§2-4) |
-| `GITEA_TOKEN` | password | 선택 | Gitea 액세스 토큰. 있으면 아래 사용자명/비밀번호보다 우선 사용 |
-| `GITEA_USERNAME` | text | 선택 | Gitea 사용자명. `GITEA_TOKEN`이 없을 때 비밀번호와 함께 Basic Auth로 사용 |
-| `GITEA_PASSWORD` | password | 선택 | Gitea 비밀번호. `GITEA_TOKEN`이 없을 때만 사용(Basic Auth) |
 
 ### 사용 중인 플러그인 자동 업데이트 (선택, 기본 꺼짐)
 
