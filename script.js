@@ -248,7 +248,12 @@
         const result = await callPluginBoardAction(dbType, {
           action: isUpdate ? "update" : "install_git",
           plugin_id: item.id,
-          git_url: item.url,
+          // 업데이트일 때는 화면에 보이는 URL(item.url)을 보내지 않는다 — 이 값은
+          // 카드 표시용으로 자격증명을 뺀 주소라서, 그대로 보내면 백엔드가
+          // github.txt 레지스트리에 저장된 자격증명 포함 URL을 찾아 쓰는 폴백
+          // 로직이 아예 발동하지 않는다(git_url이 비어있을 때만 그 폴백이
+          // 동작하므로). 신규설치일 때만 방금 알아낸 URL을 그대로 전달한다.
+          ...(isUpdate ? {} : { git_url: item.url }),
         });
 
         if (result && result.success) {
@@ -997,7 +1002,10 @@
         const result = await callPluginBoardAction(dbType, {
           action: "update",
           plugin_id: item.id,
-          git_url: item.url,
+          // git_url을 일부러 안 보낸다 — 화면 표시용 item.url은 자격증명이
+          // 빠져 있어서, 그대로 보내면 github.txt 레지스트리에 저장된 자격증명
+          // 포함 URL을 백엔드가 찾아 쓰지 못한다(git_url이 비어있을 때만 그
+          // 조회가 동작함). plugin_id만 보내 백엔드가 직접 찾도록 한다.
         });
         if (result && result.success) {
           succeeded.push(item.title || item.id);
