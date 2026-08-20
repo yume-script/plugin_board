@@ -580,6 +580,31 @@
   opacity: 0.9;
 }
 
+.pb-foot-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* GitHub 다운로드 횟수는 API로 못 구해서 참고용 인기도 지표(별 개수)로 대신 표시 */
+.pb-stars {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #d4a72c;
+  white-space: nowrap;
+  cursor: help;
+}
+.pb-stars svg {
+  width: 11px;
+  height: 11px;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
 .pb-btn-group {
   display: flex;
   align-items: center;

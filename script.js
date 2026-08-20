@@ -65,6 +65,17 @@
   const GITEA_ICON =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>';
 
+  // 별(star) 아이콘 — GitHub 다운로드 횟수는 API로 못 구해서, 공개로 제공되는
+  // 별 개수를 참고용 인기도 지표로 대신 보여줄 때 쓴다.
+  const STAR_ICON =
+    '<svg viewBox="0 0 16 16"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>';
+
+  function formatStars(n) {
+    if (typeof n !== "number") return String(n);
+    if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, "") + "k";
+    return String(n);
+  }
+
   // 설치 아이콘(다운로드), 업데이트 아이콘(리프레시), 완료 아이콘(체크) — 전부 자체 SVG
   const INSTALL_ICON =
     '<svg viewBox="0 0 16 16"><path d="M8 0a.75.75 0 0 1 .75.75v7.19l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V.75A.75.75 0 0 1 8 0Z"/><path d="M1.5 10.5a.75.75 0 0 1 .75.75v2A.75.75 0 0 0 3 14h10a.75.75 0 0 0 .75-.75v-2a.75.75 0 0 1 1.5 0v2A2.25 2.25 0 0 1 13 15.5H3A2.25 2.25 0 0 1 .75 13.25v-2a.75.75 0 0 1 .75-.75Z"/></svg>';
@@ -854,8 +865,23 @@
     // 설치됨+최신 상태에서는 "설치됨 · vX.X.X" 배지가 버전을 이미 보여주므로,
     // 상단 버전 스탬프를 또 붙이면 같은 버전이 두 번 표시된다. 그 경우에만 생략한다.
     const showStamp = !(item.installed && !item.has_update);
+    const footLeft = document.createElement("div");
+    footLeft.className = "pb-foot-left";
     if (showStamp) {
-      foot.appendChild(stamp);
+      footLeft.appendChild(stamp);
+    }
+    // GitHub 다운로드 횟수는 API로 구할 수 없어(비소유 저장소의 클론/다운로드
+    // 통계는 GitHub가 비공개로 막아둠) 참고용 인기도 지표인 별(star) 개수로
+    // 대신 보여준다. GitHub/Gitea 응답에 이미 포함된 값이라 추가 호출이 없다.
+    if (item.stars !== null && item.stars !== undefined) {
+      const starsEl = document.createElement("span");
+      starsEl.className = "pb-stars";
+      starsEl.innerHTML = `${STAR_ICON}${formatStars(item.stars)}`;
+      starsEl.title = `별(star) ${item.stars.toLocaleString()}개 — 다운로드 횟수가 아닌 참고용 인기도 지표입니다`;
+      footLeft.appendChild(starsEl);
+    }
+    if (footLeft.childNodes.length > 0) {
+      foot.appendChild(footLeft);
     }
     foot.appendChild(btnGroup);
 

@@ -342,18 +342,19 @@ def _gitea_fetch_description_info(host, owner, repo, gitea_cfg):
             "tags": [],  # Gitea 토픽 발견은 v1 미지원(GitHub Topics 전용 기능)
             "url": data.get("html_url") or fallback_url,
             "default_branch": data.get("default_branch"),
+            "stars": data.get("stars_count"),
             "error": False,
         }
     except urllib.error.HTTPError as exc:
         hint = " (인증 정보를 확인해주세요)" if exc.code in (401, 403) else ""
         info = {
             "desc": "Gitea API 호출 오류 (HTTP %s)%s" % (exc.code, hint),
-            "tags": [], "url": fallback_url, "default_branch": None, "error": True,
+            "tags": [], "url": fallback_url, "default_branch": None, "stars": None, "error": True,
         }
     except Exception as exc:
         info = {
             "desc": "Gitea 저장소 정보를 불러오지 못했습니다 (%s)" % exc,
-            "tags": [], "url": fallback_url, "default_branch": None, "error": True,
+            "tags": [], "url": fallback_url, "default_branch": None, "stars": None, "error": True,
         }
 
     _DESC_CACHE[key] = (time.time(), info)
@@ -691,6 +692,7 @@ def _fetch_description_info(owner, repo, token):
             "tags": api_data.get("topics") or [],
             "url": api_data.get("html_url") or ("https://github.com/%s/%s" % (owner, repo)),
             "default_branch": api_data.get("default_branch"),
+            "stars": api_data.get("stargazers_count"),
             "error": False,
         }
     except urllib.error.HTTPError as exc:
@@ -699,6 +701,7 @@ def _fetch_description_info(owner, repo, token):
             "tags": [],
             "url": "https://github.com/%s/%s" % (owner, repo),
             "default_branch": None,
+            "stars": None,
             "error": True,
         }
     except Exception as exc:
@@ -707,6 +710,7 @@ def _fetch_description_info(owner, repo, token):
             "tags": [],
             "url": "https://github.com/%s/%s" % (owner, repo),
             "default_branch": None,
+            "stars": None,
             "error": True,
         }
 
@@ -744,6 +748,7 @@ def _fetch_remote_info(owner, repo, token):
         "version_label": version_info["version_label"],
         "remote_version": version_info["remote_version"],
         "url": desc_info["url"],
+        "stars": desc_info.get("stars"),
         "error": desc_info["error"] or version_info["error"],
     }
 
@@ -879,6 +884,7 @@ def _build_discovered_item(repo_json, version_info, is_enabled_fn, excluded_ids)
         "features": [],
         "version_label": version_label,
         "url": repo_json.get("html_url") or ("https://github.com/%s" % key),
+        "stars": repo_json.get("stargazers_count"),
         "error": bool(version_info and version_info.get("error")),
         "installed": installed,
         "installed_version": installed_version,
@@ -944,6 +950,7 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None):
         "features": [],
         "version_label": info["version_label"],
         "url": info["url"],
+        "stars": info.get("stars"),
         "error": info["error"],
         "installed": installed,
         "installed_version": installed_version,
@@ -987,6 +994,7 @@ def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg):
         "features": [],
         "version_label": version_info["version_label"],
         "url": desc_info["url"],
+        "stars": desc_info.get("stars"),
         "error": desc_info["error"] or version_info["error"],
         "installed": installed,
         "installed_version": installed_version,
