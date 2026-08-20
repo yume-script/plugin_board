@@ -1352,7 +1352,8 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
     category_tab = {
         "title": "플러그인게시판",
         "icon": "fa-solid fa-layer-group",
-        "order": 90,
+        "order": 50,
+        "sessions": ["general"],  # 선택 사항. 아래 "노출 세션 지정" 참고
     }
 
     # GitHub raw 기반 자동 업데이트 계약 (plugin_board 자기 자신의 업데이트용)
