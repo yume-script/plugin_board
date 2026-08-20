@@ -704,6 +704,13 @@
   flex-shrink: 0;
 }
 
+/* 관리자가 아니어서 설치/업데이트가 비활성화된 상태 — 정보성 문구로만 표시 */
+.pb-installed-badge-muted {
+  color: var(--app-text-muted);
+  border-color: var(--app-border, rgba(255,255,255,0.25));
+  background: transparent;
+}
+
 /* 이미 설치된 플러그인의 업데이트 버튼은 GitHub 버튼과 동일한 톤 유지,
    신규 설치 버튼만 살짝 옅은 톤으로 구분 */
 .pb-install-btn-update {

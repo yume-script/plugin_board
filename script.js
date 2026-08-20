@@ -9,6 +9,7 @@
   const tallyEl = document.getElementById("pb-tally");
 
   let allItems = [];
+  let isAdmin = true; // 서버 응답을 받기 전 기본값 — 응답에서 갱신됨
   let activeFilter = "all";
 
   // ------------------------------------------------------------------
@@ -225,6 +226,17 @@
       const badge = document.createElement("span");
       badge.className = "pb-installed-badge";
       badge.innerHTML = `${CHECK_ICON}설치됨${item.installed_version ? " · v" + item.installed_version : ""}`;
+      return badge;
+    }
+
+    if (!isAdmin) {
+      // 관리자가 아니면 백엔드도 설치/업데이트 요청을 거부하므로, 눌러서
+      // 오류를 보게 하는 대신 처음부터 비활성 안내로 대체한다.
+      const badge = document.createElement("span");
+      badge.className = "pb-installed-badge pb-installed-badge-muted";
+      badge.innerHTML = item.installed
+        ? `${UPDATE_ICON}업데이트 필요 (관리자 전용)`
+        : `${INSTALL_ICON}미설치 (관리자 전용)`;
       return badge;
     }
 
@@ -735,8 +747,9 @@
     head.appendChild(headMain);
 
     // 설정(⚙) 버튼은 설치 여부·하단 관리 행 유무와 무관하게 항상 카드 헤더
-    // 우측 상단 같은 자리에 고정한다(찾기 쉽게).
-    if (item.installed && item.has_config) {
+    // 우측 상단 같은 자리에 고정한다(찾기 쉽게). 단, 관리자가 아니면 애초에
+    // 표시하지 않는다(백엔드도 동일 기준으로 관리 액션 자체를 거부함).
+    if (item.installed && item.has_config && isAdmin) {
       const headGearBtn = document.createElement("button");
       headGearBtn.type = "button";
       headGearBtn.className = "pb-icon-btn pb-card-head-gear";
@@ -854,7 +867,9 @@
     // plugin_board 자기 자신은 삭제/비활성화가 백엔드에서 항상 거부되므로
     // 관리 행(스위치·삭제) 자체를 표시하지 않는다. 설정(⚙) 버튼은 이제
     // 카드 헤더 우측 상단에 항상 고정 표시되므로 이 행과는 무관하다.
-    if (item.installed && item.id !== "plugin_board") {
+    // 관리자가 아니면 이 행 전체(활성화 스위치·삭제)도 표시하지 않는다 —
+    // 백엔드도 동일 기준으로 toggle/delete 요청을 거부한다.
+    if (item.installed && item.id !== "plugin_board" && isAdmin) {
       parts.push(buildManageRow(item));
     }
     card.append(...parts);
@@ -946,6 +961,10 @@
       }
 
       allItems = Array.isArray(json.items) ? json.items : [];
+      isAdmin = json.is_admin !== false; // 명시적으로 false일 때만 비관리자로 간주
+
+      const gitPanel = document.getElementById("pb-git-panel");
+      if (gitPanel) gitPanel.hidden = !isAdmin; // 설치도 관리자만 가능하므로 패널 자체를 숨김
       statusEl.hidden = true;
       gridEl.hidden = false;
       buildFiltersAndTally();

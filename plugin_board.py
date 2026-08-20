@@ -35,6 +35,23 @@ import zipfile
 from plugins.metadata.base import BaseMetadataProvider
 
 
+def _is_admin_session():
+    """현재 요청의 Flask 세션이 관리자(role == 'admin')인지 확인한다
+    (api/auth.py의 admin_required 데코레이터와 동일한 판별 기준).
+    플러그인 메서드도 같은 Flask 요청 컨텍스트 안에서 실행되므로 session을
+    직접 읽을 수 있다. 세션을 못 읽는 예외적인 상황(요청 컨텍스트 밖에서 호출
+    되는 등)에는 기존 동작을 깨지 않도록 안전하게 True(관리자로 간주)로
+    폴백한다 — role 기반 세션이 없는 구버전 코어에서도 버튼이 계속 보이도록."""
+    try:
+        from flask import session
+        role = session.get("role")
+        if role is None:
+            return True  # role 정보 자체가 없는 환경(구버전 등) — 기존처럼 표시
+        return role == "admin"
+    except Exception:
+        return True
+
+
 # ----------------------------------------------------------------------
 # 카드로 보여줄 GitHub 저장소 목록은 이 파일에서 매번 실시간으로 읽어온다.
 # 한 줄에 저장소 주소 하나, '#'으로 시작하는 줄은 주석으로 무시한다.
@@ -1376,6 +1393,14 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         action = str(item_data.get("action", "")).strip().lower()
         plugin_id = str(item_data.get("plugin_id", "")).strip()
 
+        # 설치/업데이트/삭제/활성화·비활성화/설정 조회는 관리자만 할 수 있게 한다.
+        # 화면(설정 버튼)에서는 이미 숨겨두지만, API를 직접 호출하는 우회까지
+        # 막기 위해 백엔드에서도 동일하게 확인한다(api/auth.py의 admin_required와
+        # 같은 기준). refresh_list는 카드 목록만 새로고침하는 무해한 동작이라
+        # 제외한다.
+        if action in ("install_git", "update", "toggle", "delete", "get_config") and not _is_admin_session():
+            return False, "관리자만 사용할 수 있는 기능입니다."
+
         if action == "get_config":
             # /api/media/metadata/plugins/manage 응답의 config 필드만 믿지 않고,
             # 가이드 문서(§4)에 명시된 저장 위치(settings 테이블의
@@ -1471,6 +1496,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         cfg = self.get_plugin_config(db_type, default={})
         token = cfg.get("GITHUB_TOKEN") or None
         auto_update_enabled = bool(cfg.get("AUTO_UPDATE_ENABLED"))
+        is_admin = _is_admin_session()
 
         repo_urls = _fetch_repo_list(token)
         if not repo_urls:
@@ -1597,4 +1623,5 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             "success": True,
             "items": curated_items + discovered_items + registry_items + local_items,
             "auto_update_enabled": auto_update_enabled,
+            "is_admin": is_admin,
         }
