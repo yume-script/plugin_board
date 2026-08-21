@@ -1450,13 +1450,18 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             token = cfg.get("GITHUB_TOKEN") or None
             urls = _fetch_repo_list(token, force=True)
             _TOPIC_CACHE.clear()  # GitHub Topics 발견 캐시도 함께 강제 갱신
+            # 설치된 버전 vs 최신 버전 비교(has_update)에 쓰이는 캐시도 함께
+            # 비운다 — 이걸 안 비우면 "목록 새로고침"을 눌러도 버전 비교 결과는
+            # 최대 1시간(버전 캐시 TTL) 동안 그대로 남아있는 문제가 있었다.
+            _VERSION_CACHE.clear()
+            _DESC_CACHE.clear()
             _save_disk_cache()
             if not urls:
                 return False, (
                     "plugin_list.txt를 다시 가져오지 못했습니다 "
                     "(%s 조회 실패)" % REMOTE_PLUGIN_LIST_URL
                 )
-            return True, "플러그인 목록을 새로 불러왔습니다 (%d개 저장소)." % len(urls)
+            return True, "플러그인 목록과 버전 정보를 새로 불러왔습니다 (%d개 저장소)." % len(urls)
 
         if action == "toggle":
             if not plugin_id:
