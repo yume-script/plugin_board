@@ -1,0 +1,29 @@
+<div class="pv-settings">
+  <p class="pv-settings-desc">
+    각 플러그인마다 보관함(세션)별로 표시 방식을 고르세요: <strong>기본</strong>(개별 사이드바 탭 그대로),
+    <strong>허브에 합치기</strong>(이 탭 안으로 통합, 개별 탭은 숨김), <strong>완전히 숨기기</strong>(허브에도 안 넣고 개별 탭도 숨김).
+    "허브에 합치기"로 선택하면 아래 세션별 레인에 칩이 추가되며, 칩을 드래그해 탭 순서를 바꾸거나 다른 세션으로 옮길 수 있습니다.
+    정지된 플러그인은 목록에 계속 표시되며 선택 값은 그대로 보존됩니다 — 선택만 잠겨서(변경 불가)
+    다시 활성화하면 예전 선택이 자동으로 복원됩니다. 정지 중에는 탭에도 나타나지 않습니다.
+  </p>
+  <div class="pv-bulk-toolbar">
+    <button type="button" class="pv-bulk-btn" data-pv-role="select-all">일괄 합치기</button>
+    <button type="button" class="pv-bulk-btn" data-pv-role="deselect-all">일괄 기본으로</button>
+    <span class="pv-bulk-note">정지된 플러그인은 잠겨있어 일괄 처리에서 제외되며, "완전히 숨기기"는 일괄 처리 대상이 아닙니다.</span>
+  </div>
+  <div class="pv-grid" data-pv-role="grid">
+    <div class="pv-settings-empty">플러그인 목록을 불러오는 중...</div>
+  </div>
+  <div class="pv-lanes-wrap">
+    <h4 class="pv-lanes-heading">세션별 탭 순서</h4>
+    <div class="pv-lanes" data-pv-role="lanes"></div>
+  </div>
+  <div class="pv-excluded-wrap">
+    <h4 class="pv-lanes-heading">목록에서 제외할 플러그인</h4>
+    <p class="pv-settings-desc pv-excluded-desc">
+      쉼표(,)로 구분한 플러그인 고유 ID. 여기 적힌 플러그인은 허브의 카드 목록/탭 후보에 아예 나타나지 않습니다.
+      기본값은 <code>bookoasis_plugins_viewer</code>(플러그인 모아보기) — 허브 안에 또 다른 통합 뷰어가 들어가는 걸 막기 위함입니다.
+    </p>
+    <input type="text" class="pv-excluded-input" name="EXCLUDED_IDS" data-pv-role="excluded-input" placeholder="예: bookoasis_plugins_viewer, some_other_plugin_id">
+  </div>
+</div>
