@@ -991,6 +991,8 @@
 
       const gitPanel = document.getElementById("pb-git-panel");
       if (gitPanel) gitPanel.hidden = !isAdmin; // 설치도 관리자만 가능하므로 패널 자체를 숨김
+      const zipPanel = document.getElementById("pb-zip-panel");
+      if (zipPanel) zipPanel.hidden = !isAdmin;
       statusEl.hidden = true;
       gridEl.hidden = false;
       buildFiltersAndTally();
@@ -1133,6 +1135,82 @@
   }
 
   // ------------------------------------------------------------------
+  // "ZIP 파일 업로드 설치" 패널 — VERSION + 파이썬 코드가 담긴 zip을 base64로
+  // 인코딩해 install_zip 액션으로 보낸다. plugin_manager의 파일 선택 버튼
+  // 패턴(숨긴 input + 텍스트 표시용 버튼)을 그대로 따른다.
+  // ------------------------------------------------------------------
+  function wireZipInstallPanel() {
+    const form = document.getElementById("pb-zip-install-form");
+    const fileInput = document.getElementById("pb-zip-file-input");
+    const selectBtn = document.getElementById("pb-zip-file-select-btn");
+    const fileLabel = document.getElementById("pb-zip-file-label");
+    const installBtn = document.getElementById("pb-zip-install-btn");
+    if (!form || !fileInput || !selectBtn || !fileLabel || !installBtn) return;
+
+    selectBtn.addEventListener("click", () => fileInput.click());
+
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (file) {
+        fileLabel.textContent = file.name;
+        selectBtn.classList.add("pb-zip-file-selected");
+      } else {
+        fileLabel.textContent = "ZIP 압축 파일 선택…";
+        selectBtn.classList.remove("pb-zip-file-selected");
+      }
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) {
+        showToast("설치할 ZIP 파일을 먼저 선택해주세요.", true);
+        return;
+      }
+      if (!/\.zip$/i.test(file.name)) {
+        showToast("ZIP(.zip) 파일만 업로드할 수 있습니다.", true);
+        return;
+      }
+
+      const origText = installBtn.textContent;
+      installBtn.disabled = true;
+      selectBtn.disabled = true;
+      installBtn.textContent = "설치 중…";
+
+      try {
+        const zipDataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(reader.error || new Error("파일을 읽지 못했습니다."));
+          reader.readAsDataURL(file);
+        });
+
+        const result = await callPluginBoardAction(getDbType(), {
+          action: "install_zip",
+          zip_data: zipDataUrl, // "data:...;base64,XXXX" 형태 — 백엔드가 접두어를 알아서 제거
+          filename: file.name,
+        });
+
+        if (result && result.success) {
+          fileInput.value = "";
+          fileLabel.textContent = "ZIP 압축 파일 선택…";
+          selectBtn.classList.remove("pb-zip-file-selected");
+          reloadAfterInstall(result.message || "설치가 완료되었습니다.");
+        } else {
+          showToast((result && result.error) || "ZIP 설치에 실패했습니다.", true);
+        }
+      } catch (err) {
+        console.error(`${LOG_PREFIX} ZIP 설치 오류:`, err);
+        showToast(`설치 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
+      } finally {
+        installBtn.disabled = false;
+        selectBtn.disabled = false;
+        installBtn.textContent = origText;
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------
   // "목록 새로고침" 버튼 — 캐시(최대 1시간) 만료를 기다리지 않고 plugin_list.txt를
   // 즉시 다시 불러온다. 실제 설치 상태에는 영향 없음(순수 목록 재조회).
   // ------------------------------------------------------------------
@@ -1167,5 +1245,6 @@
 
   wireRefreshListButton();
   wireGitInstallPanel();
+  wireZipInstallPanel();
   load();
 })();

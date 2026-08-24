@@ -245,8 +245,14 @@
 }
 
 /* ---------- Git 저장소 URL 설치 패널 ---------- */
-.pb-git-panel {
+.pb-install-row {
   margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.pb-git-panel {
   background: var(--app-bg-card);
   border: 1px solid var(--app-border, rgba(255,255,255,0.1));
   border-radius: 10px;
@@ -342,6 +348,24 @@
   opacity: 0.65;
   cursor: progress;
   transform: none;
+}
+
+/* 파일 선택 버튼 — 텍스트 입력창처럼 보이도록(왼쪽 정렬, 무채색 배경) 오버라이드.
+   실제 <input type="file">은 숨겨두고 이 버튼이 그 자리를 대신한다. */
+.pb-zip-file-select-btn {
+  flex: 1 1 260px;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--app-text-secondary, var(--app-text-primary)) !important;
+  background: var(--app-input-bg, var(--app-bg-main)) !important;
+  border: 1px solid var(--app-border, rgba(255,255,255,0.15)) !important;
+  font-weight: 500 !important;
+}
+.pb-zip-file-select-btn.pb-zip-file-selected {
+  color: var(--app-text-primary) !important;
 }
 
 .pb-git-panel-tip {

@@ -48,24 +48,48 @@
     </div>
   </details>
 
-  <section class="pb-git-panel" id="pb-git-panel">
-    <div class="pb-git-panel-head">
-      <div class="pb-git-panel-title">
-        <span class="pb-git-panel-icon"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></span>
-        <h2>Git 저장소 URL 설치</h2>
+  <div class="pb-install-row">
+    <section class="pb-git-panel" id="pb-git-panel">
+      <div class="pb-git-panel-head">
+        <div class="pb-git-panel-title">
+          <span class="pb-git-panel-icon"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></span>
+          <h2>Git 저장소 URL 설치</h2>
+        </div>
+        <span class="pb-git-panel-badge">GIT 설치</span>
       </div>
-      <span class="pb-git-panel-badge">GIT 설치</span>
-    </div>
-    <form id="pb-git-install-form" class="pb-git-panel-form">
-      <input type="text" id="pb-git-install-input" placeholder="https://github.com/user/repo (또는 https://아이디:비밀번호@호스트/owner/repo)" autocomplete="off" />
-      <button type="submit" id="pb-git-install-btn">Git 설치</button>
-    </form>
-    <p class="pb-git-panel-tip">
-      💡 팁: 저장소 이름과 같은 메인 모듈 파일(예: <code>my_plugin/my_plugin.py</code>)이
-      있는 BookOasis 플러그인 저장소만 지원합니다. 설치 시 대상 폴더 전체를 저장소
-      내용으로 교체합니다.
-    </p>
-  </section>
+      <form id="pb-git-install-form" class="pb-git-panel-form">
+        <input type="text" id="pb-git-install-input" placeholder="https://github.com/user/repo (또는 https://아이디:비밀번호@호스트/owner/repo)" autocomplete="off" />
+        <button type="submit" id="pb-git-install-btn">Git 설치</button>
+      </form>
+      <p class="pb-git-panel-tip">
+        💡 팁: 저장소 이름과 같은 메인 모듈 파일(예: <code>my_plugin/my_plugin.py</code>)이
+        있는 BookOasis 플러그인 저장소만 지원합니다. 설치 시 대상 폴더 전체를 저장소
+        내용으로 교체합니다.
+      </p>
+    </section>
+
+    <section class="pb-git-panel" id="pb-zip-panel">
+      <div class="pb-git-panel-head">
+        <div class="pb-git-panel-title">
+          <span class="pb-git-panel-icon"><svg viewBox="0 0 16 16"><path d="M4 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4.828a2 2 0 0 0-.586-1.414l-2.828-2.828A2 2 0 0 0 9.172 0H4Zm0 1h4v2a1 1 0 0 0 1 1h2v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1Zm2.5 6a.5.5 0 0 1 .5.5v.634l1.146-.647a.5.5 0 0 1 .708.647l-.708.707.708.707a.5.5 0 0 1-.708.707L7 9.607V10.5a.5.5 0 0 1-1 0v-.893l-1.146.647a.5.5 0 0 1-.708-.707l.708-.707-.708-.707a.5.5 0 1 1 .708-.707L6 8.134V7.5a.5.5 0 0 1 .5-.5Z"/></svg></span>
+          <h2>ZIP 파일 업로드 설치</h2>
+        </div>
+        <span class="pb-git-panel-badge">ZIP 업로드</span>
+      </div>
+      <form id="pb-zip-install-form" class="pb-git-panel-form">
+        <input type="file" id="pb-zip-file-input" accept=".zip" hidden />
+        <button type="button" id="pb-zip-file-select-btn" class="pb-zip-file-select-btn">
+          <span id="pb-zip-file-label">ZIP 압축 파일 선택…</span>
+        </button>
+        <button type="submit" id="pb-zip-install-btn">ZIP 설치</button>
+      </form>
+      <p class="pb-git-panel-tip">
+        💡 팁: <code>VERSION</code> 파일과 파이썬 코드가 포함된 <code>.zip</code>을
+        선택하세요. <code>update_manifest</code>를 선언한 저장소의 zip이면 이후에도
+        Git 저장소와 동일하게 업데이트를 계속 추적합니다.
+      </p>
+    </section>
+  </div>
 
   <nav class="pb-filters" id="pb-filters"></nav>
 
