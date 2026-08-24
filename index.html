@@ -72,21 +72,24 @@
       <div class="pb-git-panel-head">
         <div class="pb-git-panel-title">
           <span class="pb-git-panel-icon"><svg viewBox="0 0 16 16"><path d="M4 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4.828a2 2 0 0 0-.586-1.414l-2.828-2.828A2 2 0 0 0 9.172 0H4Zm0 1h4v2a1 1 0 0 0 1 1h2v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1Zm2.5 6a.5.5 0 0 1 .5.5v.634l1.146-.647a.5.5 0 0 1 .708.647l-.708.707.708.707a.5.5 0 0 1-.708.707L7 9.607V10.5a.5.5 0 0 1-1 0v-.893l-1.146.647a.5.5 0 0 1-.708-.707l.708-.707-.708-.707a.5.5 0 1 1 .708-.707L6 8.134V7.5a.5.5 0 0 1 .5-.5Z"/></svg></span>
-          <h2>ZIP 파일 업로드 설치</h2>
+          <h2>압축 파일 업로드 설치</h2>
         </div>
-        <span class="pb-git-panel-badge">ZIP 업로드</span>
+        <span class="pb-git-panel-badge">압축파일 업로드</span>
       </div>
       <form id="pb-zip-install-form" class="pb-git-panel-form">
-        <input type="file" id="pb-zip-file-input" accept=".zip" hidden />
+        <input type="file" id="pb-zip-file-input" accept=".zip,.tar,.tar.gz,.tgz,.tar.bz2,.tbz2,.tar.xz,.txz,.7z" hidden />
         <button type="button" id="pb-zip-file-select-btn" class="pb-zip-file-select-btn">
-          <span id="pb-zip-file-label">ZIP 압축 파일 선택…</span>
+          <span id="pb-zip-file-label">압축 파일 선택…</span>
         </button>
-        <button type="submit" id="pb-zip-install-btn">ZIP 설치</button>
+        <button type="submit" id="pb-zip-install-btn">설치</button>
       </form>
       <p class="pb-git-panel-tip">
-        💡 팁: <code>VERSION</code> 파일과 파이썬 코드가 포함된 <code>.zip</code>을
-        선택하세요. <code>update_manifest</code>를 선언한 저장소의 zip이면 이후에도
-        Git 저장소와 동일하게 업데이트를 계속 추적합니다.
+        💡 팁: <code>VERSION</code> 파일과 파이썬 코드가 포함된 <code>.zip</code> /
+        <code>.tar</code> / <code>.tar.gz</code> / <code>.tar.bz2</code> /
+        <code>.tar.xz</code> 파일을 선택하세요(<code>.7z</code>는 서버에
+        <code>py7zr</code>가 설치돼 있어야 동작합니다). <code>update_manifest</code>를
+        선언한 저장소의 압축 파일이면 이후에도 Git 저장소와 동일하게 업데이트를
+        계속 추적합니다.
       </p>
     </section>
   </div>

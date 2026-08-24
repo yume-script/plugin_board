@@ -1139,6 +1139,9 @@
   // 인코딩해 install_zip 액션으로 보낸다. plugin_manager의 파일 선택 버튼
   // 패턴(숨긴 input + 텍스트 표시용 버튼)을 그대로 따른다.
   // ------------------------------------------------------------------
+  const PB_SUPPORTED_ARCHIVE_RE = /\.(zip|tar|tar\.gz|tgz|tar\.bz2|tbz2|tar\.xz|txz|7z)$/i;
+  const PB_ARCHIVE_DEFAULT_LABEL = "압축 파일 선택…";
+
   function wireZipInstallPanel() {
     const form = document.getElementById("pb-zip-install-form");
     const fileInput = document.getElementById("pb-zip-file-input");
@@ -1155,7 +1158,7 @@
         fileLabel.textContent = file.name;
         selectBtn.classList.add("pb-zip-file-selected");
       } else {
-        fileLabel.textContent = "ZIP 압축 파일 선택…";
+        fileLabel.textContent = PB_ARCHIVE_DEFAULT_LABEL;
         selectBtn.classList.remove("pb-zip-file-selected");
       }
     });
@@ -1164,11 +1167,14 @@
       e.preventDefault();
       const file = fileInput.files && fileInput.files[0];
       if (!file) {
-        showToast("설치할 ZIP 파일을 먼저 선택해주세요.", true);
+        showToast("설치할 압축 파일을 먼저 선택해주세요.", true);
         return;
       }
-      if (!/\.zip$/i.test(file.name)) {
-        showToast("ZIP(.zip) 파일만 업로드할 수 있습니다.", true);
+      if (!PB_SUPPORTED_ARCHIVE_RE.test(file.name)) {
+        showToast(
+          "지원하지 않는 압축 형식입니다. zip / tar / tar.gz / tar.bz2 / tar.xz / 7z 파일만 업로드할 수 있습니다.",
+          true
+        );
         return;
       }
 
@@ -1186,18 +1192,18 @@
         });
 
         const result = await callPluginBoardAction(getDbType(), {
-          action: "install_zip",
+          action: "install_zip", // 액션 이름은 하위 호환용, 파일명 확장자로 형식을 판별한다
           zip_data: zipDataUrl, // "data:...;base64,XXXX" 형태 — 백엔드가 접두어를 알아서 제거
           filename: file.name,
         });
 
         if (result && result.success) {
           fileInput.value = "";
-          fileLabel.textContent = "ZIP 압축 파일 선택…";
+          fileLabel.textContent = PB_ARCHIVE_DEFAULT_LABEL;
           selectBtn.classList.remove("pb-zip-file-selected");
           reloadAfterInstall(result.message || "설치가 완료되었습니다.");
         } else {
-          showToast((result && result.error) || "ZIP 설치에 실패했습니다.", true);
+          showToast((result && result.error) || "설치에 실패했습니다.", true);
         }
       } catch (err) {
         console.error(`${LOG_PREFIX} ZIP 설치 오류:`, err);

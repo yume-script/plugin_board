@@ -30,6 +30,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import tarfile
 import zipfile
 
 from plugins.metadata.base import BaseMetadataProvider
@@ -1062,6 +1063,111 @@ def _extract_zip_safe(zip_path, extract_dir):
         zf.extractall(extract_dir)
 
 
+# tar 계열(.tar/.tar.gz/.tgz/.tar.bz2/.tbz2/.tar.xz/.txz) 확장자 목록.
+# 순서 중요 — endswith 검사 시 더 긴 확장자를 먼저 검사해야 하므로 길이 내림차순.
+_ARCHIVE_TAR_EXTS = (".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz2", ".txz", ".tar")
+
+
+def _detect_archive_kind(filename):
+    """파일명 확장자로 압축 형식을 판별한다. zip/tar 계열/7z만 인식."""
+    name = (filename or "").strip().lower()
+    if name.endswith(".zip"):
+        return "zip"
+    if name.endswith(_ARCHIVE_TAR_EXTS):
+        return "tar"
+    if name.endswith(".7z"):
+        return "7z"
+    return None
+
+
+def _extract_tar_safe(archive_path, extract_dir):
+    """tar/tar.gz/tar.bz2/tar.xz 안전 압축 해제. tar도 zip과 동일하게 경로 이탈
+    (tar slip) 위험이 있고, 추가로 심볼릭/하드 링크로 압축 폴더 밖 임의 경로를
+    참조하게 만들 수 있어 이 두 종류의 멤버는 아예 거부한다. 압축을 열어보기
+    전까지는 실제 형식(gzip/bzip2/xz/무압축)을 알 수 없으므로 "r:*"로 자동 감지."""
+    with tarfile.open(archive_path, mode="r:*") as tf:
+        members = tf.getmembers()
+
+        if len(members) > _MAX_ZIP_ENTRIES:
+            raise ValueError(
+                "압축 안의 파일 개수가 너무 많습니다 (%d개, 최대 %d개). "
+                "'.git' 폴더 등 불필요한 항목이 포함되지 않았는지 확인해주세요."
+                % (len(members), _MAX_ZIP_ENTRIES)
+            )
+
+        total_uncompressed = sum(m.size for m in members if m.isfile())
+        if total_uncompressed > _MAX_ZIP_UNCOMPRESSED_BYTES:
+            raise ValueError(
+                "압축을 풀었을 때 총 용량이 너무 큽니다 (%.1fMB, 최대 %.0fMB)."
+                % (total_uncompressed / (1024 * 1024), _MAX_ZIP_UNCOMPRESSED_BYTES / (1024 * 1024))
+            )
+
+        for m in members:
+            if m.issym() or m.islnk():
+                raise ValueError(
+                    "보안 경고: 압축 파일 안에 심볼릭/하드 링크가 포함되어 있어 거부합니다: %s" % m.name
+                )
+            _safe_join(extract_dir, m.name)  # 경로 이탈 시 예외 발생
+
+        tf.extractall(extract_dir)  # 위에서 멤버 단위 검증을 이미 마쳤으므로 안전
+
+
+def _extract_7z_safe(archive_path, extract_dir):
+    """7z 안전 압축 해제. 파이썬 표준 라이브러리에는 7z 해제 기능이 없어
+    서드파티 py7zr이 필요하다 — 없으면(대부분의 서버가 그럴 것) 명확한 안내
+    메시지로 우아하게 실패시키고, 있으면 zip/tar와 동일한 기준(개수 상한·
+    경로 이탈 검증)으로 안전하게 해제한다. import 실패가 plugin_board의 다른
+    기능(카드 조회 등)에는 전혀 영향을 주지 않도록 이 함수 안에서만 시도한다."""
+    try:
+        import py7zr
+    except ImportError:
+        raise ValueError(
+            "이 서버에는 7z 압축 해제 라이브러리(py7zr)가 설치되어 있지 않아 "
+            "7z 파일을 처리할 수 없습니다. zip 또는 tar(.tar/.tar.gz/.tar.bz2/"
+            ".tar.xz) 형식으로 다시 올려주세요."
+        )
+
+    with py7zr.SevenZipFile(archive_path, mode="r") as zf:
+        names = zf.getnames()
+        if len(names) > _MAX_ZIP_ENTRIES:
+            raise ValueError(
+                "압축 안의 파일 개수가 너무 많습니다 (%d개, 최대 %d개)."
+                % (len(names), _MAX_ZIP_ENTRIES)
+            )
+        for name in names:
+            _safe_join(extract_dir, name)  # 경로 이탈 시 예외 발생
+
+        total_uncompressed = 0
+        try:
+            for info in zf.list():
+                total_uncompressed += getattr(info, "uncompressed", 0) or 0
+        except Exception:
+            total_uncompressed = 0  # 크기 정보를 못 가져와도 해제 자체는 진행(개수 제한은 이미 확인함)
+        if total_uncompressed > _MAX_ZIP_UNCOMPRESSED_BYTES:
+            raise ValueError(
+                "압축을 풀었을 때 총 용량이 너무 큽니다 (%.1fMB, 최대 %.0fMB)."
+                % (total_uncompressed / (1024 * 1024), _MAX_ZIP_UNCOMPRESSED_BYTES / (1024 * 1024))
+            )
+
+        zf.extractall(path=extract_dir)
+
+
+def _extract_archive_safe(archive_path, extract_dir, filename):
+    """파일명 확장자로 압축 형식을 판별해 알맞은 안전 해제 함수로 위임한다."""
+    kind = _detect_archive_kind(filename)
+    if kind == "zip":
+        _extract_zip_safe(archive_path, extract_dir)
+    elif kind == "tar":
+        _extract_tar_safe(archive_path, extract_dir)
+    elif kind == "7z":
+        _extract_7z_safe(archive_path, extract_dir)
+    else:
+        raise ValueError(
+            "지원하지 않는 압축 형식입니다: %s "
+            "(zip, tar/tar.gz/tar.bz2/tar.xz, 7z만 지원)" % (filename or "(파일명 없음)")
+        )
+
+
 def _find_extracted_root(extract_dir):
     entries = [
         e for e in os.listdir(extract_dir)
@@ -1073,8 +1179,8 @@ def _find_extracted_root(extract_dir):
 
 
 # ========================================================================
-# Zip 파일 업로드 설치 — madnite1/plugin_manager의 _install_from_zip을 그대로
-# 참고해 재구현. plugin_manager와 달리 소스 메타를 sqlite가 아니라 이미 있는
+# Zip/tar/7z 파일 업로드 설치 — madnite1/plugin_manager의 _install_from_zip을
+# 참고해 재구현하고, zip 외에 tar 계열·7z(라이브러리 있을 때)도 지원하도록 확장. plugin_manager와 달리 소스 메타를 sqlite가 아니라 이미 있는
 # github.txt 레지스트리(§2-2)에 기록해, 설치 방식(zip이든 Git URL이든)과
 # 무관하게 동일한 방식으로 업데이트를 계속 추적한다.
 # ========================================================================
@@ -1416,9 +1522,10 @@ def _validate_plugin_source(plugin_dir, detected_id):
     return all_ok, checks
 
 
-def _install_from_zip(zip_data_b64, filename, db_type):
-    """업로드된 zip(base64)으로 플러그인을 설치한다.
-    1) base64 디코드 → 임시 폴더에 안전하게 압축 해제(Zip Slip/개수/용량 검증)
+def _install_from_archive(archive_data_b64, filename, db_type):
+    """업로드된 압축 파일(base64, zip/tar 계열/7z)로 플러그인을 설치한다.
+    1) base64 디코드 → 파일명 확장자로 형식 판별 → 임시 폴더에 안전하게 압축
+       해제(경로 이탈/개수/용량 검증 — 형식별로 _extract_archive_safe에 위임)
     2) 플러그인 루트·ID 지능 탐색 + ID 형식·예약어 검증
     3) 정적 소스 검증(코드 실행 없음) — 실패 시 설치 중단(기존 폴더 미변경)
     4) 검증 통과 후에만 기존 폴더 교체
@@ -1427,30 +1534,37 @@ def _install_from_zip(zip_data_b64, filename, db_type):
        이후에도 계속 업데이트를 추적할 수 있도록 한다. 없으면 로컬 플러그인으로 남는다.
     6) 활성화 + 핫 리로드 + 실제 로드 여부 재확인(실패 시 자동 롤백)
     """
-    if not zip_data_b64:
+    if not archive_data_b64:
         return False, "압축 파일 데이터가 누락되었습니다."
-    if "," in zip_data_b64:
-        zip_data_b64 = zip_data_b64.split(",", 1)[1]  # data:...;base64, 접두어 제거
+    if "," in archive_data_b64:
+        archive_data_b64 = archive_data_b64.split(",", 1)[1]  # data:...;base64, 접두어 제거
+
+    archive_kind = _detect_archive_kind(filename)
+    if not archive_kind:
+        return False, (
+            "지원하지 않는 압축 형식입니다: %s (zip, tar/tar.gz/tar.bz2/tar.xz, 7z만 지원)"
+            % (filename or "(파일명 없음)")
+        )
 
     try:
-        zip_bytes = base64.b64decode(zip_data_b64)
+        archive_bytes = base64.b64decode(archive_data_b64)
     except Exception as exc:
-        return False, "zip 데이터를 해석하지 못했습니다: %s" % exc
+        return False, "압축 파일 데이터를 해석하지 못했습니다: %s" % exc
 
-    tmp_dir = tempfile.mkdtemp(prefix="plugin_board_zip_")
+    tmp_dir = tempfile.mkdtemp(prefix="plugin_board_archive_")
     try:
-        zip_path = os.path.join(tmp_dir, "upload.zip")
-        with open(zip_path, "wb") as f:
-            f.write(zip_bytes)
+        archive_path = os.path.join(tmp_dir, "upload_" + (filename or "archive"))
+        with open(archive_path, "wb") as f:
+            f.write(archive_bytes)
 
         extract_dir = os.path.join(tmp_dir, "extract")
         os.makedirs(extract_dir, exist_ok=True)
         try:
-            _extract_zip_safe(zip_path, extract_dir)
-        except zipfile.BadZipFile:
-            return False, "올바른 zip 압축 파일 형식이 아닙니다."
+            _extract_archive_safe(archive_path, extract_dir, filename)
+        except (zipfile.BadZipFile, tarfile.ReadError):
+            return False, "올바른 압축 파일 형식이 아닙니다(%s로 인식됨)." % archive_kind
         except Exception as exc:
-            return False, "zip 압축 해제에 실패했습니다: %s" % exc
+            return False, "압축 해제에 실패했습니다: %s" % exc
 
         plugin_root = _find_plugin_root_dir(extract_dir)
         plugin_id = _detect_plugin_id_from_dir(plugin_root, fallback_name=filename)
@@ -1517,16 +1631,16 @@ def _install_from_zip(zip_data_b64, filename, db_type):
         warns = [c["detail"] for c in source_checks if c.get("warn")]
         new_version = _local_version(plugin_id) or "?"
         result_msg = (
-            "zip 압축 파일을 통해 '%s' 플러그인이 성공적으로 설치 및 활성화되었습니다! "
-            "(버전 v%s, 검증 통과: %s)" % (plugin_id, new_version, ", ".join(passed))
+            "압축 파일(%s)을 통해 '%s' 플러그인이 성공적으로 설치 및 활성화되었습니다! "
+            "(버전 v%s, 검증 통과: %s)" % (archive_kind, plugin_id, new_version, ", ".join(passed))
         )
         if warns:
             result_msg += " 경고: " + "; ".join(warns)
         return True, result_msg
-    except zipfile.BadZipFile:
-        return False, "올바른 zip 압축 파일 형식이 아닙니다."
+    except (zipfile.BadZipFile, tarfile.ReadError):
+        return False, "올바른 압축 파일 형식이 아닙니다."
     except Exception as exc:
-        return False, "zip 플러그인 설치 중 오류가 발생했습니다: %s" % exc
+        return False, "압축 파일 플러그인 설치 중 오류가 발생했습니다: %s" % exc
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -1944,11 +2058,13 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             return False, "관리자만 사용할 수 있는 기능입니다."
 
         if action == "install_zip":
+            # 액션 이름은 하위 호환을 위해 유지하지만, zip 외에 tar 계열(.tar/.tar.gz/
+            # .tar.bz2/.tar.xz)과 7z(라이브러리가 있으면)도 파일명 확장자로 판별해 처리한다.
             zip_data = str(item_data.get("zip_data", "")).strip()
             filename = str(item_data.get("filename", "")).strip()
             if not zip_data:
                 return False, "zip_data가 필요합니다."
-            return _install_from_zip(zip_data, filename, db_type)
+            return _install_from_archive(zip_data, filename, db_type)
 
         if action == "get_config":
             # /api/media/metadata/plugins/manage 응답의 config 필드만 믿지 않고,
