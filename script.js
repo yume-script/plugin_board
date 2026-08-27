@@ -904,9 +904,11 @@
 
   function render() {
     gridEl.innerHTML = "";
-    const items = allItems.filter(
-      (it) => activeFilter === "all" || it.type === activeFilter
-    );
+    const items = allItems.filter((it) => {
+      if (activeFilter === "all") return true;
+      if (activeFilter === "uninstalled") return !it.installed;
+      return it.type === activeFilter;
+    });
     if (items.length === 0) {
       const empty = document.createElement("p");
       empty.className = "pb-status";
@@ -926,6 +928,7 @@
     });
     const types = Object.keys(counts).sort();
     const installedCount = allItems.filter((it) => it.installed).length;
+    const uninstalledCount = allItems.length - installedCount;
     const discoveredCount = allItems.filter((it) => it.discovered).length;
 
     // 집계
@@ -973,6 +976,8 @@
       const item = allItems.find((it) => it.type === t);
       filtersEl.appendChild(makeBtn(t, (item && item.type_label) || t, false));
     });
+    // "설치 여부"는 type과 별개 축이라 마지막에 별도 필터로 추가한다.
+    filtersEl.appendChild(makeBtn("uninstalled", `미설치 (${uninstalledCount})`, false));
   }
 
   async function load() {
