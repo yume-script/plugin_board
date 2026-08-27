@@ -384,10 +384,18 @@
 }
 
 /* ---------- 필터 탭 ---------- */
+.pb-filters-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 18px 0 12px;
+}
 .pb-filters {
   display: flex;
   gap: 6px;
-  margin: 18px 0 12px;
+  margin: 0;
   flex-wrap: wrap;
 }
 .pb-filter-btn {
@@ -409,6 +417,38 @@
   background: color-mix(in srgb, var(--app-accent) 20%, var(--app-bg-card) 80%);
   border-color: color-mix(in srgb, var(--app-accent) 55%, transparent);
   color: var(--app-accent);
+}
+
+/* 제작자별 필터 드롭다운 */
+.pb-owner-filter-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.pb-owner-filter-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--app-text-muted);
+  white-space: nowrap;
+}
+.pb-owner-filter-select {
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--app-bg-card);
+  border: 1px solid var(--app-border, rgba(255,255,255,0.14));
+  color: var(--app-text-secondary, var(--app-text-primary));
+  border-radius: 7px;
+  padding: 7px 10px;
+  cursor: pointer;
+  max-width: 220px;
+}
+.pb-owner-filter-select:hover {
+  border-color: color-mix(in srgb, var(--app-accent) 45%, transparent);
+}
+.pb-owner-filter-select:focus {
+  outline: none;
+  border-color: var(--app-accent);
 }
 
 /* ---------- 보드 / 상태 ---------- */

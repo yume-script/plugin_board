@@ -7,10 +7,12 @@
   const gridEl = document.getElementById("pb-grid");
   const filtersEl = document.getElementById("pb-filters");
   const tallyEl = document.getElementById("pb-tally");
+  const ownerFilterWrapEl = document.getElementById("pb-owner-filter-wrap");
 
   let allItems = [];
   let isAdmin = true; // 서버 응답을 받기 전 기본값 — 응답에서 갱신됨
   let activeFilter = "all";
+  let activeOwner = "all"; // 제작자별 필터 — activeFilter(분류/설치여부)와 별개 축, AND로 결합
 
   // ------------------------------------------------------------------
   // 설치/업데이트가 끝난 뒤 Ctrl+F5(강력 새로고침)와 동등한 효과를 낸다.
@@ -905,6 +907,7 @@
   function render() {
     gridEl.innerHTML = "";
     const items = allItems.filter((it) => {
+      if (activeOwner !== "all" && (it.owner || "") !== activeOwner) return false;
       if (activeFilter === "all") return true;
       if (activeFilter === "uninstalled") return !it.installed;
       return it.type === activeFilter;
@@ -978,6 +981,52 @@
     });
     // "설치 여부"는 type과 별개 축이라 마지막에 별도 필터로 추가한다.
     filtersEl.appendChild(makeBtn("uninstalled", `미설치 (${uninstalledCount})`, false));
+
+    // 제작자별 필터 — owner 값 종류가 많아질 수 있어 버튼 나열 대신 드롭다운으로
+    // 구성한다. activeFilter(분류/설치여부)와는 별개 축이라 AND로 함께 적용된다.
+    const ownerCounts = {};
+    allItems.forEach((it) => {
+      if (it.owner) ownerCounts[it.owner] = (ownerCounts[it.owner] || 0) + 1;
+    });
+    const owners = Object.keys(ownerCounts).sort((a, b) => a.localeCompare(b));
+
+    ownerFilterWrapEl.innerHTML = "";
+    if (owners.length > 0) {
+      const label = document.createElement("label");
+      label.className = "pb-owner-filter-label";
+      label.textContent = "제작자";
+      label.htmlFor = "pb-owner-filter-select";
+
+      const select = document.createElement("select");
+      select.id = "pb-owner-filter-select";
+      select.className = "pb-owner-filter-select";
+
+      const allOpt = document.createElement("option");
+      allOpt.value = "all";
+      allOpt.textContent = `전체 제작자 (${allItems.length})`;
+      select.appendChild(allOpt);
+
+      owners.forEach((owner) => {
+        const opt = document.createElement("option");
+        opt.value = owner;
+        opt.textContent = `${owner} (${ownerCounts[owner]})`;
+        select.appendChild(opt);
+      });
+
+      // 이전에 선택돼 있던 제작자가 이번 데이터에도 여전히 있으면 유지하고,
+      // 없어졌으면(예: 그 제작자의 마지막 플러그인을 방금 삭제) "전체"로 되돌린다.
+      activeOwner = owners.includes(activeOwner) ? activeOwner : "all";
+      select.value = activeOwner;
+
+      select.addEventListener("change", () => {
+        activeOwner = select.value;
+        render();
+      });
+
+      ownerFilterWrapEl.append(label, select);
+    } else {
+      activeOwner = "all";
+    }
   }
 
   async function load() {
