@@ -183,6 +183,25 @@ def _headers(token):
     return headers
 
 
+def _github_api_error_message(exc, has_token):
+    """GitHub/Gitea API 오류를 원인별로 구분해 사람이 읽을 메시지를 만든다.
+    401(Bad credentials)과 403(rate limit 또는 권한 부족)을 뭉뚱그려 "호출
+    제한 또는 오류"로만 표시하면, 실제로는 토큰이 잘못됐거나 만료된 경우에도
+    사용자가 rate limit 문제로 오인하게 된다."""
+    if exc.code == 401:
+        if has_token:
+            return (
+                "GitHub 인증 실패(401) — 설정한 GITHUB_TOKEN이 잘못됐거나 만료/폐기됐을 "
+                "수 있습니다. GitHub에서 토큰을 다시 확인하거나 새로 발급해 설정에 저장해주세요."
+            )
+        return "GitHub 인증 실패(401) — 원인을 알 수 없는 인증 오류입니다. 잠시 후 다시 시도해주세요."
+    if exc.code == 403:
+        if has_token:
+            return "GitHub API 호출 제한(403) — 인증된 토큰 기준 한도(시간당 5,000회)를 초과했을 수 있습니다."
+        return "GitHub API 호출 제한(403) — 무인증 한도(시간당 60회)를 초과했습니다. GITHUB_TOKEN 설정을 권장합니다."
+    return "GitHub API 오류(%s)" % exc.code
+
+
 def _http_get_json(url, token=None):
     req = urllib.request.Request(url, headers=_headers(token))
     with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT) as resp:
@@ -657,7 +676,7 @@ def _fetch_description_info(owner, repo, token):
         }
     except urllib.error.HTTPError as exc:
         info = {
-            "desc": "GitHub API 호출 제한 또는 오류(%s)" % exc.code,
+            "desc": _github_api_error_message(exc, bool(token)),
             "tags": [],
             "url": "https://github.com/%s/%s" % (owner, repo),
             "default_branch": None,
@@ -1793,6 +1812,8 @@ def _install_or_update(owner, repo, token=None):
             return True, "'%s' 설치/업데이트 완료 (브랜치: %s, 버전: v%s, 저장소 전체 교체)" % (
                 repo, branch, new_version,
             )
+        except urllib.error.HTTPError as exc:
+            last_error = _github_api_error_message(exc, bool(token))
         except Exception as exc:
             last_error = str(exc)
         finally:
