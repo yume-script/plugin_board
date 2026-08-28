@@ -1029,6 +1029,25 @@
     }
   }
 
+  // list_warning(예: plugin_list.txt 조회 실패)을 카드 목록 위에 작은 배너로
+  // 표시한다. 전체 화면을 대체하는 statusEl 오류와 달리, 카드는 정상 렌더링된
+  // 상태에서 곁들이는 비차단(non-blocking) 알림이다. null/undefined면 숨긴다.
+  function showListWarning(message) {
+    let banner = document.getElementById("pb-list-warning");
+    if (!message) {
+      if (banner) banner.hidden = true;
+      return;
+    }
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = "pb-list-warning";
+      banner.className = "pb-list-warning";
+      gridEl.parentNode.insertBefore(banner, gridEl);
+    }
+    banner.textContent = "⚠ " + message;
+    banner.hidden = false;
+  }
+
   async function load() {
     console.log(`${LOG_PREFIX} 데이터 요청: ${dataUrl()}`);
     try {
@@ -1051,6 +1070,11 @@
       gridEl.hidden = false;
       buildFiltersAndTally();
       render();
+
+      // plugin_list.txt 조회는 실패했지만(네트워크 문제 등) 설치된 플러그인/
+      // 레지스트리 항목은 정상 표시된 경우 — 전체 화면을 막지 않고 작은
+      // 경고 배너로만 알린다(success는 여전히 true).
+      showListWarning(json.list_warning || null);
 
       const errorCount = allItems.filter((it) => it.error).length;
       console.log(

@@ -115,7 +115,7 @@ _DESC_CACHE_TTL_SECONDS = 86400  # 24시간 — 설명·토픽은 거의 바뀌�
 
 _VERSION_CACHE = {}  # {"owner/repo": (timestamp, {version_label, remote_version, error})}
 _VERSION_CACHE_TTL_SECONDS = 3600  # 1시간 — 버전은 더 자주 바뀔 수 있으므로 짧게 캐시
-_REQUEST_TIMEOUT = 6
+_REQUEST_TIMEOUT = 10  # 6초는 서버-GitHub 간 왕복 지연이 큰 환경에서 일시적으로 짧을 수 있어 늘림
 _DOWNLOAD_TIMEOUT = 30
 
 # ----------------------------------------------------------------------
@@ -2169,17 +2169,17 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         is_admin = _is_admin_session()
 
         repo_urls = _fetch_repo_list(token)
-        if not repo_urls:
-            return {
-                "success": False,
-                "error": (
-                    "플러그인 목록을 가져오지 못했습니다 "
-                    "(%s 조회 실패)" % REMOTE_PLUGIN_LIST_URL
-                ),
-            }
+        list_fetch_failed = not repo_urls
+        # plugin_list.txt 조회에 실패해도(네트워크 문제 등) 전체 화면을 막지 않는다.
+        # 이미 설치된 플러그인은 GitHub 접속과 무관하게 서버 파일시스템만으로도
+        # 확인 가능하고(§3), github.txt 레지스트리(§2-2)도 별도 조회 경로라
+        # plugin_list.txt 하나가 실패했다고 전부 안 보이게 할 이유가 없다.
+        # 실패했다는 사실만 "list_warning"으로 함께 내려보내 화면에 작게 알린다.
 
         # plugin_board 자기 자신이 원격 목록에 없다면 자동으로 포함시켜, 개발 중인
         # 버전도 다른 플러그인과 동일하게 카드 + 업데이트 버튼으로 관리할 수 있게 한다.
+        # (plugin_list.txt 조회 자체가 실패해 repo_urls가 비어있어도 이 로직 덕분에
+        # plugin_board 카드는 계속 시도된다.)
         existing_repo_names = {_parse_owner_repo(u)[1] for u in repo_urls}
         if "plugin_board" not in existing_repo_names:
             repo_urls = repo_urls + [SELF_REPO_URL]
@@ -2289,9 +2289,15 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             curated_ids | discovered_ids | seen_registry_ids, is_enabled_fn
         )
         _save_disk_cache()  # 이번 요청에서 새로 채워진 캐시를 재시작에도 살아남도록 저장
-        return {
+        response = {
             "success": True,
             "items": curated_items + discovered_items + registry_items + local_items,
             "auto_update_enabled": auto_update_enabled,
             "is_admin": is_admin,
         }
+        if list_fetch_failed:
+            response["list_warning"] = (
+                "plugin_list.txt를 가져오지 못해 큐레이션 목록이 최신이 아닐 수 있습니다 "
+                "(%s 조회 실패). 이미 설치된 플러그인과 직접 설치 이력은 정상 표시됩니다." % REMOTE_PLUGIN_LIST_URL
+            )
+        return response
