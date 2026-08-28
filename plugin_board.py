@@ -3,9 +3,10 @@
 plugin_board — BookOasis 카테고리 탭 플러그인
 
 좌측 사이드바에 "플러그인게시판" 탭을 추가하고, BookOasis 플러그인 저장소 목록을
-색인 카드 형태로 보여준다. 카드 내용(설명·버전)은 코드에 직접 적어두지 않고, 표시할
-저장소 주소 목록 자체도 GitHub의 plugin_list.txt에서 화면을 열 때마다 실시간으로
-가져온다 — 목록을 갱신하려면 코드 배포 없이 그 파일만 수정하면 된다.
+색인 카드 형태로 보여준다. 카드로 보여줄 저장소 목록 자체는 GitHub Topics 검색
+(`bookoasis-plugin` 토픽)으로 실시간 수집한다 — 별도로 관리하는 큐레이션 목록
+파일이 없으므로, 새 플러그인 저장소는 그 저장소에 토픽만 달면 자동으로 카드에
+나타난다.
 
 이 버전부터는 외부 plugin_manager 플러그인 없이도 카드에서 바로 "신규설치"/"업데이트"를
 수행할 수 있다. 설치 방식은 madnite1/plugin_manager가 쓰는 것과 동일한 원리를 그대로
@@ -53,31 +54,18 @@ def _is_admin_session():
         return True
 
 
-# ----------------------------------------------------------------------
-# 카드로 보여줄 GitHub 저장소 목록은 이 파일에서 매번 실시간으로 읽어온다.
-# 한 줄에 저장소 주소 하나, '#'으로 시작하는 줄은 주석으로 무시한다.
-# 목록을 바꾸고 싶으면 이 URL이 가리키는 GitHub 저장소의 plugin_list.txt만
-# 수정하면 되고, plugin_board 코드를 다시 배포할 필요가 없다.
-# ----------------------------------------------------------------------
-REMOTE_PLUGIN_LIST_URL = (
-    "https://raw.githubusercontent.com/yume-script/plugin_board/main/plugin_list.txt"
-)
-
-# plugin_board 자기 자신은 개발 중인 저장소라 plugin_list.txt에 없을 수 있다.
-# 코어의 별도 자동 업데이트 화면에 의존하지 않고 이 카드 목록 안에서도 스스로의
-# 업데이트 여부를 확인/설치할 수 있도록, 목록에 없으면 자동으로 포함시킨다.
+# plugin_board 자기 자신도 GitHub Topics 검색으로 발견될 수 있지만("미검수" 표시가
+# 붙는 것을 피하고, 검색 결과에 아직 안 잡히는 개발 중인 버전도 항상 다룰 수 있도록)
+# 별도 경로로 직접 조회해 카드 목록 맨 앞에 고정한다. 코어의 별도 자동 업데이트
+# 화면에 의존하지 않고 이 카드 목록 안에서도 스스로의 업데이트 여부를 확인/설치한다.
 SELF_REPO_URL = "https://github.com/yume-script/plugin_board"
 
-_LIST_CACHE = {"ts": 0.0, "urls": []}
-_LIST_CACHE_TTL_SECONDS = 3600  # 1시간마다 목록을 다시 조회
-
 # ----------------------------------------------------------------------
-# 하이브리드 발견(discovery) — plugin_list.txt의 큐레이션 목록과 별개로,
-# GitHub Topics에 이 토픽이 달린 저장소를 자동으로 찾아 "미검수" 카드로 함께
-# 보여준다(Search API 사용). 기본값은 "bookoasis-plugin" 하나뿐이지만, 이
-# 리스트에 문자열을 더 추가하면(코드 배포로) 여러 토픽을 동시에 검색할 수
-# 있다. 코드를 건드리지 않고 서버별로 토픽을 추가하고 싶으면 플러그인 설정의
-# EXTRA_DISCOVERY_TOPICS(콤마 구분)를 쓰면 된다 — 둘은 합쳐져서 함께 검색된다.
+# GitHub Topics에 이 토픽이 달린 저장소를 자동으로 찾아 카드로 보여준다(Search
+# API 사용). 기본값은 "bookoasis-plugin" 하나뿐이지만, 이 리스트에 문자열을
+# 더 추가하면(코드 배포로) 여러 토픽을 동시에 검색할 수 있다. 코드를 건드리지
+# 않고 서버별로 토픽을 추가하고 싶으면 플러그인 설정의 EXTRA_DISCOVERY_TOPICS
+# (콤마 구분)를 쓰면 된다 — 둘은 합쳐져서 함께 검색된다.
 # ----------------------------------------------------------------------
 DISCOVERY_TOPICS = ["bookoasis-plugin"]
 
@@ -85,12 +73,12 @@ DISCOVERY_TOPICS = ["bookoasis-plugin"]
 # 전혀 무관한 저장소가 대량으로 섞여 들어올 수 있다(실측: 흔한 이름 하나로
 # 무관한 저장소 50개 이상이 잡힌 사례 있음). 그래서 두 단계로 방어한다:
 #   1) VERSION 파일을 실제로 찾은(=BookOasis 플러그인일 가능성이 높은) 저장소만
-#      발견 카드로 인정 — 이미 설치되어 있는 저장소는 예외적으로 항상 허용
+#      카드로 인정 — 이미 설치되어 있는 저장소는 예외적으로 항상 허용
 #   2) 그래도 남는 개수를 아래 상한으로 한 번 더 자른다
 _MAX_DISCOVERED_ITEMS = 30
 
 _TOPIC_CACHE = {}  # {"topic1,topic2": (timestamp, [repo_json, ...])}
-_TOPIC_CACHE_TTL_SECONDS = 3600  # 1시간 — plugin_list.txt와 동일한 주기
+_TOPIC_CACHE_TTL_SECONDS = 3600  # 1시간마다 검색 결과를 다시 조회
 _SEARCH_REQUEST_TIMEOUT = 8
 
 # GitHub API/README만으로는 "검색형 메타데이터"인지 "카테고리 탭 UI"인지 구분할 수
@@ -132,7 +120,6 @@ _CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache.j
 def _save_disk_cache():
     try:
         data = {
-            "list": {"ts": _LIST_CACHE.get("ts", 0.0), "urls": _LIST_CACHE.get("urls", [])},
             "desc": {k: [ts, v] for k, (ts, v) in _DESC_CACHE.items()},
             "version": {k: [ts, v] for k, (ts, v) in _VERSION_CACHE.items()},
             "topic": {k: [ts, v] for k, (ts, v) in _TOPIC_CACHE.items()},
@@ -151,11 +138,6 @@ def _load_disk_cache():
             return
         with open(_CACHE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-
-        list_data = data.get("list") or {}
-        if isinstance(list_data.get("urls"), list):
-            _LIST_CACHE["ts"] = float(list_data.get("ts", 0.0))
-            _LIST_CACHE["urls"] = list_data["urls"]
 
         for k, pair in (data.get("desc") or {}).items():
             if isinstance(pair, list) and len(pair) == 2:
@@ -397,31 +379,6 @@ def _gitea_fetch_version_info(host, owner, repo, default_branch, gitea_cfg):
     return info
 
 
-def _fetch_repo_list(token, force=False):
-    """REMOTE_PLUGIN_LIST_URL(plugin_list.txt)에서 카드로 보여줄 GitHub 저장소
-    주소 목록을 읽어온다. 한 줄에 주소 하나, '#'으로 시작하는 줄은 주석으로 무시.
-    1시간 캐시하며, 조회에 실패하면 이전에 성공적으로 받아온 목록을 그대로
-    반환해 화면이 완전히 비지 않도록 한다(그마저도 없으면 빈 목록)."""
-    now = time.time()
-    if not force and _LIST_CACHE["urls"] and (now - _LIST_CACHE["ts"]) < _LIST_CACHE_TTL_SECONDS:
-        return _LIST_CACHE["urls"]
-
-    try:
-        text = _http_get_text(REMOTE_PLUGIN_LIST_URL, token)
-        urls = []
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            urls.append(line)
-        if urls:
-            _LIST_CACHE["urls"] = urls
-            _LIST_CACHE["ts"] = now
-        return urls
-    except Exception:
-        return _LIST_CACHE["urls"]  # 실패 시 이전 캐시(있다면)라도 유지
-
-
 # ========================================================================
 # 로컬 설치 상태 확인 (plugins/metadata 디렉토리를 직접 조회 — 외부 플러그인 불필요)
 # ========================================================================
@@ -437,10 +394,10 @@ def _plugins_root_dir():
 
 def _github_registry_path():
     """Git URL로 설치(또는 업데이트)한 저장소 주소를 기록해두는 파일 경로.
-    plugin_list.txt(큐레이션)나 GitHub Topics(커뮤니티 자율 태그)에 없어도 —
-    둘 다 이 플러그인이 통제할 수 없는 외부 신호라 사라지거나 바뀔 수 있음 —
-    이 서버에서 실제로 설치했던 이력만큼은 독자적으로 보존해, 이후에도 계속
-    업데이트 확인 대상에 남도록 한다."""
+    GitHub Topics(커뮤니티 자율 태그)에 없어도 — 검색 결과는 이 플러그인이
+    통제할 수 없는 외부 신호라 사라지거나 바뀔 수 있음 — 이 서버에서 실제로
+    설치했던 이력만큼은 독자적으로 보존해, 이후에도 계속 업데이트 확인
+    대상에 남도록 한다."""
     return os.path.join(_plugins_root_dir(), "data", "plugin_board", "github.txt")
 
 
@@ -557,8 +514,9 @@ def _find_module_file(plugin_dir, plugin_id):
 
 def _read_local_class_attrs(plugin_id):
     """설치된 플러그인의 메인 .py에서 name/id/is_searchable/category_tab 등
-    주요 클래스 속성을 AST로만(코드 실행 없이) 읽어온다. plugin_list.txt 목록에 없는
-    플러그인의 표시 이름·분류를 최대한 정확히 추정하는 데 사용한다."""
+    주요 클래스 속성을 AST로만(코드 실행 없이) 읽어온다. GitHub Topics
+    검색으로 아직 발견되지 않았거나 검색 결과가 부실한 플러그인의 표시
+    이름·분류를 최대한 정확히 추정하는 데 사용한다."""
     path = _find_module_file(os.path.join(_plugins_metadata_dir(), plugin_id), plugin_id)
     if not path:
         return {}
@@ -601,9 +559,10 @@ def _looks_like_plugin_dir(entry, full_path):
 
 
 def _scan_uncurated_installed(curated_ids, is_enabled_fn):
-    """plugin_list.txt(원격 큐레이션 목록)에 없지만 이 서버에 실제로 설치되어 있는
-    메타데이터 플러그인을 plugins/metadata 디렉토리에서 직접 찾아 카드로 만든다.
-    GitHub 저장소 주소를 모르므로 설명·최신 버전·업데이트 확인은 제공하지 않는다."""
+    """GitHub Topics 검색으로도, github.txt 레지스트리로도 추적되지 않지만
+    이 서버에 실제로 설치되어 있는 메타데이터 플러그인을 plugins/metadata
+    디렉토리에서 직접 찾아 카드로 만든다. GitHub 저장소 주소를 모르므로
+    설명·최신 버전·업데이트 확인은 제공하지 않는다."""
     base_dir = _plugins_metadata_dir()
     items = []
     try:
@@ -754,48 +713,20 @@ def _fetch_remote_info(owner, repo, token):
     }
 
 
-def _fetch_remote_info_parallel(owner_repo_pairs, token, max_workers=8):
-    """여러 저장소의 GitHub 정보를 동시에 조회한다. plugin_board 로딩 시간의
-    가장 큰 병목이 저장소 개수만큼 순차적으로 쌓이는 네트워크 왕복이었기 때문에,
-    이 부분만 스레드 풀로 병렬화해 전체 대기 시간을 '가장 느린 요청 1개' 수준으로
-    줄인다. 캐시가 이미 있는 저장소는 스레드 안에서도 즉시 반환되므로 비용이 없다."""
-    results = {}
-    if not owner_repo_pairs:
-        return results
 
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=min(max_workers, len(owner_repo_pairs))
-    ) as executor:
-        future_map = {
-            executor.submit(_fetch_remote_info, owner, repo, token): (owner, repo)
-            for owner, repo in owner_repo_pairs
-        }
-        for future in concurrent.futures.as_completed(future_map):
-            owner, repo = future_map[future]
-            try:
-                results[(owner, repo)] = future.result()
-            except Exception as exc:
-                results[(owner, repo)] = {
-                    "desc": "GitHub 정보를 불러오지 못했습니다 (%s)" % exc,
-                    "tags": [],
-                    "version_label": "—",
-                    "remote_version": None,
-                    "url": "https://github.com/%s/%s" % (owner, repo),
-                    "error": True,
-                }
-    return results
 
 
 # ========================================================================
-# GitHub Topics 기반 발견(discovery) — plugin_list.txt 큐레이션과는 별개로
-# Search API로 DISCOVERY_TOPICS가 달린 저장소를 찾아 "미검수" 카드로 함께
-# 보여준다. 검증 없이 자동 노출되므로 카드에는 반드시 미검수 표시를 한다.
+# GitHub Topics 기반 발견(discovery) — Search API로 DISCOVERY_TOPICS가 달린
+# 저장소를 찾아 카드로 보여준다. 별도로 관리하는 큐레이션 목록이 없으므로
+# 이 검색이 카드 목록의 유일한 수집 경로다. 검증 없이 자동 노출되므로
+# 카드에는 여전히 "미검수" 표시를 한다(수동으로 확인된 목록이 아니라는 뜻).
 # ========================================================================
 def _fetch_repos_by_topic(topics, token):
     """GitHub Search API(`/search/repositories?q=topic:...`)로 지정된 토픽이
     달린 공개 저장소를 찾는다. 토픽 하나가 실패해도 나머지는 계속 시도하며,
     전체 결과는 1시간 캐시한다(Search API는 분당 요청 제한이 따로 있어
-    plugin_list.txt보다도 더 아껴 써야 한다)."""
+    아껴 써야 한다)."""
     topics = [t.strip() for t in topics if t and t.strip()]
     if not topics:
         return []
@@ -2103,22 +2034,14 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 return True, {}
 
         if action == "refresh_list":
-            cfg = self.get_plugin_config(db_type, default={})
-            token = cfg.get("GITHUB_TOKEN") or None
-            urls = _fetch_repo_list(token, force=True)
-            _TOPIC_CACHE.clear()  # GitHub Topics 발견 캐시도 함께 강제 갱신
-            # 설치된 버전 vs 최신 버전 비교(has_update)에 쓰이는 캐시도 함께
-            # 비운다 — 이걸 안 비우면 "목록 새로고침"을 눌러도 버전 비교 결과는
-            # 최대 1시간(버전 캐시 TTL) 동안 그대로 남아있는 문제가 있었다.
+            # GitHub Topics 검색 캐시와, 설치된 버전 vs 최신 버전 비교(has_update)에
+            # 쓰이는 캐시를 모두 강제로 비운다 — "목록 새로고침"을 눌렀는데도
+            # 최대 1시간(캐시 TTL) 동안 옛날 결과가 그대로 남는 걸 막기 위함이다.
+            _TOPIC_CACHE.clear()
             _VERSION_CACHE.clear()
             _DESC_CACHE.clear()
             _save_disk_cache()
-            if not urls:
-                return False, (
-                    "plugin_list.txt를 다시 가져오지 못했습니다 "
-                    "(%s 조회 실패)" % REMOTE_PLUGIN_LIST_URL
-                )
-            return True, "플러그인 목록과 버전 정보를 새로 불러왔습니다 (%d개 저장소)." % len(urls)
+            return True, "플러그인 목록과 버전 정보를 새로 불러옵니다."
 
         if action == "toggle":
             if not plugin_id:
@@ -2137,12 +2060,11 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
 
             git_url = str(item_data.get("git_url", "")).strip()
             if not git_url and plugin_id:
-                # git_url 없이 plugin_id만 온 경우, plugin_list.txt 또는 github.txt
+                # git_url 없이 plugin_id만 온 경우(업데이트 버튼 등), github.txt
                 # 레지스트리(GitHub/Gitea 어느 쪽이든, 자격증명이 담겨 있을 수 있음)에서
                 # 대응하는 주소를 찾는다.
-                candidates = _fetch_repo_list(token) + _load_github_registry()
                 match = next(
-                    (u for u in candidates if _parse_repo_url(u)[2] == plugin_id),
+                    (u for u in _load_github_registry() if _parse_repo_url(u)[2] == plugin_id),
                     None,
                 )
                 if match:
@@ -2157,8 +2079,8 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
 
     # ------------------------------------------------------------------
     # 카테고리 풀페이지 탭이 script.js를 통해 호출하는 데이터 엔드포인트.
-    # 카드로 보여줄 저장소 목록 자체를 REMOTE_PLUGIN_LIST_URL(plugin_list.txt)에서
-    # 매 호출마다(캐시 만료 시) 가져오고, 각 저장소의 최신 설명·토픽·버전도 GitHub에서
+    # 카드로 보여줄 저장소 목록 자체를 GitHub Topics 검색으로 매 호출마다
+    # (캐시 만료 시) 모으고, 각 저장소의 최신 설명·토픽·버전도 GitHub에서
     # 가져온다. plugins/metadata 디렉토리를 직접 확인해 설치 여부·업데이트 필요
     # 여부·활성화 상태·설정 보유 여부까지 함께 반환한다.
     # ------------------------------------------------------------------
@@ -2167,28 +2089,6 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         token = cfg.get("GITHUB_TOKEN") or None
         auto_update_enabled = bool(cfg.get("AUTO_UPDATE_ENABLED"))
         is_admin = _is_admin_session()
-
-        repo_urls = _fetch_repo_list(token)
-        list_fetch_failed = not repo_urls
-        # plugin_list.txt 조회에 실패해도(네트워크 문제 등) 전체 화면을 막지 않는다.
-        # 이미 설치된 플러그인은 GitHub 접속과 무관하게 서버 파일시스템만으로도
-        # 확인 가능하고(§3), github.txt 레지스트리(§2-2)도 별도 조회 경로라
-        # plugin_list.txt 하나가 실패했다고 전부 안 보이게 할 이유가 없다.
-        # 실패했다는 사실만 "list_warning"으로 함께 내려보내 화면에 작게 알린다.
-
-        # plugin_board 자기 자신이 원격 목록에 없다면 자동으로 포함시켜, 개발 중인
-        # 버전도 다른 플러그인과 동일하게 카드 + 업데이트 버튼으로 관리할 수 있게 한다.
-        # (plugin_list.txt 조회 자체가 실패해 repo_urls가 비어있어도 이 로직 덕분에
-        # plugin_board 카드는 계속 시도된다.)
-        existing_repo_names = {_parse_owner_repo(u)[1] for u in repo_urls}
-        if "plugin_board" not in existing_repo_names:
-            repo_urls = repo_urls + [SELF_REPO_URL]
-
-        # plugin_board 자기 자신은(plugin_list.txt 어디에 적혀있든, 혹은 위에서
-        # 자동 추가됐든) 항상 카드 목록 맨 앞에 오도록 재정렬한다.
-        self_urls = [u for u in repo_urls if _parse_owner_repo(u)[1] == "plugin_board"]
-        other_urls = [u for u in repo_urls if _parse_owner_repo(u)[1] != "plugin_board"]
-        repo_urls = self_urls + other_urls
 
         try:
             gateway = self.get_db_gateway(db_type)
@@ -2206,27 +2106,14 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             except Exception:
                 return True
 
-        curated_items = []
-        owner_repo_pairs = []
-        for url in repo_urls:
-            owner, repo = _parse_owner_repo(url)
-            if owner and repo:
-                owner_repo_pairs.append((owner, repo))
+        # plugin_board 자기 자신은 GitHub Topics 검색 결과와 무관하게 항상
+        # 별도로 조회해 카드 목록 맨 앞에 고정한다("미검수" 표시 없이, 개발
+        # 중인 버전도 항상 카드+업데이트 버튼으로 다룰 수 있도록).
+        self_item = _fetch_repo_entry(SELF_REPO_URL, token, is_enabled_fn)
+        curated_ids = {self_item["id"]}
 
-        # 저장소 개수만큼 순차 호출하던 GitHub 조회를 병렬로 한 번에 처리 —
-        # 캐시가 살아있는 저장소는 이 안에서도 즉시 반환되므로 추가 비용이 없다.
-        remote_infos = _fetch_remote_info_parallel(owner_repo_pairs, token)
-
-        for url in repo_urls:
-            owner, repo = _parse_owner_repo(url)
-            preloaded = remote_infos.get((owner, repo)) if owner and repo else None
-            curated_items.append(_fetch_repo_entry(url, token, is_enabled_fn, preloaded))
-
-        curated_ids = {it["id"] for it in curated_items}
-
-        # 하이브리드 발견: plugin_list.txt 큐레이션과 별개로 GitHub Topics에서
-        # 자동으로 찾아온 저장소도 "미검수" 카드로 함께 보여준다. 큐레이션
-        # 목록에 이미 있는 저장소는 여기서 제외해 카드가 중복되지 않게 한다.
+        # GitHub Topics 검색이 카드 목록의 유일한 수집 경로다. 검증 없이 자동
+        # 노출되므로 "미검수" 표시를 유지한다.
         extra_topics_raw = str(cfg.get("EXTRA_DISCOVERY_TOPICS") or "").strip()
         extra_topics = [t.strip() for t in extra_topics_raw.split(",") if t.strip()]
         all_topics = list(dict.fromkeys(DISCOVERY_TOPICS + extra_topics))  # 순서 유지 + 중복 제거
@@ -2268,9 +2155,9 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
 
         discovered_ids = {it["id"] for it in discovered_items}
 
-        # 직접 설치 이력(github.txt) — plugin_list.txt에도 없고 GitHub Topics로도
-        # 발견되지 않았지만, 이 서버에서 Git URL로 직접 설치했던 저장소는 여기서
-        # 계속 추적한다(원격 목록/토픽 유무와 무관하게 업데이트 확인을 이어가기 위함).
+        # 직접 설치 이력(github.txt) — GitHub Topics로도 발견되지 않았지만, 이
+        # 서버에서 Git URL로 직접 설치했던 저장소는 여기서 계속 추적한다(검색
+        # 결과 유무와 무관하게 업데이트 확인을 이어가기 위함).
         registry_items = []
         seen_registry_ids = set()
         excluded_for_registry = curated_ids | discovered_ids
@@ -2289,15 +2176,9 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             curated_ids | discovered_ids | seen_registry_ids, is_enabled_fn
         )
         _save_disk_cache()  # 이번 요청에서 새로 채워진 캐시를 재시작에도 살아남도록 저장
-        response = {
+        return {
             "success": True,
-            "items": curated_items + discovered_items + registry_items + local_items,
+            "items": [self_item] + discovered_items + registry_items + local_items,
             "auto_update_enabled": auto_update_enabled,
             "is_admin": is_admin,
         }
-        if list_fetch_failed:
-            response["list_warning"] = (
-                "plugin_list.txt를 가져오지 못해 큐레이션 목록이 최신이 아닐 수 있습니다 "
-                "(%s 조회 실패). 이미 설치된 플러그인과 직접 설치 이력은 정상 표시됩니다." % REMOTE_PLUGIN_LIST_URL
-            )
-        return response

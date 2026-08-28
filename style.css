@@ -466,19 +466,6 @@
   color: color-mix(in srgb, #c0554f 88%, var(--app-text-primary));
 }
 
-/* plugin_list.txt 조회 실패 등 — 카드는 정상 표시되는 상태에서 곁들이는
-   비차단(non-blocking) 경고 배너. 전체 화면을 가리는 pb-status(error)와 다르다. */
-.pb-list-warning {
-  margin: 0 0 14px;
-  padding: 10px 14px;
-  border-radius: 8px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: color-mix(in srgb, #b9862f 90%, var(--app-text-primary));
-  background: color-mix(in srgb, #b9862f 12%, transparent);
-  border: 1px solid color-mix(in srgb, #b9862f 40%, transparent);
-}
-
 /* ---------- 카드 그리드 ---------- */
 .pb-grid {
   display: grid;

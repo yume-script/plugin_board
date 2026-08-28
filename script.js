@@ -806,7 +806,7 @@
     if (item.discovered) {
       const discTag = document.createElement("span");
       discTag.className = "pb-tag pb-tag-discovered";
-      discTag.title = "plugin_list.txt에 등록되지 않고 GitHub Topics로 자동 발견된 저장소입니다. 별도 검수를 거치지 않았으니 설치 전 내용을 직접 확인하세요.";
+      discTag.title = "GitHub Topics로 자동 발견된 저장소입니다. 별도 검수를 거치지 않았으니 설치 전 내용을 직접 확인하세요.";
       discTag.textContent = "⚠ 미검수 · 토픽 발견";
       tagsWrap.appendChild(discTag);
     }
@@ -814,7 +814,7 @@
     if (item.user_registered) {
       const regTag = document.createElement("span");
       regTag.className = "pb-tag pb-tag-registered";
-      regTag.title = "plugin_list.txt에도 없고 GitHub Topics로도 발견되지 않았지만, 이 서버에서 Git URL로 직접 설치한 이력이 있어 계속 추적 중인 저장소입니다.";
+      regTag.title = "GitHub Topics로는 발견되지 않았지만, 이 서버에서 Git URL로 직접 설치한 이력이 있어 계속 추적 중인 저장소입니다.";
       regTag.textContent = "직접 설치됨";
       tagsWrap.appendChild(regTag);
     }
@@ -1029,25 +1029,6 @@
     }
   }
 
-  // list_warning(예: plugin_list.txt 조회 실패)을 카드 목록 위에 작은 배너로
-  // 표시한다. 전체 화면을 대체하는 statusEl 오류와 달리, 카드는 정상 렌더링된
-  // 상태에서 곁들이는 비차단(non-blocking) 알림이다. null/undefined면 숨긴다.
-  function showListWarning(message) {
-    let banner = document.getElementById("pb-list-warning");
-    if (!message) {
-      if (banner) banner.hidden = true;
-      return;
-    }
-    if (!banner) {
-      banner = document.createElement("div");
-      banner.id = "pb-list-warning";
-      banner.className = "pb-list-warning";
-      gridEl.parentNode.insertBefore(banner, gridEl);
-    }
-    banner.textContent = "⚠ " + message;
-    banner.hidden = false;
-  }
-
   async function load() {
     console.log(`${LOG_PREFIX} 데이터 요청: ${dataUrl()}`);
     try {
@@ -1070,11 +1051,6 @@
       gridEl.hidden = false;
       buildFiltersAndTally();
       render();
-
-      // plugin_list.txt 조회는 실패했지만(네트워크 문제 등) 설치된 플러그인/
-      // 레지스트리 항목은 정상 표시된 경우 — 전체 화면을 막지 않고 작은
-      // 경고 배너로만 알린다(success는 여전히 true).
-      showListWarning(json.list_warning || null);
 
       const errorCount = allItems.filter((it) => it.error).length;
       console.log(
@@ -1158,10 +1134,11 @@
   }
 
   // ------------------------------------------------------------------
-  // "Git 저장소 URL 설치" 패널 — plugin_list.txt에 없는 임의의 저장소도 URL만
-  // 입력하면 바로 설치할 수 있다(update_manifest 규격을 따르는 저장소만).
-  // GitHub뿐 아니라 다른 호스트(Gitea 등)도 지원하며, 인증이 필요하면
-  // https://아이디:비밀번호@host/owner/repo 형식으로 URL에 직접 담는다.
+  // "Git 저장소 URL 설치" 패널 — GitHub Topics 검색에 아직 안 잡힌 임의의
+  // 저장소도 URL만 입력하면 바로 설치할 수 있다(update_manifest 규격을
+  // 따르는 저장소만). GitHub뿐 아니라 다른 호스트(Gitea 등)도 지원하며,
+  // 인증이 필요하면 https://아이디:비밀번호@host/owner/repo 형식으로
+  // URL에 직접 담는다.
   // ------------------------------------------------------------------
   function wireGitInstallPanel() {
     const form = document.getElementById("pb-git-install-form");
@@ -1295,8 +1272,8 @@
   }
 
   // ------------------------------------------------------------------
-  // "목록 새로고침" 버튼 — 캐시(최대 1시간) 만료를 기다리지 않고 plugin_list.txt를
-  // 즉시 다시 불러온다. 실제 설치 상태에는 영향 없음(순수 목록 재조회).
+  // "목록 새로고침" 버튼 — 캐시(최대 1시간) 만료를 기다리지 않고 GitHub Topics
+  // 검색 결과를 즉시 다시 불러온다. 실제 설치 상태에는 영향 없음(순수 목록 재조회).
   // ------------------------------------------------------------------
   function wireRefreshListButton() {
     const btn = document.getElementById("pb-refresh-list-btn");
