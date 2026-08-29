@@ -1,1133 +1,157 @@
-/* plugins/metadata/plugin_board/style.css
+/* plugins/metadata/webtoon_manager/style.css
    8종 대시보드 테마(purple/dark/light/sepia/blue/aquamarine/ironman/epaper)와
-   동기화되도록 하드코딩 색상 대신 전역 CSS 변수(var(--app-*))를 사용합니다. */
+   동기화되도록 하드코딩 색상 대신 전역 CSS 변수(var(--app-*))를 사용합니다.
+   (yume-script/plugin_board와 같은 디자인 문법: 점선 구분선, 알약 버튼,
+   color-mix() 틴트, 카드 호버 시 살짝 뜨는 효과) */
 
-.pb-root {
-  padding: 4px 2px 32px;
-  font-family: inherit;
-  color: var(--app-text-primary, #e5e5e5);
-}
+.wtm-root { padding: 4px 2px 32px; font-family: inherit; color: var(--app-text-primary, #e5e5e5);
+  display: flex; flex-direction: column; gap: 14px; }
 
 /* ---------- 헤더 ---------- */
-.pb-header {
-  background: var(--app-bg-sidebar, var(--app-bg-card));
-  border: 1px solid var(--app-border, rgba(255,255,255,0.1));
-  border-radius: 10px;
-  padding: 22px 170px 18px 26px;
-  position: relative;
-}
+.wtm-header { display: flex; align-items: center; gap: 12px; padding: 18px 22px;
+  border-radius: 10px; background: var(--app-bg-sidebar, var(--app-bg-card, rgba(127,127,127,.08)));
+  border: 1px solid var(--app-border, rgba(127,127,127,.18)); flex-wrap: wrap; }
+.wtm-header-icon { width: 42px; height: 42px; border-radius: 10px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 18px;
+  background: color-mix(in srgb, var(--app-accent, #4a7dfc) 85%, transparent); color: #fff; }
+.wtm-header-text { flex: 1; min-width: 160px; }
+.wtm-title { font-weight: 700; font-size: 18px; color: var(--app-text-primary); }
+.wtm-subtitle { font-size: 12.5px; color: var(--app-text-muted, #9ca3af); margin-top: 2px; }
+.wtm-header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
-.pb-refresh-btn {
-  position: absolute;
-  top: 18px;
-  right: 22px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  font-weight: 600;
-  font-family: inherit;
-  color: var(--app-text-secondary, var(--app-text-primary));
-  background: var(--app-bg-card);
-  border: 1px solid var(--app-border, rgba(255,255,255,0.18));
-  border-radius: 999px;
-  padding: 6px 12px;
-  cursor: pointer;
-  transition: background .15s ease, color .15s ease;
-}
-.pb-refresh-btn:hover:not(:disabled) {
-  background: var(--app-bg-card-hover);
-  color: var(--app-text-primary);
-}
-.pb-refresh-btn:disabled {
-  opacity: 0.7;
-  cursor: progress;
-}
-.pb-refresh-icon {
-  width: 12px;
-  height: 12px;
-  display: inline-flex;
-  flex-shrink: 0;
-}
-.pb-refresh-icon svg {
-  width: 100%;
-  height: 100%;
-  fill: currentColor;
-}
-.pb-refresh-btn.pb-refresh-spinning .pb-refresh-icon {
-  animation: pb-spin 0.8s linear infinite;
-}
-@keyframes pb-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-@media (max-width: 480px) {
-  .pb-header {
-    padding-right: 26px;
-  }
-  .pb-refresh-btn {
-    position: static;
-    margin-bottom: 10px;
-  }
-}
-
-.pb-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: clamp(22px, 3.2vw, 30px);
-  font-weight: 700;
-  margin: 0 0 8px;
-  color: var(--app-text-primary);
-}
-.pb-title-icon {
-  width: 0.85em;
-  height: 0.85em;
-  flex-shrink: 0;
-  display: inline-flex;
-  color: var(--app-accent);
-}
-.pb-title-icon svg {
-  width: 100%;
-  height: 100%;
-  fill: currentColor;
-}
-
-.pb-desc {
-  margin: 0;
-  font-size: 13.5px;
-  line-height: 1.7;
-  color: var(--app-text-muted, #9ca3af);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-@media (max-width: 900px) {
-  .pb-desc {
-    white-space: normal;
-    overflow: visible;
-    text-overflow: clip;
-    max-width: 62ch;
-  }
-}
-
-.pb-tally {
-  display: flex;
-  gap: 22px;
-  margin-top: 16px;
-  flex-wrap: wrap;
-}
-.pb-tally span {
-  display: block;
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--app-text-muted);
-}
-.pb-tally strong {
-  display: block;
-  font-size: 21px;
-  font-weight: 700;
-  color: var(--app-accent, var(--app-text-primary));
-}
-
-/* ---------- GitHub 토큰 발급 안내(접이식) ---------- */
-.pb-token-help {
-  margin-top: 14px;
-  background: var(--app-bg-card);
-  border: 1px solid var(--app-border, rgba(255,255,255,0.1));
-  border-radius: 10px;
-  padding: 4px 20px;
-}
-.pb-token-help[open] {
-  padding-bottom: 18px;
-}
-
-.pb-token-help summary {
-  list-style: none;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 0;
-  cursor: pointer;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--app-text-secondary, var(--app-text-primary));
-}
-.pb-token-help summary::-webkit-details-marker {
-  display: none;
-}
-.pb-token-help summary::after {
-  content: "";
-  margin-left: auto;
-  width: 8px;
-  height: 8px;
-  border-right: 1.5px solid var(--app-text-muted);
-  border-bottom: 1.5px solid var(--app-text-muted);
-  transform: rotate(45deg);
-  transition: transform .15s ease;
-  flex-shrink: 0;
-}
-.pb-token-help[open] summary::after {
-  transform: rotate(-135deg);
-}
-
-.pb-token-help-icon {
-  width: 15px;
-  height: 15px;
-  flex-shrink: 0;
-  display: inline-flex;
-  color: var(--app-accent);
-}
-.pb-token-help-icon svg {
-  width: 100%;
-  height: 100%;
-  fill: currentColor;
-}
-
-.pb-token-help-title {
-  line-height: 1.4;
-}
-
-.pb-token-help-body {
-  padding-top: 4px;
-  border-top: 1px dashed var(--app-border-light, var(--app-border));
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--app-text-secondary, var(--app-text-muted));
-}
-.pb-token-help-body p {
-  margin: 12px 0;
-}
-.pb-token-help-body ol {
-  margin: 10px 0;
-  padding-left: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.pb-token-help-body code {
-  background: var(--app-bg-main);
-  border: 1px solid var(--app-border, rgba(255,255,255,0.12));
-  border-radius: 4px;
-  padding: 1px 5px;
-  font-size: 11px;
-  color: var(--app-text-primary);
-}
-.pb-token-help-body b {
-  color: var(--app-text-primary);
-}
-
-.pb-token-help-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--app-accent);
-  background: color-mix(in srgb, var(--app-accent) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--app-accent) 40%, transparent);
-  padding: 7px 14px;
-  border-radius: 6px;
-  text-decoration: none;
-  transition: background .15s ease;
-}
-.pb-token-help-link:hover {
-  background: color-mix(in srgb, var(--app-accent) 24%, transparent);
-}
-
-.pb-token-help-note {
-  font-size: 10.5px;
-  color: var(--app-text-muted);
-}
-
-/* ---------- Git 저장소 URL 설치 패널 ---------- */
-.pb-install-row {
-  margin-top: 16px;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 16px;
-}
-
-.pb-git-panel {
-  background: var(--app-bg-card);
-  border: 1px solid var(--app-border, rgba(255,255,255,0.1));
-  border-radius: 10px;
-  padding: 16px 20px 18px;
-}
-
-.pb-git-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.pb-git-panel-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.pb-git-panel-title h2 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--app-text-primary);
-}
-.pb-git-panel-icon {
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  color: var(--app-text-primary);
-  flex-shrink: 0;
-}
-.pb-git-panel-icon svg {
-  width: 100%;
-  height: 100%;
-  fill: currentColor;
-}
-
-.pb-git-panel-badge {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  color: var(--app-accent);
-  background: color-mix(in srgb, var(--app-accent) 16%, transparent);
-  border: 1px solid color-mix(in srgb, var(--app-accent) 40%, transparent);
-  padding: 4px 10px;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-
-.pb-git-panel-form {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.pb-git-panel-form input {
-  flex: 1 1 260px;
-  min-width: 0;
-  padding: 9px 12px;
-  border-radius: 8px;
-  background: var(--app-input-bg, var(--app-bg-main));
-  border: 1px solid var(--app-border, rgba(255,255,255,0.15));
-  color: var(--app-text-primary);
-  font-size: 12.5px;
-  font-family: inherit;
-}
-.pb-git-panel-form input::placeholder {
-  color: var(--app-text-muted);
-}
-.pb-git-panel-form input:disabled {
-  opacity: 0.6;
-}
-
-.pb-git-panel-form button {
-  font-size: 12.5px;
-  font-weight: 600;
-  font-family: inherit;
-  color: var(--app-accent);
-  background: color-mix(in srgb, var(--app-accent) 18%, transparent);
-  border: 1px solid color-mix(in srgb, var(--app-accent) 42%, transparent);
-  padding: 9px 18px;
-  border-radius: 8px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background .15s ease, transform .15s ease;
-}
-.pb-git-panel-form button:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--app-accent) 26%, transparent);
-  transform: translateY(-1px);
-}
-.pb-git-panel-form button:disabled {
-  opacity: 0.65;
-  cursor: progress;
-  transform: none;
-}
-
-/* 파일 선택 버튼 — 텍스트 입력창처럼 보이도록(왼쪽 정렬, 무채색 배경) 오버라이드.
-   실제 <input type="file">은 숨겨두고 이 버튼이 그 자리를 대신한다. */
-.pb-zip-file-select-btn {
-  flex: 1 1 260px;
-  min-width: 0;
-  text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--app-text-secondary, var(--app-text-primary)) !important;
-  background: var(--app-input-bg, var(--app-bg-main)) !important;
-  border: 1px solid var(--app-border, rgba(255,255,255,0.15)) !important;
-  font-weight: 500 !important;
-}
-.pb-zip-file-select-btn.pb-zip-file-selected {
-  color: var(--app-text-primary) !important;
-}
-
-.pb-git-panel-tip {
-  margin: 10px 0 0;
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--app-text-muted);
-}
-.pb-git-panel-tip code {
-  background: var(--app-bg-main);
-  border: 1px solid var(--app-border, rgba(255,255,255,0.12));
-  border-radius: 4px;
-  padding: 1px 5px;
-  font-size: 10.5px;
-  color: var(--app-text-secondary, var(--app-text-primary));
-}
-
-/* ---------- 필터 탭 ---------- */
-.pb-filters-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin: 18px 0 12px;
-}
-.pb-filters {
-  display: flex;
-  gap: 6px;
-  margin: 0;
-  flex-wrap: wrap;
-}
-.pb-filter-btn {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  background: var(--app-bg-card);
-  color: var(--app-text-secondary, var(--app-text-primary));
-  border: 1px solid var(--app-border, rgba(255,255,255,0.1));
-  padding: 7px 14px;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: background .15s ease, border-color .15s ease, color .15s ease;
-}
-.pb-filter-btn:hover {
-  background: var(--app-bg-card-hover);
-}
-.pb-filter-btn.active {
-  background: color-mix(in srgb, var(--app-accent) 20%, var(--app-bg-card) 80%);
-  border-color: color-mix(in srgb, var(--app-accent) 55%, transparent);
-  color: var(--app-accent);
-}
-
-/* 제작자별 필터 드롭다운 */
-.pb-owner-filter-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-.pb-owner-filter-label {
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--app-text-muted);
-  white-space: nowrap;
-}
-.pb-owner-filter-select {
-  font-size: 12px;
-  font-weight: 600;
-  background: var(--app-bg-card);
-  border: 1px solid var(--app-border, rgba(255,255,255,0.14));
-  color: var(--app-text-secondary, var(--app-text-primary));
-  border-radius: 7px;
-  padding: 7px 10px;
-  cursor: pointer;
-  max-width: 220px;
-}
-.pb-owner-filter-select:hover {
-  border-color: color-mix(in srgb, var(--app-accent) 45%, transparent);
-}
-.pb-owner-filter-select:focus {
-  outline: none;
-  border-color: var(--app-accent);
-}
-
-/* ---------- 보드 / 상태 ---------- */
-.pb-board {
-  min-height: 120px;
-}
-
-.pb-status {
-  padding: 32px 8px;
-  text-align: center;
-  font-size: 13px;
-  color: var(--app-text-muted);
-}
-.pb-status.pb-error {
-  color: color-mix(in srgb, #c0554f 88%, var(--app-text-primary));
-}
-
-/* ---------- 카드 그리드 ---------- */
-.pb-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 18px;
-}
-
-.pb-card {
-  background: var(--app-bg-card);
-  border: 1px solid var(--app-border, rgba(255,255,255,0.1));
-  border-radius: 10px;
-  padding: 18px 18px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  position: relative;
-  transition: transform .15s ease, background .15s ease, box-shadow .15s ease;
-}
-.pb-card:hover {
-  background: var(--app-bg-card-hover);
-  transform: translateY(-3px);
-  box-shadow: var(--app-shadow, 0 10px 24px rgba(0,0,0,0.25));
-}
-
-/* (이전의 "펀치 홀" 점 장식은 실제 아이콘 배지로 대체되어 제거됨) */
-
-.pb-card-head {
-  padding-right: 8px;
-  border-bottom: 1px dashed var(--app-border-light, var(--app-border));
-  padding-bottom: 9px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.pb-card-head-main {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.pb-card-title-group {
-  min-width: 0;
-  flex: 1;
-}
-
-.pb-card-icon {
-  flex-shrink: 0;
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.pb-card-icon svg {
-  width: 18px;
-  height: 18px;
-}
-/* 카드 분류(검색형/카테고리 탭/기타)별로 아이콘 색만 다르게 튄트 처리 —
-   전체 톤은 차분하게 유지 */
-.pb-card-icon-search {
-  color: color-mix(in srgb, #4f8fd6 88%, var(--app-text-primary));
-  background: color-mix(in srgb, #4f8fd6 16%, transparent);
-}
-.pb-card-icon-tab {
-  color: color-mix(in srgb, #9370d8 88%, var(--app-text-primary));
-  background: color-mix(in srgb, #9370d8 16%, transparent);
-}
-.pb-card-icon-other {
-  color: var(--app-text-secondary, var(--app-text-muted));
-  background: color-mix(in srgb, var(--app-text-muted) 14%, transparent);
-}
-
-.pb-card-head-gear {
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-
-/* GitHub 조회 실패(예: API rate limit) 시 카드에 경고 테두리 표시 */
-.pb-card-error {
+/* ---------- 버튼 (알약형, color-mix 틴트 - plugin_board 문법) ---------- */
+.wtm-btn { border: 1px solid color-mix(in srgb, var(--app-accent, #4a7dfc) 40%, transparent);
+  background: color-mix(in srgb, var(--app-accent, #4a7dfc) 16%, transparent);
+  color: var(--app-accent, #4a7dfc); padding: 7px 14px; border-radius: 8px; font-size: 12.5px;
+  font-weight: 600; font-family: inherit; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: background .15s ease, transform .15s ease; }
+.wtm-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--app-accent, #4a7dfc) 26%, transparent);
+  transform: translateY(-1px); }
+.wtm-btn-primary { background: color-mix(in srgb, var(--app-accent, #4a7dfc) 85%, transparent);
+  border-color: transparent; color: #fff; }
+.wtm-btn-primary:hover:not(:disabled) { background: var(--app-accent, #4a7dfc); }
+.wtm-btn-secondary { background: var(--app-bg-card, rgba(127,127,127,.12));
+  border-color: var(--app-border, rgba(127,127,127,.2)); color: var(--app-text-secondary, var(--app-text-primary)); }
+.wtm-btn-secondary:hover:not(:disabled) { background: var(--app-bg-card-hover, rgba(127,127,127,.2)); }
+.wtm-btn-ghost { background: transparent; border-color: var(--app-border, rgba(127,127,127,.2));
+  color: var(--app-text-secondary, var(--app-text-primary)); }
+.wtm-btn-ghost:hover:not(:disabled) { background: var(--app-bg-card-hover, rgba(127,127,127,.1)); }
+.wtm-btn-danger { background: color-mix(in srgb, #c0554f 16%, transparent);
   border-color: color-mix(in srgb, #c0554f 45%, transparent);
-}
-.pb-card-error .pb-card-desc {
-  color: color-mix(in srgb, #c0554f 88%, var(--app-text-primary));
-}
+  color: color-mix(in srgb, #c0554f 88%, var(--app-text-primary)); }
+.wtm-btn-danger:hover:not(:disabled) { background: color-mix(in srgb, #c0554f 26%, transparent); }
+.wtm-btn-small { padding: 4px 9px; font-size: 11px; }
+.wtm-btn:disabled { opacity: .6; cursor: progress; transform: none; }
 
-.pb-tag-type {
-  opacity: 1;
-  font-weight: 600;
-}
+/* ---------- 상태 바 ---------- */
+.wtm-status-bar { display: flex; align-items: center; gap: 10px; padding: 9px 14px;
+  border-radius: 8px; background: var(--app-bg-card, rgba(127,127,127,.06));
+  border: 1px solid var(--app-border, rgba(127,127,127,.1)); font-size: 12.5px; flex-wrap: wrap; }
+.wtm-status-pill { padding: 3px 10px; border-radius: 999px; background: var(--app-border, rgba(127,127,127,.2));
+  font-size: 11px; font-weight: 600; }
+.wtm-status-pill.running { background: color-mix(in srgb, var(--app-accent, #4a7dfc) 85%, transparent); color: #fff; }
+.wtm-status-pill.error { background: color-mix(in srgb, #c0554f 85%, transparent); color: #fff; }
+.wtm-status-pill.done { background: color-mix(in srgb, #4f9d76 85%, transparent); color: #fff; }
+.wtm-progress { flex: 1; min-width: 120px; height: 6px; border-radius: 3px;
+  background: var(--app-border, rgba(127,127,127,.2)); overflow: hidden; }
+.wtm-progress-bar { height: 100%; width: 0%; background: var(--app-accent, #4a7dfc); transition: width .3s; }
 
-.pb-card-owner {
-  font-size: 10.5px;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--app-text-muted);
-  margin: 0 0 3px;
-}
+/* ---------- 탭 ---------- */
+.wtm-tabs { display: flex; gap: 4px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--app-border, rgba(127,127,127,.18)); }
+.wtm-tab { border: none; background: transparent; color: var(--app-text-muted, var(--app-text-secondary));
+  opacity: .8; padding: 9px 13px; cursor: pointer; font-size: 12.5px; font-weight: 500;
+  border-bottom: 2px solid transparent; font-family: inherit; }
+.wtm-tab:hover { opacity: 1; }
+.wtm-tab.active { opacity: 1; color: var(--app-accent, #4a7dfc);
+  border-bottom-color: var(--app-accent, #4a7dfc); font-weight: 700; }
 
-.pb-card-title {
-  font-size: 17px;
-  font-weight: 700;
-  margin: 0;
-  color: var(--app-text-primary);
-  line-height: 1.3;
-}
+/* ---------- 도구모음 / 요일필터 / 검색 ---------- */
+.wtm-toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
+.wtm-daytabs { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; }
+.wtm-daytab { border: 1px solid var(--app-border, rgba(127,127,127,.14)); background: var(--app-bg-card, transparent);
+  color: var(--app-text-secondary, var(--app-text-primary)); font-weight: 600;
+  padding: 6px 13px; border-radius: 999px; font-size: 12px; cursor: pointer; font-family: inherit;
+  transition: background .15s ease, border-color .15s ease, color .15s ease; }
+.wtm-daytab:hover { background: var(--app-bg-card-hover, rgba(127,127,127,.1)); }
+.wtm-daytab.active { background: color-mix(in srgb, var(--app-accent, #4a7dfc) 20%, var(--app-bg-card, transparent) 80%);
+  border-color: color-mix(in srgb, var(--app-accent, #4a7dfc) 55%, transparent); color: var(--app-accent, #4a7dfc); }
+.wtm-input { flex: 1; padding: 9px 12px; border-radius: 8px;
+  border: 1px solid var(--app-border, rgba(127,127,127,.15));
+  background: var(--app-input-bg, var(--app-bg-main, transparent));
+  color: var(--app-text-primary); font-size: 12.5px; font-family: inherit; }
+.wtm-input::placeholder { color: var(--app-text-muted); }
+/* <select>의 드롭다운 옵션 목록은 브라우저가 OS 네이티브로 렌더링해서
+   color:inherit이 잘 안 먹히는 경우가 많다 - 명시적으로 지정해 대비를 확보. */
+select.wtm-input option { color: #111; background: #fff; }
 
-.pb-card-desc {
-  font-size: 12.5px;
-  line-height: 1.65;
-  color: var(--app-text-secondary, var(--app-text-muted));
-}
+/* ---------- 작품 카드 그리드 ---------- */
+.wtm-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+.wtm-card { border: 1px solid var(--app-border, rgba(127,127,127,.14)); border-radius: 10px;
+  overflow: hidden; background: var(--app-bg-card, rgba(127,127,127,.05));
+  display: flex; flex-direction: column;
+  transition: transform .15s ease, background .15s ease, box-shadow .15s ease; }
+.wtm-card:hover { background: var(--app-bg-card-hover, rgba(127,127,127,.08));
+  transform: translateY(-3px); box-shadow: var(--app-shadow, 0 10px 24px rgba(0,0,0,.25)); }
+.wtm-card-thumb { width: 100%; aspect-ratio: 3/4; object-fit: cover;
+  background: var(--app-border, rgba(127,127,127,.1)); }
+.wtm-card-body { padding: 9px 11px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.wtm-card-title { font-size: 13px; font-weight: 700; line-height: 1.3; color: var(--app-text-primary); }
+.wtm-card-author { font-size: 11px; color: var(--app-text-muted); }
+.wtm-card-rating { font-size: 11px; color: #d4a72c; font-weight: 600; margin-top: 1px; }
+.wtm-badges { display: flex; gap: 4px; flex-wrap: wrap; }
+.wtm-badge { font-size: 9.5px; font-weight: 600; letter-spacing: .02em; padding: 2px 7px;
+  border-radius: 999px; background: var(--app-border, rgba(127,127,127,.2));
+  color: var(--app-text-secondary, var(--app-text-primary)); }
+.wtm-badge.new { background: color-mix(in srgb, var(--app-accent, #4a7dfc) 85%, transparent); color: #fff; }
+.wtm-badge.finished { color: color-mix(in srgb, #9370d8 88%, var(--app-text-primary));
+  background: color-mix(in srgb, #9370d8 16%, transparent); }
+.wtm-badge.rest { color: color-mix(in srgb, #c58a3a 88%, var(--app-text-primary));
+  background: color-mix(in srgb, #c58a3a 16%, transparent); }
+.wtm-badge.up { color: color-mix(in srgb, #4f9d76 88%, var(--app-text-primary));
+  background: color-mix(in srgb, #4f9d76 16%, transparent); }
+.wtm-card-actions { margin-top: auto; padding-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;
+  border-top: 1px dashed var(--app-border-light, var(--app-border)); }
 
-.pb-card-tags {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.pb-tag {
-  font-size: 9.5px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--app-accent);
-  border: 1px solid color-mix(in srgb, var(--app-accent) 55%, transparent);
-  background: color-mix(in srgb, var(--app-accent) 10%, transparent);
-  padding: 3px 8px;
-  border-radius: 999px;
-  opacity: 0.85;
-}
+/* ---------- 박스(패널) ---------- */
+.wtm-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.wtm-box { border: 1px solid var(--app-border, rgba(127,127,127,.14)); border-radius: 10px;
+  padding: 16px 18px; background: var(--app-bg-card, rgba(127,127,127,.05)); }
+.wtm-box-title { font-weight: 700; font-size: 13.5px; margin-bottom: 10px; color: var(--app-text-primary); }
+.wtm-form-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.wtm-chip-list { display: flex; gap: 6px; flex-wrap: wrap; }
+.wtm-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px;
+  border-radius: 999px; background: var(--app-bg-card-hover, rgba(127,127,127,.15));
+  border: 1px solid var(--app-border, rgba(127,127,127,.14)); font-size: 12px;
+  color: var(--app-text-secondary, var(--app-text-primary)); }
+.wtm-chip button { border: none; background: transparent; color: inherit; cursor: pointer; opacity: .6; }
+.wtm-chip button:hover { opacity: 1; }
 
-.pb-card-feats {
-  margin: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.pb-card-feats li {
-  font-size: 11.5px;
-  color: var(--app-text-secondary, var(--app-text-muted));
-  position: relative;
-  padding-left: 13px;
-  line-height: 1.5;
-}
-.pb-card-feats li::before {
-  content: "·";
-  position: absolute;
-  left: 0;
-  top: -2px;
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--app-accent);
-}
+/* ---------- 다운로드 이력 ---------- */
+.wtm-history-list { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.wtm-history-item { padding: 7px 11px; border-radius: 6px; background: var(--app-bg-card, rgba(127,127,127,.06));
+  border: 1px solid var(--app-border, rgba(127,127,127,.08));
+  color: var(--app-text-secondary, var(--app-text-primary)); }
+.wtm-history-item.fail { background: color-mix(in srgb, #c0554f 12%, transparent);
+  border-color: color-mix(in srgb, #c0554f 30%, transparent);
+  color: color-mix(in srgb, #c0554f 88%, var(--app-text-primary)); }
 
-.pb-card-foot {
-  margin-top: auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.pb-stamp {
-  font-size: 10.5px;
-  font-weight: 600;
-  color: var(--app-accent);
-  border: 1.5px solid var(--app-accent);
-  padding: 3px 8px;
-  border-radius: 4px;
-  white-space: nowrap;
-  opacity: 0.9;
-}
-
-.pb-foot-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-/* GitHub 다운로드 횟수는 API로 못 구해서 참고용 인기도 지표(별 개수)로 대신 표시 */
-.pb-stars {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10.5px;
-  font-weight: 600;
-  color: #d4a72c;
-  white-space: nowrap;
-  cursor: help;
-}
-.pb-stars svg {
-  width: 11px;
-  height: 11px;
-  fill: currentColor;
-  flex-shrink: 0;
-}
-
-.pb-btn-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-left: auto;
-}
-
-.pb-link,
-.pb-install-btn {
-  font-size: 11px;
-  font-weight: 600;
-  font-family: inherit;
-  color: var(--app-accent);
-  background: color-mix(in srgb, var(--app-accent) 16%, transparent);
-  border: 1px solid color-mix(in srgb, var(--app-accent) 40%, transparent);
-  padding: 7px 12px;
-  border-radius: 6px;
-  text-decoration: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background .15s ease, transform .15s ease;
-}
-.pb-link:hover,
-.pb-install-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--app-accent) 26%, transparent);
-  transform: translateX(2px);
-}
-.pb-link svg,
-.pb-install-btn svg {
-  width: 11px;
-  height: 11px;
-  fill: currentColor;
-  flex-shrink: 0;
-}
-
-/* 신규설치 버튼은 GitHub/업데이트 버튼보다 한 톤 더 옅게 표시 */
-.pb-install-btn {
-  background: color-mix(in srgb, var(--app-accent) 10%, transparent);
-  border-color: color-mix(in srgb, var(--app-accent) 28%, transparent);
-}
-.pb-install-btn:disabled {
-  opacity: 0.65;
-  cursor: progress;
-  transform: none;
-}
-
-.pb-tag-update {
-  color: color-mix(in srgb, #c0554f 88%, var(--app-text-primary));
-  background: color-mix(in srgb, #c0554f 16%, transparent);
-  border-color: color-mix(in srgb, #c0554f 45%, transparent);
-  opacity: 1;
-  font-weight: 600;
-}
-
-.pb-tag-self {
-  color: var(--app-text-muted);
-  border-color: var(--app-border, rgba(255,255,255,0.3));
-  opacity: 1;
-}
-
-/* 이 서버에 설치된 파일에서만 확인된(GitHub 저장소 정보 없는) 로컬 플러그인 표시 */
-.pb-tag-local {
-  color: color-mix(in srgb, #5b84ab 85%, var(--app-text-primary));
-  border-color: color-mix(in srgb, #5b84ab 50%, transparent);
-  background: color-mix(in srgb, #5b84ab 14%, transparent);
-  opacity: 1;
-  font-weight: 600;
-}
-
-/* plugin_list.txt/토픽 없이 github.txt 이력만으로 추적 중인 저장소 표시 */
-.pb-tag-registered {
-  color: color-mix(in srgb, #6a8f5b 88%, var(--app-text-primary));
-  border-color: color-mix(in srgb, #6a8f5b 50%, transparent);
-  background: color-mix(in srgb, #6a8f5b 14%, transparent);
-  opacity: 1;
-  font-weight: 600;
-}
-
-/* GitHub Topics에서 그대로 가져온 태그는 #해시태그 표기로 시각적으로 구분
-   (plugin_manager의 카드 표기 방식을 참고) */
-.pb-tag-topic {
-  color: var(--app-text-secondary, var(--app-text-muted));
-  border-color: var(--app-border, rgba(255,255,255,0.3));
-  background: transparent;
-  text-transform: none;
-  font-weight: 500;
-  opacity: 0.9;
-}
-
-/* GitHub Topics로 자동 발견된(검수를 거치지 않은) 저장소 표시 */
-.pb-tag-discovered {
-  color: color-mix(in srgb, #b9862f 90%, var(--app-text-primary));
-  border-color: color-mix(in srgb, #b9862f 55%, transparent);
-  background: color-mix(in srgb, #b9862f 14%, transparent);
-  opacity: 1;
-  font-weight: 600;
-  cursor: help;
-}
-
-/* 이미 설치되어 최신 상태인 카드에 표시되는 배지 (버튼 대체) */
-.pb-installed-badge {
-  font-size: 11px;
-  font-weight: 600;
-  color: color-mix(in srgb, #4f9d76 88%, var(--app-text-primary));
-  border: 1px solid color-mix(in srgb, #4f9d76 45%, transparent);
-  background: color-mix(in srgb, #4f9d76 12%, transparent);
-  padding: 7px 12px;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-.pb-installed-badge svg {
-  width: 11px;
-  height: 11px;
-  fill: currentColor;
-  flex-shrink: 0;
-}
-
-/* 관리자가 아니어서 설치/업데이트가 비활성화된 상태 — 정보성 문구로만 표시 */
-.pb-installed-badge-muted {
-  color: var(--app-text-muted);
-  border-color: var(--app-border, rgba(255,255,255,0.25));
-  background: transparent;
-}
-
-/* 이미 설치된 플러그인의 업데이트 버튼은 GitHub 버튼과 동일한 톤 유지,
-   신규 설치 버튼만 살짝 옅은 톤으로 구분 */
-.pb-install-btn-update {
-  background: color-mix(in srgb, var(--app-accent) 16%, transparent);
-  border-color: color-mix(in srgb, var(--app-accent) 40%, transparent);
-}
-
-/* ---------- 관리 행 (활성화/비활성화 · 환경설정 · 삭제) ---------- */
-.pb-manage-row {
-  margin-top: 4px;
-  padding: 10px 18px 4px 0;
-  border-top: 1px dashed var(--app-border-light, var(--app-border));
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.pb-manage-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.pb-manage-status {
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--app-text-secondary, var(--app-text-muted));
-}
-
-/* 토글 스위치 */
-.pb-switch {
-  position: relative;
-  display: inline-block;
-  width: 34px;
-  height: 19px;
-  flex-shrink: 0;
-}
-.pb-switch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-.pb-switch-slider {
-  position: absolute;
-  cursor: pointer;
-  inset: 0;
-  background: var(--app-border, rgba(255,255,255,0.25));
-  border-radius: 999px;
-  transition: background .15s ease;
-}
-.pb-switch-slider::before {
-  content: "";
-  position: absolute;
-  width: 15px;
-  height: 15px;
-  left: 2px;
-  top: 2px;
-  background: #fff;
-  border-radius: 50%;
-  transition: transform .15s ease;
-}
-.pb-switch input:checked + .pb-switch-slider {
-  background: color-mix(in srgb, var(--app-accent) 65%, var(--app-text-muted) 35%);
-}
-.pb-switch input:checked + .pb-switch-slider::before {
-  transform: translateX(15px);
-}
-.pb-switch input:disabled + .pb-switch-slider {
-  opacity: 0.6;
-  cursor: progress;
-}
-
-.pb-manage-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.pb-icon-btn {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: 1px solid var(--app-border, rgba(255,255,255,0.2));
-  border-radius: 6px;
+/* ---------- 설정 요약 / 도움말 / 로그 ---------- */
+.wtm-hint { font-size: 12px; line-height: 1.6; color: var(--app-text-muted); margin: 6px 0 10px; }
+.wtm-settings-summary { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px,1fr));
+  gap: 8px; font-size: 12px; margin-bottom: 10px; }
+.wtm-settings-summary div { padding: 7px 9px; border-radius: 6px;
+  background: var(--app-bg-main, rgba(127,127,127,.06));
+  border: 1px solid var(--app-border, rgba(127,127,127,.08));
   color: var(--app-text-secondary, var(--app-text-primary));
-  cursor: pointer;
-  transition: background .15s ease, color .15s ease;
-}
-.pb-icon-btn:hover:not(:disabled) {
-  background: var(--app-bg-card-hover);
-}
-.pb-icon-btn:disabled {
-  opacity: 0.6;
-  cursor: progress;
-}
-.pb-icon-btn svg {
-  width: 13px;
-  height: 13px;
-  fill: currentColor;
-}
-.pb-icon-btn-danger:hover:not(:disabled) {
-  color: color-mix(in srgb, #c0554f 85%, var(--app-text-primary));
-  border-color: color-mix(in srgb, #c0554f 45%, transparent);
-  background: color-mix(in srgb, #c0554f 12%, transparent);
-}
-
-/* ---------- 환경설정 모달 ---------- */
-.pb-modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  display: none;
-  align-items: center;
-  justify-content: center;
-  z-index: 2500;
-  padding: 20px;
-}
-.pb-modal-overlay.pb-modal-show {
-  display: flex;
-}
-
-.pb-modal {
-  width: 100%;
-  max-width: 560px;
-  max-height: 86vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--app-bg-card);
-  border: 1px solid var(--app-border, rgba(255,255,255,0.12));
-  border-radius: 10px;
-  box-shadow: var(--app-shadow, 0 20px 48px rgba(0,0,0,0.4));
-  overflow: hidden;
-}
-
-.pb-modal-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 22px;
-  border-bottom: 1px solid var(--app-border-light, var(--app-border));
-}
-.pb-modal-head h3 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--app-text-primary);
-}
-.pb-modal-close {
-  background: transparent;
-  border: none;
-  color: var(--app-text-muted);
-  font-size: 20px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 4px;
-}
-.pb-modal-close:hover {
-  color: var(--app-text-primary);
-}
-
-.pb-modal-body {
-  padding: 20px 22px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-.pb-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.pb-field label {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--app-text-primary);
-}
-.pb-field input[type="text"],
-.pb-field input[type="password"],
-.pb-field input[type="number"],
-.pb-field select {
-  width: 100%;
-  padding: 10px 12px;
-  border-radius: 6px;
-  background: var(--app-input-bg, var(--app-bg-main));
-  border: 1px solid var(--app-border, rgba(255,255,255,0.15));
-  color: var(--app-text-primary);
-  font-size: 13.5px;
-  font-family: inherit;
-  letter-spacing: 0.02em;
-}
-
-/* 비밀번호(토큰 등) 필드 — 값을 점으로 가려 잘 안 보인다는 피드백에 따라
-   보기/숨기기 토글 버튼을 입력창 안쪽 오른쪽에 겹쳐 배치한다. */
-.pb-field-password-wrap {
-  position: relative;
-  display: flex;
-}
-.pb-field-password-wrap input {
-  padding-right: 40px !important;
-  flex: 1;
-}
-.pb-field-password-toggle {
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 30px;
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  color: var(--app-text-muted);
-  cursor: pointer;
-}
-.pb-field-password-toggle:hover {
-  color: var(--app-text-primary);
-  background: var(--app-bg-card-hover);
-}
-.pb-field-password-toggle svg {
-  width: 16px;
-  height: 16px;
-  fill: currentColor;
-}
-
-.pb-field-checkbox-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
+  min-width: 0; overflow-wrap: break-word; word-break: break-word; }
+.wtm-log { max-height: 260px; overflow: auto; font-size: 11px;
+  background: var(--app-bg-main, rgba(127,127,127,.06));
+  border: 1px solid var(--app-border, rgba(127,127,127,.08));
   color: var(--app-text-secondary, var(--app-text-primary));
-  cursor: pointer;
-}
-.pb-field-required {
-  color: color-mix(in srgb, #c0554f 88%, var(--app-text-primary));
-}
-.pb-field-desc {
-  margin: 0;
-  font-size: 11px;
-  color: var(--app-text-muted);
-  line-height: 1.5;
-}
-
-.pb-modal-foot {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 14px 22px;
-  border-top: 1px solid var(--app-border-light, var(--app-border));
-}
-.pb-modal-btn {
-  font-size: 12.5px;
-  font-weight: 600;
-  font-family: inherit;
-  padding: 7px 14px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-.pb-modal-btn-cancel {
-  background: transparent;
-  border: 1px solid var(--app-border, rgba(255,255,255,0.2));
-  color: var(--app-text-secondary, var(--app-text-primary));
-}
-.pb-modal-btn-cancel:hover {
-  background: var(--app-bg-card-hover);
-}
-.pb-modal-btn-save {
-  background: color-mix(in srgb, var(--app-accent) 20%, transparent);
-  border: 1px solid color-mix(in srgb, var(--app-accent) 45%, transparent);
-  color: var(--app-accent);
-}
-.pb-modal-btn-save:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--app-accent) 30%, transparent);
-}
-.pb-modal-btn-save:disabled {
-  opacity: 0.65;
-  cursor: progress;
-}
-
-/* ---------- 푸터 ---------- */
-.pb-footer {
-  text-align: center;
-  margin-top: 22px;
-  font-size: 11px;
-  letter-spacing: 0.03em;
-  color: var(--app-text-muted);
-}
-
-/* ---------- 토스트 알림 (설치/업데이트 결과) ---------- */
-#pb-toast {
-  position: fixed;
-  left: 50%;
-  bottom: 24px;
-  transform: translate(-50%, 16px);
-  max-width: min(420px, calc(100vw - 32px));
-  background: var(--app-bg-card);
-  color: var(--app-text-primary);
-  border: 1px solid var(--app-border, rgba(255,255,255,0.15));
-  border-left: 4px solid var(--app-accent);
-  padding: 12px 16px;
-  border-radius: 8px;
-  font-size: 12.5px;
-  line-height: 1.5;
-  box-shadow: var(--app-shadow, 0 12px 28px rgba(0,0,0,0.3));
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity .2s ease, transform .2s ease;
-  z-index: 2000;
-}
-#pb-toast.pb-toast-error {
-  border-left-color: color-mix(in srgb, #c0554f 88%, var(--app-text-primary));
-}
-#pb-toast.pb-toast-show {
-  opacity: 1;
-  transform: translate(-50%, 0);
-  pointer-events: auto;
-}
+  padding: 10px; border-radius: 8px; white-space: pre-wrap; }
 
 @media (prefers-reduced-motion: reduce) {
-  .pb-card, .pb-filter-btn, .pb-link, .pb-install-btn, #pb-toast {
-    transition: none;
-  }
+  .wtm-card, .wtm-btn, .wtm-daytab, .wtm-tab { transition: none; }
 }
