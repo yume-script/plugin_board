@@ -248,6 +248,15 @@ def _parse_repo_url(url):
     return m.group(1), m.group(2), m.group(3)
 
 
+def _url_scheme(url):
+    """URL의 스킴(http/https)을 반환한다. Gitea 서버가 Cloudflare 등 프록시
+    뒤에서 http로만 서비스되는 경우(HTTPS로 강제 접속하면 523 "origin
+    unreachable" 오류가 남) 사용자가 준 스킴을 그대로 존중해야 한다.
+    파싱 실패 시에만 안전하게 https로 폴백한다."""
+    m = re.match(r"^(https?)://", (url or "").strip(), re.IGNORECASE)
+    return m.group(1).lower() if m else "https"
+
+
 def _is_github_host(host):
     return (host or "").lower() in ("github.com", "www.github.com")
 
@@ -309,26 +318,26 @@ def _gitea_headers(gitea_cfg):
     return headers
 
 
-def _gitea_get_json(host, path, gitea_cfg):
-    req = urllib.request.Request("https://%s%s" % (host, path), headers=_gitea_headers(gitea_cfg))
+def _gitea_get_json(host, path, gitea_cfg, scheme="https"):
+    req = urllib.request.Request("%s://%s%s" % (scheme, host, path), headers=_gitea_headers(gitea_cfg))
     with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def _gitea_get_text(host, path, gitea_cfg):
-    req = urllib.request.Request("https://%s%s" % (host, path), headers=_gitea_headers(gitea_cfg))
+def _gitea_get_text(host, path, gitea_cfg, scheme="https"):
+    req = urllib.request.Request("%s://%s%s" % (scheme, host, path), headers=_gitea_headers(gitea_cfg))
     with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT) as resp:
         return resp.read().decode("utf-8")
 
 
-def _gitea_download_zip(host, path, dest_path, gitea_cfg):
-    req = urllib.request.Request("https://%s%s" % (host, path), headers=_gitea_headers(gitea_cfg))
+def _gitea_download_zip(host, path, dest_path, gitea_cfg, scheme="https"):
+    req = urllib.request.Request("%s://%s%s" % (scheme, host, path), headers=_gitea_headers(gitea_cfg))
     with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT) as resp:
         with open(dest_path, "wb") as f:
             shutil.copyfileobj(resp, f)
 
 
-def _gitea_fetch_description_info(host, owner, repo, gitea_cfg):
+def _gitea_fetch_description_info(host, owner, repo, gitea_cfg, scheme="https"):
     """Gitea REST API(`GET /api/v1/repos/{owner}/{repo}`)로 설명·기본 브랜치를
     조회한다. GitHub 캐시와 섞이지 않도록 키에 "gitea:호스트/" 접두어를 쓴다."""
     key = "gitea:%s/%s/%s" % (host, owner, repo)
@@ -336,9 +345,9 @@ def _gitea_fetch_description_info(host, owner, repo, gitea_cfg):
     if cached and (time.time() - cached[0]) < _DESC_CACHE_TTL_SECONDS:
         return cached[1]
 
-    fallback_url = "https://%s/%s/%s" % (host, owner, repo)
+    fallback_url = "%s://%s/%s/%s" % (scheme, host, owner, repo)
     try:
-        data = _gitea_get_json(host, "/api/v1/repos/%s/%s" % (owner, repo), gitea_cfg)
+        data = _gitea_get_json(host, "/api/v1/repos/%s/%s" % (owner, repo), gitea_cfg, scheme)
         info = {
             "desc": data.get("description") or "(등록된 설명이 없습니다)",
             "tags": [],  # Gitea 토픽 발견은 v1 미지원(GitHub Topics 전용 기능)
@@ -363,7 +372,7 @@ def _gitea_fetch_description_info(host, owner, repo, gitea_cfg):
     return info
 
 
-def _gitea_fetch_version(host, owner, repo, default_branch, gitea_cfg):
+def _gitea_fetch_version(host, owner, repo, default_branch, gitea_cfg, scheme="https"):
     """저장소의 VERSION 파일을 Gitea raw API로 조회한다.
     `/api/v1/repos/{owner}/{repo}/raw/{branch}/{filepath}` 형식(브랜치를 쿼리
     파라미터가 아니라 경로에 직접 포함)을 쓴다 — Gitea 1.23부터 `?ref=` 방식이
@@ -371,7 +380,7 @@ def _gitea_fetch_version(host, owner, repo, default_branch, gitea_cfg):
     for branch in _candidate_branches(default_branch):
         try:
             text = _gitea_get_text(
-                host, "/api/v1/repos/%s/%s/raw/%s/VERSION" % (owner, repo, branch), gitea_cfg
+                host, "/api/v1/repos/%s/%s/raw/%s/VERSION" % (owner, repo, branch), gitea_cfg, scheme
             )
             data = json.loads(text)
             version = data.get("plugin version")
@@ -382,13 +391,13 @@ def _gitea_fetch_version(host, owner, repo, default_branch, gitea_cfg):
     return None
 
 
-def _gitea_fetch_version_info(host, owner, repo, default_branch, gitea_cfg):
+def _gitea_fetch_version_info(host, owner, repo, default_branch, gitea_cfg, scheme="https"):
     key = "gitea:%s/%s/%s" % (host, owner, repo)
     cached = _VERSION_CACHE.get(key)
     if cached and (time.time() - cached[0]) < _VERSION_CACHE_TTL_SECONDS:
         return cached[1]
 
-    remote_version = _gitea_fetch_version(host, owner, repo, default_branch, gitea_cfg)
+    remote_version = _gitea_fetch_version(host, owner, repo, default_branch, gitea_cfg, scheme)
     info = {
         "version_label": ("v" + remote_version) if remote_version else "—",
         "remote_version": remote_version,
@@ -863,7 +872,8 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None):
         # GitHub가 아닌 모든 호스트는 Gitea 호환 API로 시도한다(서버별 허용
         # 목록 없음 — URL에 담긴 자격증명만으로 인증하므로 도메인 개수 제한이 없다).
         gitea_cfg = _effective_gitea_cfg(url)
-        return _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg)
+        scheme = _url_scheme(url)  # http로 준 주소는 http로 그대로 조회(523 방지)
+        return _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg, scheme)
 
     key = owner + "/" + repo
     plugin_type = TYPE_OVERRIDES.get(key, "other")
@@ -912,7 +922,7 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None):
     return item
 
 
-def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg):
+def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg, scheme="https"):
     """GitHub 카드와 동일한 형태의 item dict를 Gitea API로 채워 만든다."""
     key = owner + "/" + repo
     plugin_type = TYPE_OVERRIDES.get(key, "other")
@@ -930,8 +940,10 @@ def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg):
         has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(repo)
         title = local_attrs.get("name") or repo
 
-    desc_info = _gitea_fetch_description_info(host, owner, repo, gitea_cfg)
-    version_info = _gitea_fetch_version_info(host, owner, repo, desc_info.get("default_branch"), gitea_cfg)
+    desc_info = _gitea_fetch_description_info(host, owner, repo, gitea_cfg, scheme)
+    version_info = _gitea_fetch_version_info(
+        host, owner, repo, desc_info.get("default_branch"), gitea_cfg, scheme
+    )
     remote_version = version_info["remote_version"]
 
     return {
@@ -1822,13 +1834,13 @@ def _install_or_update(owner, repo, token=None):
     return False, "설치/업데이트 실패: %s" % (last_error or "알 수 없는 오류")
 
 
-def _install_or_update_gitea(host, owner, repo, gitea_cfg):
+def _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme="https"):
     """Gitea 저장소를 설치/업데이트한다. GitHub용 _install_or_update와 동일한
     전체 재다운로드 방식(검증 후 폴더 교체)을 쓰되, 다운로드/조회 경로만
     Gitea API로 바꾼 버전이다."""
     _validate_plugin_id(repo)
 
-    desc_info = _gitea_fetch_description_info(host, owner, repo, gitea_cfg)
+    desc_info = _gitea_fetch_description_info(host, owner, repo, gitea_cfg, scheme)
     default_branch = desc_info.get("default_branch")
 
     last_error = None
@@ -1837,7 +1849,7 @@ def _install_or_update_gitea(host, owner, repo, gitea_cfg):
         tmp_dir = tempfile.mkdtemp(prefix="plugin_board_gitea_")
         try:
             zip_path = os.path.join(tmp_dir, "src.zip")
-            _gitea_download_zip(host, zip_path_on_server, zip_path, gitea_cfg)
+            _gitea_download_zip(host, zip_path_on_server, zip_path, gitea_cfg, scheme)
 
             extract_dir = os.path.join(tmp_dir, "extract")
             os.makedirs(extract_dir, exist_ok=True)
@@ -1898,7 +1910,8 @@ def _install_or_update_from_url(url, token):
         ok, msg = _install_or_update(owner, repo, effective_token)
     else:
         gitea_cfg = _effective_gitea_cfg(url)
-        ok, msg = _install_or_update_gitea(host, owner, repo, gitea_cfg)
+        scheme = _url_scheme(clean_url)  # http로 준 주소는 http로 그대로 설치(523 방지)
+        ok, msg = _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme)
 
     if ok:
         # 다음 업데이트 확인 때도 같은 인증 정보를 쓸 수 있도록, 자격증명이

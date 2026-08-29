@@ -499,6 +499,27 @@ zip)과 무관하게 동일한 파일에 기록되므로 관리가 더 단순합
 안 남는 것, 그리고 2차 로드 검증 실패 시 설치 폴더와 레지스트리 양쪽 모두
 롤백되는 것까지 전부 재현 테스트로 확인했습니다.
 
+## Gitea 주소의 http/https 스킴을 그대로 존중 (v2.42.0)
+
+**증상**: `http://아이디:비밀번호@호스트/owner/repo` 형식으로 **http** 주소를
+입력했는데도 카드에 "Gitea API 호출 오류 (HTTP 523)"이 떴습니다. 523은
+Cloudflare 등 프록시가 "origin(원본 서버)에 도달할 수 없다"는 뜻으로 반환하는
+코드로, 실제 Gitea 서버는 http로만 서비스되는데 저희 코드가 **입력받은 스킴과
+무관하게 항상 https로 강제 접속**하고 있었던 게 원인이었습니다.
+
+**고친 내용**: `_url_scheme(url)` 헬퍼를 추가해 사용자가 준 URL의 스킴(http/https)
+을 그대로 존중하도록 Gitea 관련 함수 전체(`_gitea_get_json`/`_gitea_get_text`/
+`_gitea_download_zip`/`_gitea_fetch_description_info`/`_gitea_fetch_version`/
+`_gitea_fetch_version_info`/`_fetch_gitea_repo_entry`/`_install_or_update_gitea`)
+에 `scheme` 매개변수를 관통시켰습니다. 카드 조회, zip 다운로드를 통한 설치,
+카드에 표시되는 링크 URL까지 전부 원래 입력한 스킴을 그대로 씁니다(기본값은
+기존과 동일하게 `https`이므로 스킴을 명시하지 않은 기존 설정은 영향이 없습니다).
+
+실제로 `http://` 주소로 조회·설치 전체 흐름을 스텁으로 재현해, 매 단계에서
+정확히 `http`로 요청이 나가는 것과 카드에 표시되는 URL도 `http://`를 유지하는
+것까지 확인했습니다. `https://` 주소는 기존과 동일하게 계속 정상 동작합니다(회귀
+테스트 통과).
+
 ## 401(인증 실패)과 403(호출 제한)을 구분한 오류 메시지 (v2.41.0)
 
 **증상**: GitHub API 호출이 401(Bad credentials)로 실패해도 화면에는
