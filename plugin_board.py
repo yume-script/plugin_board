@@ -750,6 +750,14 @@ def _fetch_remote_info(owner, repo, token):
 # 이 검색이 카드 목록의 유일한 수집 경로다. 검증 없이 자동 노출되므로
 # 카드에는 여전히 "미검수" 표시를 한다(수동으로 확인된 목록이 아니라는 뜻).
 # ========================================================================
+def _topic_cache_key(topics):
+    """_fetch_repos_by_topic와 동일한 방식으로 캐시 키를 만든다(정렬된 중복
+    제거 콤마 결합). get_dashboard_data가 검색 직후 그 시각(_TOPIC_CACHE의
+    타임스탬프)을 조회할 때도 재사용한다."""
+    cleaned = [t.strip() for t in topics if t and t.strip()]
+    return ",".join(sorted(set(cleaned)))
+
+
 def _fetch_repos_by_topic(topics, token):
     """GitHub Search API(`/search/repositories?q=topic:...`)로 지정된 토픽이
     달린 공개 저장소를 찾는다. 토픽 하나가 실패해도 나머지는 계속 시도하며,
@@ -759,7 +767,7 @@ def _fetch_repos_by_topic(topics, token):
     if not topics:
         return []
 
-    cache_key = ",".join(sorted(set(topics)))
+    cache_key = _topic_cache_key(topics)
     now = time.time()
     cached = _TOPIC_CACHE.get(cache_key)
     if cached and (now - cached[0]) < _TOPIC_CACHE_TTL_SECONDS:
@@ -2158,6 +2166,12 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         except Exception:
             topic_repos = []
 
+        # 검색 직후 _TOPIC_CACHE에 남은 타임스탬프를 그대로 읽어와, "마지막으로
+        # 실제 검색한 시각"을 화면에 알려준다(캐시가 살아있어 재요청을 안 한
+        # 경우에도 이전 검색 시각이 남아있으므로 정확하다).
+        topic_cache_entry = _TOPIC_CACHE.get(_topic_cache_key(all_topics))
+        topic_search_at = topic_cache_entry[0] if topic_cache_entry else None
+
         if topic_repos:
             version_specs = []
             for repo_json in topic_repos:
@@ -2215,4 +2229,5 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             "items": [self_item] + discovered_items + registry_items + local_items,
             "auto_update_enabled": auto_update_enabled,
             "is_admin": is_admin,
+            "topic_search_at": topic_search_at,  # 초 단위 epoch, 검색 이력이 전혀 없으면 None
         }

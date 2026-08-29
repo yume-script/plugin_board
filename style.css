@@ -133,6 +133,12 @@
   color: var(--app-accent, var(--app-text-primary));
 }
 
+.pb-topic-search-time {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--app-text-muted);
+}
+
 /* ---------- GitHub 토큰 발급 안내(접이식) ---------- */
 .pb-token-help {
   margin-top: 14px;

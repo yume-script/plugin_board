@@ -1029,6 +1029,34 @@
     }
   }
 
+  // 마지막으로 GitHub Topics를 실제로 검색한 시각을 헤더에 표시한다. 캐시가
+  // 살아있어 재검색을 안 한 경우에도 이전 검색 시각이 그대로 남아있으므로,
+  // "지금 이 카드 목록이 몇 분 전 정보인지"를 사용자가 가늠할 수 있게 한다.
+  function showTopicSearchTime(epochSeconds) {
+    const el = document.getElementById("pb-topic-search-time");
+    if (!el) return;
+    if (!epochSeconds) {
+      el.hidden = true;
+      return;
+    }
+    const date = new Date(epochSeconds * 1000);
+    const diffMs = Date.now() - date.getTime();
+    const diffMin = Math.floor(diffMs / 60000);
+
+    let relative;
+    if (diffMin < 1) relative = "방금 전";
+    else if (diffMin < 60) relative = `${diffMin}분 전`;
+    else {
+      const diffHour = Math.floor(diffMin / 60);
+      relative = diffHour < 24 ? `${diffHour}시간 전` : `${Math.floor(diffHour / 24)}일 전`;
+    }
+
+    const hh = String(date.getHours()).padStart(2, "0");
+    const mm = String(date.getMinutes()).padStart(2, "0");
+    el.textContent = `🔍 토픽 검색: ${relative} (${hh}:${mm} 기준, 최대 1시간마다 자동 갱신)`;
+    el.hidden = false;
+  }
+
   async function load() {
     console.log(`${LOG_PREFIX} 데이터 요청: ${dataUrl()}`);
     try {
@@ -1051,6 +1079,7 @@
       gridEl.hidden = false;
       buildFiltersAndTally();
       render();
+      showTopicSearchTime(json.topic_search_at);
 
       const errorCount = allItems.filter((it) => it.error).length;
       console.log(
