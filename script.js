@@ -1029,6 +1029,19 @@
     }
   }
 
+  // 헤더 제목("플러그인게시판") 옆에 plugin_board 자기 자신의 현재 설치된
+  // 버전을 표시한다. 값이 없으면(설치 확인 자체가 안 된 극단적 상황) 조용히 숨긴다.
+  function showTitleVersion(version) {
+    const el = document.getElementById("pb-title-version");
+    if (!el) return;
+    if (!version) {
+      el.hidden = true;
+      return;
+    }
+    el.textContent = "v" + version;
+    el.hidden = false;
+  }
+
   // 마지막으로 GitHub Topics를 실제로 검색한 시각을 헤더에 표시한다. 캐시가
   // 살아있어 재검색을 안 한 경우에도 이전 검색 시각이 그대로 남아있으므로,
   // "지금 이 카드 목록이 몇 분 전 정보인지"를 사용자가 가늠할 수 있게 한다.
@@ -1080,6 +1093,7 @@
       buildFiltersAndTally();
       render();
       showTopicSearchTime(json.topic_search_at);
+      showTitleVersion(json.plugin_board_version);
 
       const errorCount = allItems.filter((it) => it.error).length;
       console.log(

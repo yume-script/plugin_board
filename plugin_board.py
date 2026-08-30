@@ -1342,6 +1342,7 @@ def _validate_plugin_source(plugin_dir, detected_id):
     has_search = False
     has_apply = False
     forbidden_hits = []
+    cross_plugin_deps = set()  # plugins.metadata.<다른 플러그인 id>를 직접 import하는 경우
 
     for fname in py_files:
         fpath = os.path.join(plugin_dir, fname)
@@ -1364,9 +1365,17 @@ def _validate_plugin_source(plugin_dir, detected_id):
                 for a in node.names:
                     if a.name == "subprocess" or a.name.startswith("subprocess."):
                         forbidden_hits.append("%s: subprocess import 발견" % fname)
+                    elif a.name.startswith("plugins.metadata."):
+                        parts = a.name.split(".")
+                        if len(parts) >= 3 and parts[2] not in ("base", detected_id):
+                            cross_plugin_deps.add(parts[2])
             elif isinstance(node, ast.ImportFrom):
                 if node.module == "subprocess":
                     forbidden_hits.append("%s: subprocess import 발견" % fname)
+                elif node.module and node.module.startswith("plugins.metadata."):
+                    parts = node.module.split(".")
+                    if len(parts) >= 3 and parts[2] not in ("base", detected_id):
+                        cross_plugin_deps.add(parts[2])
             elif isinstance(node, ast.keyword) and node.arg == "shell":
                 try:
                     if ast.literal_eval(node.value) is True:
@@ -1461,6 +1470,24 @@ def _validate_plugin_source(plugin_dir, detected_id):
 
     checks.append({"name": "금지 패턴", "ok": not forbidden_hits,
                     "detail": "; ".join(forbidden_hits[:3]) if forbidden_hits else "eval/exec/subprocess 없음"})
+
+    # 다른 플러그인 모듈(plugins.metadata.<다른 id>)을 직접 import하는 경우 —
+    # 그 다른 플러그인이 이 서버에 설치돼 있지 않으면 설치 자체는 성공해도
+    # 코어가 이 모듈을 로드하는 시점에 "No module named 'plugins.metadata.X'"로
+    # 조용히 실패한다. 설치 전에 미리 걸러내 훨씬 명확한 원인을 알려준다.
+    missing_deps = sorted(dep for dep in cross_plugin_deps if not _is_installed(dep))
+    if missing_deps:
+        checks.append({"name": "플러그인 간 의존성", "ok": False,
+                        "detail": (
+                            "이 플러그인은 다른 플러그인(plugins.metadata.%s)을 직접 "
+                            "import하는데, 이 서버에 설치돼 있지 않습니다. 먼저 해당 "
+                            "플러그인을 설치한 뒤 다시 시도해주세요." % ", plugins.metadata.".join(missing_deps)
+                        )})
+    elif cross_plugin_deps:
+        checks.append({"name": "플러그인 간 의존성", "ok": True,
+                        "detail": "필요한 다른 플러그인(%s) 전부 설치되어 있음" % ", ".join(sorted(cross_plugin_deps))})
+    else:
+        checks.append({"name": "플러그인 간 의존성", "ok": True, "detail": "다른 플러그인에 대한 직접 의존성 없음"})
 
     if os.path.isfile(os.path.join(plugin_dir, "__init__.py")):
         checks.append({"name": "__init__.py", "ok": True, "detail": "확인"})
@@ -2230,4 +2257,5 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             "auto_update_enabled": auto_update_enabled,
             "is_admin": is_admin,
             "topic_search_at": topic_search_at,  # 초 단위 epoch, 검색 이력이 전혀 없으면 None
+            "plugin_board_version": self_item.get("installed_version"),  # 헤더 제목 옆 버전 표기용
         }
