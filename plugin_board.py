@@ -437,60 +437,144 @@ def _github_registry_path():
     GitHub Topics(커뮤니티 자율 태그)에 없어도 — 검색 결과는 이 플러그인이
     통제할 수 없는 외부 신호라 사라지거나 바뀔 수 있음 — 이 서버에서 실제로
     설치했던 이력만큼은 독자적으로 보존해, 이후에도 계속 업데이트 확인
-    대상에 남도록 한다."""
+    대상에 남도록 한다.
+
+    파일 형식: 한 줄에 "plugin_id<TAB>url". plugin_id(=설치 폴더 이름)를 1차
+    키로 삼아, 저장소가 다른 owner/호스트로 옮겨가거나 이름이 바뀌어도 같은
+    plugin_id 항목의 url만 갱신하면 계속 추적할 수 있도록 한다(구버전에서
+    쓰던 "url만 한 줄에 하나" 형식도 하위 호환으로 계속 읽을 수 있다 — 이
+    경우 plugin_id는 그 url을 파싱해 얻은 저장소 이름으로 간주한다)."""
     return os.path.join(_plugins_root_dir(), "data", "plugin_board", "github.txt")
 
 
-def _load_github_registry():
-    """github.txt에 기록된 저장소 주소 목록을 읽는다. 파일이 없거나 읽기에
+def _load_github_registry_entries():
+    """github.txt를 (plugin_id, url) 튜플 목록으로 읽는다. 새 형식
+    "plugin_id<TAB>url"과, 하위 호환을 위한 구 형식(URL 한 줄)을 함께
+    처리한다 — 구 형식 줄은 URL을 파싱해 얻은 저장소 이름을 plugin_id로
+    간주한다(파싱조차 안 되면 그 줄은 건너뛴다). 파일이 없거나 읽기에
     실패하면 빈 목록을 반환한다(레지스트리는 성능/편의용 부가 기능이라
     실패해도 플러그인 동작 자체를 막지 않는다)."""
     path = _github_registry_path()
     if not os.path.isfile(path):
         return []
+    entries = []
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return [
-                line.strip() for line in f
-                if line.strip() and not line.strip().startswith("#")
-            ]
+            lines = [line.rstrip("\n") for line in f]
     except Exception:
         return []
 
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "\t" in line:
+            plugin_id, url = line.split("\t", 1)
+            plugin_id = plugin_id.strip()
+            url = url.strip()
+        else:
+            url = line
+            _, _, plugin_id = _parse_repo_url(url)
+        if plugin_id and url:
+            entries.append((plugin_id, url))
+    return entries
 
-def _remember_repo_install(url):
+
+def _save_github_registry_entries(entries):
+    """(plugin_id, url) 목록을 github.txt에 "plugin_id<TAB>url" 형식으로
+    저장한다. 기록 실패는 예외를 조용히 무시한다(부가 기능일 뿐 설치/삭제
+    자체를 막을 이유가 아니다)."""
+    try:
+        path = _github_registry_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        lines = ["%s\t%s" % (pid, url) for pid, url in entries]
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + ("\n" if lines else ""))
+    except Exception:
+        pass
+
+
+def _load_github_registry():
+    """하위 호환용 — URL 목록만 필요한 호출부를 위해 (plugin_id, url) 중
+    url만 뽑아서 반환한다."""
+    return [url for _pid, url in _load_github_registry_entries()]
+
+
+def _remember_repo_install(url, plugin_id=None):
     """설치/업데이트에 성공한 저장소 주소(GitHub든 Gitea든)를 github.txt에
     기록한다. URL에 자격증명(https://아이디:비밀번호@host/...)이 담겨 있으면
     그대로(정제하지 않고) 저장한다 — 이후 대시보드에서 업데이트를 확인할 때도
     같은 자격증명으로 계속 인증하기 위함이다(도메인/계정마다 별도 설정을 두지
     않고, URL 저장 자체가 곧 인증 정보 저장이 되는 방식).
 
-    이미 같은 저장소 이름이 등록돼 있으면 최신 URL(자격증명 포함 여부 포함)로
-    교체한다 — 예를 들어 처음엔 자격증명 없이 설치했다가 나중에 자격증명이
-    담긴 URL로 다시 설치하면, 그 최신 URL로 갱신되어야 계속 인증이 유지된다.
-    기록 실패는 설치 자체를 막을 이유가 아니므로 예외를 조용히 무시한다."""
+    plugin_id(=설치 폴더 이름)를 1차 키로 삼아 기록한다 — 지정하지 않으면
+    url을 파싱해 얻은 저장소 이름을 그대로 쓴다(설치 직후 호출하는 기존
+    호출부와 동일하게 동작). 이미 같은 plugin_id가 등록돼 있으면 최신 URL로
+    교체한다 — 처음엔 자격증명 없이 설치했다가 나중에 자격증명이 담긴 URL로
+    다시 설치하면, 그 최신 URL로 갱신되어야 계속 인증이 유지된다. 기록 실패는
+    설치 자체를 막을 이유가 아니므로 예외를 조용히 무시한다."""
     try:
-        _, _, repo = _parse_repo_url(url)
-        if not repo:
+        if plugin_id is None:
+            _, _, plugin_id = _parse_repo_url(url)
+        if not plugin_id:
             return
-        existing = _load_github_registry()
-        new_lines = []
+        entries = _load_github_registry_entries()
+        new_entries = []
         replaced = False
-        for line in existing:
-            if _parse_repo_url(line)[2] == repo:
-                new_lines.append(url)
+        for pid, existing_url in entries:
+            if pid == plugin_id:
+                new_entries.append((plugin_id, url))
                 replaced = True
             else:
-                new_lines.append(line)
+                new_entries.append((pid, existing_url))
         if not replaced:
-            new_lines.append(url)
-
-        path = _github_registry_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("\n".join(new_lines) + ("\n" if new_lines else ""))
+            new_entries.append((plugin_id, url))
+        _save_github_registry_entries(new_entries)
     except Exception:
         pass
+
+
+def _update_registered_repo_url(plugin_id, new_url):
+    """이미 추적 중인 plugin_id의 등록 Git 주소를 새 URL로 바꾼다. 저장소가
+    다른 owner나 호스트로 옮겨갔거나(이름은 그대로) 아예 새 주소로 다시
+    올라온 경우, 재설치 없이 "이 plugin_id는 이제 이 URL을 본다"고만
+    갱신하고 싶을 때 쓴다. 새 URL이 유효한 저장소 주소 형식인지만 확인하고
+    실제로 그 주소에 접근 가능한지는 확인하지 않는다(다음 '업데이트' 클릭
+    시 자연히 확인된다). 아직 레지스트리에 없던 plugin_id라면 새로 추가한다."""
+    try:
+        _validate_plugin_id(plugin_id)
+    except ValueError as exc:
+        return False, str(exc)
+
+    host, owner, repo = _parse_repo_url(new_url)
+    if not host or not owner or not repo:
+        return False, "Git 저장소 주소를 해석하지 못했습니다: %s" % new_url
+
+    _remember_repo_install(new_url, plugin_id=plugin_id)
+    return True, "'%s'의 등록된 Git 주소를 갱신했습니다. '업데이트' 버튼으로 새 주소에서 최신 상태를 확인해보세요." % plugin_id
+
+
+def _unregister_repo(plugin_id):
+    """github.txt에서 plugin_id 항목만 제거한다. 설치된 플러그인 파일
+    (plugins/metadata/{plugin_id})은 전혀 건드리지 않는다 — 원본 저장소가
+    삭제/이전되어 더 이상 업데이트를 추적할 수 없을 때, 지금 설치된 버전은
+    그대로 남겨두고 "더 이상 이 주소로 업데이트를 확인하지 않는다"는 것만
+    표시하고 싶은 경우에 쓴다."""
+    try:
+        _validate_plugin_id(plugin_id)
+    except ValueError as exc:
+        return False, str(exc)
+
+    entries = _load_github_registry_entries()
+    remaining = [(pid, url) for pid, url in entries if pid != plugin_id]
+    if len(remaining) == len(entries):
+        return False, "등록된 Git 주소 목록에 '%s'가 없습니다." % plugin_id
+
+    _save_github_registry_entries(remaining)
+    return True, (
+        "'%s'의 등록된 Git 주소를 목록에서 제거했습니다. 설치된 플러그인 파일은 "
+        "그대로 유지됩니다(더 이상 이 주소로 업데이트를 확인하지 않습니다)." % plugin_id
+    )
 
 
 def _is_installed(plugin_id):
@@ -875,16 +959,24 @@ def _build_discovered_item(repo_json, version_info, is_enabled_fn, excluded_ids)
     }
 
 
-def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None):
+def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None, plugin_id_override=None):
+    """url에서 얻은 원격 정보(설명·버전 등)로 카드를 만들되, 로컬 설치 여부·
+    버전·활성화 상태는 plugin_id_override가 주어지면 그 값을(설치 폴더명
+    기준으로) 우선 사용한다 — 등록된 Git 주소의 저장소 이름이 바뀌었어도
+    실제 설치된 폴더는 이전 plugin_id 그대로일 수 있기 때문이다(레지스트리
+    항목 조회 시 사용, 신규설치 미리보기에는 override 없이 그대로 repo를 씀)."""
     host, owner, repo = _parse_repo_url(url)
     if not host or not owner or not repo:
+        pid = plugin_id_override or url
         return {
-            "id": url, "owner": "", "title": url, "type": "other",
+            "id": pid, "owner": "", "title": pid, "type": "other",
             "type_label": TYPE_LABELS["other"],
             "desc": "저장소 주소를 해석하지 못했습니다.",
             "tags": [], "features": [], "version_label": "—",
             "url": url, "error": True,
-            "installed": False, "installed_version": None, "has_update": False,
+            "installed": _is_installed(pid) if plugin_id_override else False,
+            "installed_version": (_local_version(pid) if plugin_id_override and _is_installed(pid) else None),
+            "has_update": False,
             "has_config": False, "enabled": None,
         }
 
@@ -893,24 +985,28 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None):
         # 목록 없음 — URL에 담긴 자격증명만으로 인증하므로 도메인 개수 제한이 없다).
         gitea_cfg = _effective_gitea_cfg(url)
         scheme = _url_scheme(url)  # http로 준 주소는 http로 그대로 조회(523 방지)
-        return _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg, scheme)
+        return _fetch_gitea_repo_entry(
+            host, owner, repo, is_enabled_fn, gitea_cfg, scheme,
+            plugin_id_override=plugin_id_override,
+        )
 
+    local_id = plugin_id_override or repo
     key = owner + "/" + repo
     plugin_type = TYPE_OVERRIDES.get(key, "other")
-    installed = _is_installed(repo)
-    installed_version = _local_version(repo) if installed else None
+    installed = _is_installed(local_id)
+    installed_version = _local_version(local_id) if installed else None
     has_config = False
-    title = repo
+    title = local_id
 
     if installed:
         # 이미 설치되어 있다면 실제 소스에서 분류·설정 여부·표시 이름을 더 정확히 추정
-        local_attrs = _read_local_class_attrs(repo)
+        local_attrs = _read_local_class_attrs(local_id)
         if local_attrs.get("is_searchable"):
             plugin_type = "search"
         elif local_attrs.get("category_tab"):
             plugin_type = "tab"
-        has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(repo)
-        title = local_attrs.get("name") or repo
+        has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(local_id)
+        title = local_attrs.get("name") or local_id
 
     # 병렬로 미리 가져온 원격 정보가 있으면 그걸 쓰고, 없으면(단건 호출 등) URL에
     # 담긴 자격증명을 우선 적용해(없으면 GITHUB_TOKEN 설정으로 폴백) 직접 조회
@@ -921,7 +1017,7 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None):
     remote_version = info["remote_version"]
 
     item = {
-        "id": repo,
+        "id": local_id,
         "owner": owner,
         "title": title,
         "type": plugin_type,
@@ -937,28 +1033,30 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None):
         "installed_version": installed_version,
         "has_update": installed and _remote_is_newer(installed_version, remote_version),
         "has_config": has_config,
-        "enabled": is_enabled_fn(repo) if installed else None,
+        "enabled": is_enabled_fn(local_id) if installed else None,
     }
     return item
 
 
-def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg, scheme="https"):
-    """GitHub 카드와 동일한 형태의 item dict를 Gitea API로 채워 만든다."""
+def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg, scheme="https", plugin_id_override=None):
+    """GitHub 카드와 동일한 형태의 item dict를 Gitea API로 채워 만든다.
+    plugin_id_override 의미는 _fetch_repo_entry와 동일하다."""
+    local_id = plugin_id_override or repo
     key = owner + "/" + repo
     plugin_type = TYPE_OVERRIDES.get(key, "other")
-    installed = _is_installed(repo)
-    installed_version = _local_version(repo) if installed else None
+    installed = _is_installed(local_id)
+    installed_version = _local_version(local_id) if installed else None
     has_config = False
-    title = repo
+    title = local_id
 
     if installed:
-        local_attrs = _read_local_class_attrs(repo)
+        local_attrs = _read_local_class_attrs(local_id)
         if local_attrs.get("is_searchable"):
             plugin_type = "search"
         elif local_attrs.get("category_tab"):
             plugin_type = "tab"
-        has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(repo)
-        title = local_attrs.get("name") or repo
+        has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(local_id)
+        title = local_attrs.get("name") or local_id
 
     desc_info = _gitea_fetch_description_info(host, owner, repo, gitea_cfg, scheme)
     version_info = _gitea_fetch_version_info(
@@ -967,7 +1065,7 @@ def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg, scheme=
     remote_version = version_info["remote_version"]
 
     return {
-        "id": repo,
+        "id": local_id,
         "owner": owner,
         "title": title,
         "type": plugin_type,
@@ -983,15 +1081,16 @@ def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg, scheme=
         "installed_version": installed_version,
         "has_update": installed and _remote_is_newer(installed_version, remote_version),
         "has_config": has_config,
-        "enabled": is_enabled_fn(repo) if installed else None,
+        "enabled": is_enabled_fn(local_id) if installed else None,
         "gitea": True,
     }
 
 
 # ========================================================================
 # 설치/업데이트 엔진 — git 바이너리·plugin_manager 없이 codeload zip으로 처리
-# (madnite1/plugin_manager와 동일한 원리: 릴리즈 대신 브랜치 우선순위,
-#  update_manifest는 AST로만 추출해 코드 실행 없이 안전하게 읽는다)
+# (madnite1/plugin_manager와 동일한 원리: 릴리즈 대신 브랜치 우선순위. 파일
+#  선별은 하지 않고 검증 통과 시 폴더 전체를 교체한다 — 모듈 상단 docstring
+#  [PATCH-2]/[PATCH-3] 참고)
 # ========================================================================
 def _validate_plugin_id(plugin_id):
     if not _PLUGIN_ID_RE.match(plugin_id or ""):
@@ -1780,14 +1879,17 @@ def _toggle_plugin_enabled(plugin_id, enabled_val, db_type):
 
 
 def _delete_plugin(plugin_id):
-    """plugins/metadata/{plugin_id} 폴더를 삭제한다. 경로는 항상 plugins/metadata
-    경계 안에 있는지 검증한 뒤에만 삭제한다(_validate_plugin_id + _safe_join 재사용)."""
+    """plugins/metadata/{plugin_id} 폴더와, 있다면 plugins/data/{plugin_id}
+    폴더(플러그인이 남긴 데이터)까지 함께 삭제한다. 두 경로 모두 각자의 루트
+    (plugins/metadata, plugins/data) 경계 안에 있는지 검증한 뒤에만 삭제한다
+    (_validate_plugin_id + _safe_join 재사용)."""
     if plugin_id == "plugin_board":
         return False, "plugin_board 자기 자신은 이 화면에서 삭제할 수 없습니다."
 
     try:
         _validate_plugin_id(plugin_id)
         target_dir = _safe_join(_plugins_metadata_dir(), plugin_id)
+        data_dir = _safe_join(os.path.join(_plugins_root_dir(), "data"), plugin_id)
     except ValueError as exc:
         return False, str(exc)
 
@@ -1799,11 +1901,20 @@ def _delete_plugin(plugin_id):
     except Exception as exc:
         return False, "삭제 실패: %s" % exc
 
+    # 메타데이터 폴더 삭제가 이미 성공한 뒤이므로, 데이터 폴더 삭제가 실패해도
+    # (예: 권한 문제) 전체 삭제 자체를 실패로 처리하지 않고 메시지에만 알린다.
+    data_dir_warning = ""
+    if os.path.isdir(data_dir):
+        try:
+            shutil.rmtree(data_dir)
+        except Exception as exc:
+            data_dir_warning = " (경고: 데이터 폴더 plugins/data/%s 삭제 실패: %s)" % (plugin_id, exc)
+
     _DESC_CACHE.clear()  # 삭제된 플러그인이 GitHub 캐시에 남아 잘못된 정보를 주지 않도록
     _VERSION_CACHE.clear()
     _save_disk_cache()
     _try_hot_reload(plugin_id)
-    return True, "'%s' 플러그인이 삭제되었습니다." % plugin_id
+    return True, "'%s' 플러그인이 삭제되었습니다.%s" % (plugin_id, data_dir_warning)
 
 
 
@@ -2118,7 +2229,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         # 막기 위해 백엔드에서도 동일하게 확인한다(api/auth.py의 admin_required와
         # 같은 기준). refresh_list는 카드 목록만 새로고침하는 무해한 동작이라
         # 제외한다.
-        if action in ("install_git", "update", "toggle", "delete", "get_config", "install_zip") and not _is_admin_session():
+        if action in ("install_git", "update", "toggle", "delete", "get_config", "install_zip", "update_url", "unregister") and not _is_admin_session():
             return False, "관리자만 사용할 수 있는 기능입니다."
 
         if action == "install_zip":
@@ -2187,6 +2298,24 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 return False, "plugin_id가 필요합니다."
             return _delete_plugin(plugin_id)
 
+        if action == "update_url":
+            # [신규] 등록된 Git 주소가 바뀐(저장소 이름/owner/호스트 이전 등) 경우,
+            # 재설치 없이 "이 plugin_id는 이제 이 URL을 본다"고만 갱신한다.
+            if not plugin_id:
+                return False, "plugin_id가 필요합니다."
+            new_git_url = str(item_data.get("git_url", "")).strip()
+            if not new_git_url:
+                return False, "새 git_url이 필요합니다."
+            return _update_registered_repo_url(plugin_id, new_git_url)
+
+        if action == "unregister":
+            # [신규] 원본 저장소가 삭제되는 등으로 더 이상 추적할 수 없을 때, 설치된
+            # 플러그인 파일은 그대로 두고 github.txt 등록만 제거한다(업데이트 확인
+            # 대상에서만 빠진다 — plugins/metadata의 실제 파일은 건드리지 않음).
+            if not plugin_id:
+                return False, "plugin_id가 필요합니다."
+            return _unregister_repo(plugin_id)
+
         if action in ("install_git", "update"):
             cfg = self.get_plugin_config(db_type, default={})
             token = cfg.get("GITHUB_TOKEN") or None
@@ -2195,16 +2324,21 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             if not git_url and plugin_id:
                 # git_url 없이 plugin_id만 온 경우(업데이트 버튼 등), github.txt
                 # 레지스트리(GitHub/Gitea 어느 쪽이든, 자격증명이 담겨 있을 수 있음)에서
-                # 대응하는 주소를 찾는다.
+                # plugin_id로 등록된 주소를 찾는다. 등록 시점의 저장소 이름과 현재
+                # plugin_id가 다를 수 있으므로(update_url로 갱신된 경우 등) URL을 다시
+                # 파싱해 비교하지 않고, 레지스트리 자체의 1차 키(plugin_id)로 직접 찾는다.
                 match = next(
-                    (u for u in _load_github_registry() if _parse_repo_url(u)[2] == plugin_id),
+                    (u for pid, u in _load_github_registry_entries() if pid == plugin_id),
                     None,
                 )
                 if match:
                     git_url = match
 
             if not git_url:
-                return False, "Git 저장소 정보를 확인할 수 없습니다."
+                return False, (
+                    "Git 저장소 정보를 확인할 수 없습니다. 원본 저장소 주소가 바뀌었다면 "
+                    "'Git 주소 변경'으로 새 주소를 먼저 등록한 뒤 다시 시도해주세요."
+                )
 
             return _install_or_update_from_url(git_url, token)
 
@@ -2300,15 +2434,17 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         registry_items = []
         seen_registry_ids = set()
         excluded_for_registry = curated_ids | discovered_ids
-        for url in _load_github_registry():
-            _, owner, repo = _parse_repo_url(url)  # 호스트 무관(GitHub/Gitea 둘 다 처리)
-            if not owner or not repo:
+        for plugin_id_key, url in _load_github_registry_entries():
+            if not plugin_id_key:
                 continue
-            if repo in excluded_for_registry or repo in seen_registry_ids:
+            if plugin_id_key in excluded_for_registry or plugin_id_key in seen_registry_ids:
                 continue
-            item = _fetch_repo_entry(url, token, is_enabled_fn)
+            # plugin_id_key(등록 시점의 1차 키)를 그대로 override로 넘겨, 이후 URL의
+            # 저장소 이름이 바뀌었더라도(update_url로 갱신된 경우 등) 설치 여부·버전·
+            # 활성화 상태는 항상 실제 설치 폴더(plugin_id_key) 기준으로 판단한다.
+            item = _fetch_repo_entry(url, token, is_enabled_fn, plugin_id_override=plugin_id_key)
             item["user_registered"] = True
-            seen_registry_ids.add(repo)
+            seen_registry_ids.add(plugin_id_key)
             registry_items.append(item)
 
         local_items = _scan_uncurated_installed(
