@@ -898,9 +898,18 @@
 
     if (item.discovered) {
       const discTag = document.createElement("span");
-      discTag.className = "pb-tag pb-tag-discovered";
-      discTag.title = "GitHub Topics로 자동 발견된 저장소입니다. 별도 검수를 거치지 않았으니 설치 전 내용을 직접 확인하세요.";
-      discTag.textContent = "⚠ 미검수 · 토픽 발견";
+      if (item.installed) {
+        // 이미 이 서버에 설치되어 사용 중인 플러그인이라면 "설치 전 검토하라"는
+        // 경고("미검수")는 더 이상 맞지 않는다 — 정적 검증을 통과해 이미 설치된
+        // 상태이므로, 출처만 알려주는 중립적인 표기로 바꾼다.
+        discTag.className = "pb-tag pb-tag-registered";
+        discTag.title = "GitHub Topics 검색으로 발견되어 이 서버에 설치되어 있는 플러그인입니다.";
+        discTag.textContent = "토픽 발견 · 설치됨";
+      } else {
+        discTag.className = "pb-tag pb-tag-discovered";
+        discTag.title = "GitHub Topics로 자동 발견된 저장소입니다. 별도 검수를 거치지 않았으니 설치 전 내용을 직접 확인하세요.";
+        discTag.textContent = "⚠ 미검수 · 토픽 발견";
+      }
       tagsWrap.appendChild(discTag);
     }
 
@@ -1025,7 +1034,9 @@
     const types = Object.keys(counts).sort();
     const installedCount = allItems.filter((it) => it.installed).length;
     const uninstalledCount = allItems.length - installedCount;
-    const discoveredCount = allItems.filter((it) => it.discovered).length;
+    // "미검수" 집계는 설치 전(=아직 검토가 필요한) 발견 카드만 센다. 이미 설치되어
+    // 사용 중인 발견 카드는 카드 태그도 "설치됨"으로 바뀌므로 여기서도 제외한다.
+    const uninstalledDiscoveredCount = allItems.filter((it) => it.discovered && !it.installed).length;
 
     // 집계
     tallyEl.innerHTML = "";
@@ -1040,8 +1051,8 @@
     };
     addTally(allItems.length, "등록 플러그인");
     addTally(installedCount, "이 서버에 설치됨");
-    if (discoveredCount > 0) {
-      addTally(discoveredCount, "토픽 발견(미검수)");
+    if (uninstalledDiscoveredCount > 0) {
+      addTally(uninstalledDiscoveredCount, "토픽 발견(미검수)");
     }
     types.forEach((t) => {
       const item = allItems.find((it) => it.type === t);
