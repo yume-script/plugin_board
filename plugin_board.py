@@ -1914,6 +1914,14 @@ def _delete_plugin(plugin_id):
     _VERSION_CACHE.clear()
     _save_disk_cache()
     _try_hot_reload(plugin_id)
+
+    # 삭제된 plugin_id의 github.txt 등록도 함께 제거한다 — 파일은 이미 지워졌는데
+    # 등록만 남아있으면, 이후 카드가 "설치됨"도 "미설치"도 아닌 애매한 상태로
+    # 보이거나(installed=False인데 user_registered=True) 죽은 주소로 계속
+    # 업데이트를 시도하게 된다. _unregister_repo는 등록이 없어도 조용히
+    # (ok=False로) 끝나므로 별도 처리 없이 결과만 무시한다.
+    _unregister_repo(plugin_id)
+
     return True, "'%s' 플러그인이 삭제되었습니다.%s" % (plugin_id, data_dir_warning)
 
 

@@ -93,6 +93,14 @@
     '<svg viewBox="0 0 16 16"><path d="M8 3C4.5 3 1.73 5.11.5 8c1.23 2.89 4 5 7.5 5s6.27-2.11 7.5-5C14.27 5.11 11.5 3 8 3Zm0 8.5A3.5 3.5 0 1 1 8 4.5a3.5 3.5 0 0 1 0 7Zm0-5.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>';
   const EYE_OFF_ICON =
     '<svg viewBox="0 0 16 16"><path d="M13.36 2.22 2.22 13.36l.7.7L4.6 12.4A8.26 8.26 0 0 0 8 13c3.5 0 6.27-2.11 7.5-5a9.4 9.4 0 0 0-2.66-3.54l1.82-1.82-.7-.7ZM8 11.5a3.48 3.48 0 0 1-1.87-.55l1.02-1.02a2 2 0 0 0 2.36-2.36l1.02-1.02c.34.53.55 1.16.55 1.83a3.5 3.5 0 0 1-3.5 3.5.5.5 0 0 1-.5 0Zm-6-3.5c1.1-2.09 3.19-3.7 5.7-3.98L6.3 5.42A3.5 3.5 0 0 0 4.42 7.3L2.9 8.83A9.4 9.4 0 0 1 2 8Z"/></svg>';
+  // "Git 주소 변경" 버튼용 연필 아이콘 — user_registered(직접 설치 이력) 카드에서
+  // 저장소 이름/owner/호스트가 바뀐 경우 재설치 없이 추적 주소만 갱신할 때 사용.
+  const EDIT_ICON =
+    '<svg viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10ZM11.207 2.5 13.5 4.793l1.293-1.293L12.5 1.207 11.207 2.5Zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5ZM3.032 10.68l-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.32Z"/></svg>';
+  // "등록 해제" 버튼용 아이콘 — 원본 저장소가 삭제되는 등으로 더 이상 추적할
+  // 수 없을 때, 설치된 파일은 그대로 두고 github.txt 등록만 제거할 때 사용.
+  const UNLINK_ICON =
+    '<svg viewBox="0 0 16 16"><path d="M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14Zm0 1A8 8 0 1 1 8 0a8 8 0 0 1 0 16Z"/><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708Z"/></svg>';
 
   // 카드 종류별 아이콘 — 직접 그리지 않고 Lucide 아이콘(ISC 라이선스, 자유 재사용
   // 가능)의 실제 path를 그대로 사용한다. 필채우기가 아니라 선(stroke) 기반이라
@@ -701,6 +709,91 @@
         }
       });
       actions.appendChild(trashBtn);
+
+      // Git URL로 직접 설치한 이력이 있는 카드(user_registered)에만 "Git 주소
+      // 변경"/"등록 해제" 버튼을 보여준다 — GitHub Topics 발견 카드나 로컬 전용
+      // 플러그인은 애초에 github.txt 레지스트리 항목이 아니라 대상이 아니다.
+      // 원본 저장소가 이름/owner/호스트를 옮겼거나(주소 변경) 아예 삭제된
+      // 경우(등록 해제)에 대한 대응 수단이다.
+      if (item.user_registered) {
+        const editUrlBtn = document.createElement("button");
+        editUrlBtn.type = "button";
+        editUrlBtn.className = "pb-icon-btn";
+        editUrlBtn.title = "Git 주소 변경 (저장소가 다른 곳으로 옮겨간 경우)";
+        editUrlBtn.innerHTML = EDIT_ICON;
+        editUrlBtn.addEventListener("click", async () => {
+          const currentUrl = item.url || "";
+          const input = window.prompt(
+            `'${item.title}'의 새 Git 저장소 주소를 입력하세요.\n` +
+              "(저장소가 다른 계정/호스트로 옮겨갔거나 이름이 바뀐 경우 여기에 새 주소를 입력하면,\n" +
+              " 재설치 없이 다음 '업데이트'부터 이 주소를 기준으로 확인합니다.)",
+            currentUrl
+          );
+          if (input === null) return; // 취소
+          const newUrl = input.trim();
+          if (!newUrl) return;
+          if (!/^https?:\/\/[^/]+\/[^/]+\/[^/]+/i.test(newUrl)) {
+            showToast(
+              "올바른 저장소 주소를 입력해주세요. (예: https://github.com/user/repo)",
+              true
+            );
+            return;
+          }
+          editUrlBtn.disabled = true;
+          try {
+            const result = await callPluginBoardAction(getDbType(), {
+              action: "update_url",
+              plugin_id: item.id,
+              git_url: newUrl,
+            });
+            if (result && result.success) {
+              showToast(result.message || "Git 주소가 갱신되었습니다.", false);
+              load();
+            } else {
+              showToast((result && result.error) || "Git 주소 갱신에 실패했습니다.", true);
+            }
+          } catch (err) {
+            showToast(`Git 주소 갱신 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
+          } finally {
+            editUrlBtn.disabled = false;
+          }
+        });
+        actions.appendChild(editUrlBtn);
+
+        const unregisterBtn = document.createElement("button");
+        unregisterBtn.type = "button";
+        unregisterBtn.className = "pb-icon-btn";
+        unregisterBtn.title = "등록 해제 (원본 저장소가 삭제된 경우 — 설치된 파일은 유지됩니다)";
+        unregisterBtn.innerHTML = UNLINK_ICON;
+        unregisterBtn.addEventListener("click", async () => {
+          if (
+            !window.confirm(
+              `'${item.title}'의 등록된 Git 주소를 목록에서 제거할까요?\n` +
+                "설치된 플러그인 파일은 그대로 유지되며, 더 이상 이 주소로 업데이트를 확인하지 않습니다."
+            )
+          ) {
+            return;
+          }
+          unregisterBtn.disabled = true;
+          try {
+            const result = await callPluginBoardAction(getDbType(), {
+              action: "unregister",
+              plugin_id: item.id,
+            });
+            if (result && result.success) {
+              showToast(result.message || "등록이 해제되었습니다.", false);
+              load();
+            } else {
+              showToast((result && result.error) || "등록 해제에 실패했습니다.", true);
+              unregisterBtn.disabled = false;
+            }
+          } catch (err) {
+            showToast(`등록 해제 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
+            unregisterBtn.disabled = false;
+          }
+        });
+        actions.appendChild(unregisterBtn);
+      }
 
       checkbox.addEventListener("change", async () => {
         const nextEnabled = checkbox.checked;
