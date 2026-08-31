@@ -9,9 +9,21 @@ plugin_board — BookOasis 카테고리 탭 플러그인
 나타난다.
 
 이 버전부터는 외부 plugin_manager 플러그인 없이도 카드에서 바로 "신규설치"/"업데이트"를
-수행할 수 있다. 설치 방식은 madnite1/plugin_manager가 쓰는 것과 동일한 원리를 그대로
-가져왔다: git 바이너리 없이 GitHub codeload(zip) 소스를 받아, 대상 플러그인의
-update_manifest를 AST로만(코드 실행 없이) 추출해 명시된 파일만 골라 설치한다.
+수행할 수 있다. 설치 방식은 madnite1/plugin_manager가 쓰는 것과 동일한 "git 바이너리
+없이 GitHub codeload(zip) 소스를 받는다"는 원리만 가져왔을 뿐, 파일 선별 방식은 다르다.
+[PATCH-2] update_manifest.files 화이트리스트로 파일을 골라내지 않으며, 압축 해제된
+소스 전체로 plugins/metadata/{repo}/ 폴더를 통째로 교체하는 "전체 재다운로드" 방식이다.
+AST 추출은 (a) 이미 설치된 플러그인의 name/is_searchable/category_tab 등 표시용
+메타데이터를 읽는 _read_local_class_attrs()와, (b) 설치 대상 소스가 실제 BookOasis
+플러그인 구조를 갖췄는지 정적 검증하는 _validate_plugin_source()에서만 코드 실행 없이
+쓰인다 — update_manifest.files를 설치 대상 파일 선별에 쓰는 곳은 없다.
+[PATCH-3] Git/Gitea URL로 설치·업데이트하는 경로(_install_or_update /
+_install_or_update_gitea)는 원래 "저장소 이름과 같은 .py 파일이 있는가"만 확인하고
+바로 폴더를 교체했다 — 압축 파일 업로드 설치(_install_from_archive)에 이미 적용돼
+있던 _validate_plugin_source() 정적 검증(금지 패턴, 클래스 구조, 필수 필드/메서드 등)을
+거치지 않는 더 느슨한 경로였다. GitHub Topics로 발견되거나 "Git 저장소 URL 설치"
+패널로 직접 입력된 저장소는 운영자가 사전 검수한 목록이 아니므로, 이 버전부터는 두
+설치 경로 모두 동일한 정적 검증을 통과해야만 폴더를 교체한다.
 (참고: https://github.com/madnite1/plugin_manager)
 
 가이드 문서(플러그인 개발 가이드 §3, §5)의 계약을 따른다:
@@ -1798,7 +1810,13 @@ def _delete_plugin(plugin_id):
 def _install_or_update(owner, repo, token=None):
     """저장소 zip을 받아 plugins/metadata/{repo}/를 통째로 교체한다.
     update_manifest.files 화이트리스트로 파일을 골라내지 않고, 검증에 성공한
-    새 소스로 기존 설치 폴더를 완전히 대체한다(전체 재다운로드 방식)."""
+    새 소스로 기존 설치 폴더를 완전히 대체한다(전체 재다운로드 방식).
+
+    [PATCH-3] Git URL/GitHub Topics로 들어오는 저장소는 운영자가 사전 검수한
+    목록이 아니므로, 압축 파일 업로드 설치(_install_from_archive)와 동일하게
+    _validate_plugin_source()로 정적 검증(금지 패턴 · 클래스 구조 · 필수 필드/
+    메서드 등)을 통과한 경우에만 폴더를 교체한다. 검증에 실패하면 기존 설치를
+    전혀 건드리지 않고 실패 사유를 그대로 반환한다."""
     _validate_plugin_id(repo)
 
     # default_branch는 카드 목록을 불러올 때(_fetch_description_info, 24시간 캐시)
@@ -1840,11 +1858,28 @@ def _install_or_update(owner, repo, token=None):
                     "언더스코어로 바꿔서도 확인함) 확인해주세요." % (repo, repo.replace("-", "_"))
                 )
 
+            # [PATCH-3] 압축 파일 업로드 설치(_install_from_archive)와 동일한 정적
+            # 검증을 거친다. 이 저장소는 운영자가 사전 검수한 목록에 있는 게 아니라
+            # GitHub Topics 검색 또는 사용자가 직접 입력한 URL로 들어온 것이므로,
+            # 폴더를 교체하기 전에 반드시 통과해야 한다. 검증에 실패하면 기존 설치를
+            # 전혀 건드리지 않고 실패 사유를 그대로 반환한다.
+            source_ok, source_checks = _validate_plugin_source(src_root, repo)
+            if not source_ok:
+                failed_items = [
+                    "- %s: %s" % (c["name"], c["detail"])
+                    for c in source_checks if not c.get("ok")
+                ]
+                return False, (
+                    "플러그인 검증 실패 — 설치를 중단했습니다(기존 설치는 변경되지 않음):\n"
+                    + "\n".join(failed_items)
+                )
+
             base_dir = _plugins_metadata_dir()
             target_dir = _safe_join(base_dir, repo)
 
-            # 검증(모듈 파일 존재 확인)을 통과한 뒤에야 기존 설치를 지운다 —
-            # 검증에 실패하면 이 지점에 도달하지 않으므로 기존 설치는 그대로 보존된다.
+            # 검증(모듈 파일 존재 확인 + 정적 소스 검증)을 통과한 뒤에야 기존 설치를
+            # 지운다 — 검증에 실패하면 이 지점에 도달하지 않으므로 기존 설치는 그대로
+            # 보존된다.
             if os.path.isdir(target_dir):
                 shutil.rmtree(target_dir)
             shutil.copytree(src_root, target_dir)
@@ -1856,9 +1891,15 @@ def _install_or_update(owner, repo, token=None):
             _try_hot_reload(repo)
 
             new_version = _local_version(repo) or "?"
-            return True, "'%s' 설치/업데이트 완료 (브랜치: %s, 버전: v%s, 저장소 전체 교체)" % (
-                repo, branch, new_version,
+            passed = [c["name"] for c in source_checks if c.get("ok") and not c.get("warn")]
+            warns = [c["detail"] for c in source_checks if c.get("warn")]
+            result_msg = (
+                "'%s' 설치/업데이트 완료 (브랜치: %s, 버전: v%s, 저장소 전체 교체, "
+                "검증 통과: %s)" % (repo, branch, new_version, ", ".join(passed))
             )
+            if warns:
+                result_msg += " 경고: " + "; ".join(warns)
+            return True, result_msg
         except urllib.error.HTTPError as exc:
             last_error = _github_api_error_message(exc, bool(token))
         except Exception as exc:
@@ -1872,7 +1913,10 @@ def _install_or_update(owner, repo, token=None):
 def _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme="https"):
     """Gitea 저장소를 설치/업데이트한다. GitHub용 _install_or_update와 동일한
     전체 재다운로드 방식(검증 후 폴더 교체)을 쓰되, 다운로드/조회 경로만
-    Gitea API로 바꾼 버전이다."""
+    Gitea API로 바꾼 버전이다.
+
+    [PATCH-3] GitHub용 _install_or_update와 동일하게 _validate_plugin_source()
+    정적 검증을 통과한 경우에만 폴더를 교체한다."""
     _validate_plugin_id(repo)
 
     desc_info = _gitea_fetch_description_info(host, owner, repo, gitea_cfg, scheme)
@@ -1899,6 +1943,20 @@ def _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme="https"):
                     "언더스코어로 바꿔서도 확인함) 확인해주세요." % (repo, repo.replace("-", "_"))
                 )
 
+            # [PATCH-3] GitHub 경로와 동일하게, 폴더를 교체하기 전에 정적 검증을
+            # 통과해야 한다. Gitea 서버 역시 운영자가 사전 검수한 목록이 아니라
+            # URL을 직접 입력해 설치하는 경로이므로 검증 없이 신뢰해서는 안 된다.
+            source_ok, source_checks = _validate_plugin_source(src_root, repo)
+            if not source_ok:
+                failed_items = [
+                    "- %s: %s" % (c["name"], c["detail"])
+                    for c in source_checks if not c.get("ok")
+                ]
+                return False, (
+                    "플러그인 검증 실패 — 설치를 중단했습니다(기존 설치는 변경되지 않음):\n"
+                    + "\n".join(failed_items)
+                )
+
             base_dir = _plugins_metadata_dir()
             target_dir = _safe_join(base_dir, repo)
 
@@ -1913,9 +1971,15 @@ def _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme="https"):
             _try_hot_reload(repo)
 
             new_version = _local_version(repo) or "?"
-            return True, "'%s' 설치/업데이트 완료 (Gitea %s, 브랜치: %s, 버전: v%s, 저장소 전체 교체)" % (
-                repo, host, branch, new_version,
+            passed = [c["name"] for c in source_checks if c.get("ok") and not c.get("warn")]
+            warns = [c["detail"] for c in source_checks if c.get("warn")]
+            result_msg = (
+                "'%s' 설치/업데이트 완료 (Gitea %s, 브랜치: %s, 버전: v%s, 저장소 전체 교체, "
+                "검증 통과: %s)" % (repo, host, branch, new_version, ", ".join(passed))
             )
+            if warns:
+                result_msg += " 경고: " + "; ".join(warns)
+            return True, result_msg
         except urllib.error.HTTPError as exc:
             hint = " (인증 정보를 확인해주세요)" if exc.code in (401, 403) else ""
             last_error = "HTTP %s%s" % (exc.code, hint)
