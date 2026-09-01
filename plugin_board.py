@@ -228,16 +228,32 @@ def _http_get_text(url, token=None):
 
 _REPO_URL_RE = re.compile(r"^https?://([^/]+)/([^/]+)/([^/]+?)(?:\.git)?/?$")
 
+# 스킴 뒤 슬래시가 실수로 3개 이상 붙은 경우("https:///user:pass@host/...")를
+# 표준 형태("https://")로 바로잡는다. 이런 오타가 있으면 urlsplit이 netloc을
+# 아예 빈 문자열로 처리해버려 host/owner/repo뿐 아니라 자격증명(username/
+# password)까지 통째로 인식하지 못하게 된다 — 특히 Gitea처럼 자격증명이 꼭
+# 필요한 경우 등록 자체가 조용히 실패하므로, 흔히 나올 수 있는 이 오타 하나는
+# 입력 단계에서 바로잡아준다. 스킴 직후의 슬래시 뭉치만 정규화하고 그 뒤의
+# 경로·자격증명 문자열은 전혀 건드리지 않는다.
+_SCHEME_SLASHES_RE = re.compile(r"^(https?):/{2,}", re.IGNORECASE)
+
+
+def _normalize_repo_url(url):
+    """스킴 뒤 슬래시 개수만 'https://' 형태로 정규화한다(그 외 문자열은 그대로)."""
+    s = (url or "").strip()
+    return _SCHEME_SLASHES_RE.sub(lambda m: m.group(1).lower() + "://", s)
+
 
 def _extract_url_credentials(url):
     """URL에 https://user:pass@host/... 형식으로 자격증명이 직접 포함돼 있으면
     분리해 (자격증명이 제거된_URL, username, password)로 반환한다. 없으면
-    (원본 url, None, None). 저장소 카드 링크·github.txt 레지스트리에는 항상
+    (정규화된 url, None, None). 저장소 카드 링크·github.txt 레지스트리에는 항상
     이 함수로 정제한 URL만 남겨서 비밀번호가 그대로 노출되지 않도록 한다."""
+    normalized = _normalize_repo_url(url)
     try:
-        parsed = urllib.parse.urlsplit((url or "").strip())
+        parsed = urllib.parse.urlsplit(normalized)
         if not parsed.username and not parsed.password:
-            return url, None, None
+            return normalized, None, None
         netloc = parsed.hostname or ""
         if parsed.port:
             netloc += ":%d" % parsed.port
@@ -246,7 +262,7 @@ def _extract_url_credentials(url):
         password = urllib.parse.unquote(parsed.password) if parsed.password else None
         return clean, username, password
     except Exception:
-        return url, None, None
+        return normalized, None, None
 
 
 def _parse_repo_url(url):
@@ -265,7 +281,7 @@ def _url_scheme(url):
     뒤에서 http로만 서비스되는 경우(HTTPS로 강제 접속하면 523 "origin
     unreachable" 오류가 남) 사용자가 준 스킴을 그대로 존중해야 한다.
     파싱 실패 시에만 안전하게 https로 폴백한다."""
-    m = re.match(r"^(https?)://", (url or "").strip(), re.IGNORECASE)
+    m = re.match(r"^(https?)://", _normalize_repo_url(url), re.IGNORECASE)
     return m.group(1).lower() if m else "https"
 
 
