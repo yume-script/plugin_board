@@ -908,7 +908,7 @@
       } else {
         discTag.className = "pb-tag pb-tag-discovered";
         discTag.title = "GitHub Topics로 자동 발견된 저장소입니다. 별도 검수를 거치지 않았으니 설치 전 내용을 직접 확인하세요.";
-        discTag.textContent = "⚠ 미검수 · 토픽 발견";
+        discTag.textContent = "토픽 발견 (미설치)";
       }
       tagsWrap.appendChild(discTag);
     }
