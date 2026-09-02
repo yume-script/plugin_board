@@ -144,6 +144,24 @@ def _save_disk_cache():
         pass
 
 
+def _reset_disk_cache():
+    """.cache.json 파일 자체를 삭제하고, 메모리에 있는 캐시(GitHub 설명·버전·
+    Topics 검색 결과)도 모두 비운다. "목록 새로고침"(refresh_list)도 메모리
+    캐시를 비우고 빈 상태를 다시 저장하긴 하지만, 캐시 파일 자체가 깨졌거나
+    (예: JSON 파싱에 실패해 매 시작마다 조용히 무시되고 있지만 겉으로는
+    알아채기 어려운 경우) 뭔가 목록이 꼬여 원인을 좁히기 어려울 때는, 파일을
+    통째로 지우고 완전히 새로 시작하는 편이 더 확실하다."""
+    _TOPIC_CACHE.clear()
+    _VERSION_CACHE.clear()
+    _DESC_CACHE.clear()
+    try:
+        if os.path.isfile(_CACHE_FILE):
+            os.remove(_CACHE_FILE)
+    except Exception as exc:
+        return False, "캐시 파일 삭제에 실패했습니다: %s" % exc
+    return True, "캐시 파일(.cache.json)을 삭제하고 캐시를 초기화했습니다. 목록을 새로 불러옵니다."
+
+
 def _load_disk_cache():
     try:
         if not os.path.isfile(_CACHE_FILE):
@@ -2281,7 +2299,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         # 막기 위해 백엔드에서도 동일하게 확인한다(api/auth.py의 admin_required와
         # 같은 기준). refresh_list는 카드 목록만 새로고침하는 무해한 동작이라
         # 제외한다.
-        if action in ("install_git", "update", "toggle", "delete", "get_config", "install_zip", "update_url", "unregister") and not _is_admin_session():
+        if action in ("install_git", "update", "toggle", "delete", "get_config", "install_zip", "update_url", "unregister", "reset_cache") and not _is_admin_session():
             return False, "관리자만 사용할 수 있는 기능입니다."
 
         if action == "install_zip":
@@ -2338,6 +2356,13 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             _DESC_CACHE.clear()
             _save_disk_cache()
             return True, "플러그인 목록과 버전 정보를 새로 불러옵니다."
+
+        if action == "reset_cache":
+            # [신규] 목록이 이상하게 꼬여 있을 때(중복 카드, 옛 정보가 계속
+            # 남는 등) 쓰는 더 강한 초기화 — 메모리 캐시만 비우는 refresh_list와
+            # 달리 .cache.json 파일 자체를 지운다. 관리자 전용(위 admin 체크에
+            # 이미 포함되어 있음).
+            return _reset_disk_cache()
 
         if action == "toggle":
             if not plugin_id:

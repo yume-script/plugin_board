@@ -17,10 +17,16 @@
   position: relative;
 }
 
-.pb-refresh-btn {
+.pb-header-actions {
   position: absolute;
   top: 18px;
   right: 22px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pb-refresh-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -66,9 +72,10 @@
   .pb-header {
     padding-right: 26px;
   }
-  .pb-refresh-btn {
+  .pb-header-actions {
     position: static;
     margin-bottom: 10px;
+    flex-wrap: wrap;
   }
 }
 

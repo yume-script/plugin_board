@@ -1192,6 +1192,8 @@
       if (gitPanel) gitPanel.hidden = !isAdmin; // 설치도 관리자만 가능하므로 패널 자체를 숨김
       const zipPanel = document.getElementById("pb-zip-panel");
       if (zipPanel) zipPanel.hidden = !isAdmin;
+      const resetCacheBtn = document.getElementById("pb-reset-cache-btn");
+      if (resetCacheBtn) resetCacheBtn.hidden = !isAdmin; // 캐시 초기화도 관리자 전용
       statusEl.hidden = true;
       gridEl.hidden = false;
       buildFiltersAndTally();
@@ -1450,8 +1452,50 @@
     });
   }
 
+  // ------------------------------------------------------------------
+  // "캐시 초기화" 버튼 — 목록 새로고침(메모리 캐시만 비움)보다 더 강한 초기화.
+  // .cache.json 파일 자체를 삭제한다. 목록에 이상한/중복된 항목이 계속 남아
+  // 있는 등 캐시 문제로 의심될 때, 재시작 없이 바로 완전히 새로 불러오는 용도.
+  // ------------------------------------------------------------------
+  function wireResetCacheButton() {
+    const btn = document.getElementById("pb-reset-cache-btn");
+    if (!btn) return;
+
+    btn.addEventListener("click", async () => {
+      if (
+        !window.confirm(
+          "캐시 파일(.cache.json)을 삭제하고 완전히 새로 불러올까요?\n" +
+            "설치된 플러그인에는 영향이 없으며, GitHub 정보만 다시 조회합니다."
+        )
+      ) {
+        return;
+      }
+      const origHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.classList.add("pb-refresh-spinning");
+
+      try {
+        const result = await callPluginBoardAction(getDbType(), { action: "reset_cache" });
+        if (result && result.success) {
+          showToast(result.message || "캐시를 초기화했습니다.", false);
+          await load();
+        } else {
+          showToast((result && result.error) || "캐시 초기화에 실패했습니다.", true);
+        }
+      } catch (err) {
+        console.error(`${LOG_PREFIX} 캐시 초기화 오류:`, err);
+        showToast(`캐시 초기화 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove("pb-refresh-spinning");
+        btn.innerHTML = origHtml;
+      }
+    });
+  }
+
 
   wireRefreshListButton();
+  wireResetCacheButton();
   wireGitInstallPanel();
   wireZipInstallPanel();
   load();
