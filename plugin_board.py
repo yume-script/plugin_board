@@ -777,7 +777,14 @@ def _fetch_remote_version(owner, repo, default_branch, token):
 def _fetch_description_info(owner, repo, token):
     """GitHub 저장소 API(설명·토픽·default_branch)만 조회해 24시간 캐시한다.
     이 정보는 저장소 관리자가 바꾸지 않는 한 거의 변하지 않으므로 길게 캐시해
-    api.github.com 호출 자체를 줄인다."""
+    api.github.com 호출 자체를 줄인다.
+
+    저장소가 다른 이름/owner로 이름이 바뀐(rename) 경우, GitHub는 예전
+    owner/repo로 조회해도 새 이름의 정보를 그대로 돌려준다(내부적으로
+    리다이렉트). 응답의 full_name이 우리가 조회한 owner/repo와 다르면 그
+    새 이름을 canonical_owner/canonical_repo로 함께 반환한다 — 호출부가
+    "이 주소는 사실 다른 카드와 같은 저장소를 가리킨다"는 걸 알아채고 중복
+    표시·낡은 등록 주소를 정리하는 데 쓴다."""
     key = owner + "/" + repo
     cached = _DESC_CACHE.get(key)
     if cached and (time.time() - cached[0]) < _DESC_CACHE_TTL_SECONDS:
@@ -787,12 +794,20 @@ def _fetch_description_info(owner, repo, token):
         api_data = _http_get_json(
             "https://api.github.com/repos/%s/%s" % (owner, repo), token
         )
+        full_name = api_data.get("full_name") or ""
+        canonical_owner, _, canonical_repo = full_name.partition("/")
+        if not canonical_owner or not canonical_repo or (
+            canonical_owner.lower() == owner.lower() and canonical_repo.lower() == repo.lower()
+        ):
+            canonical_owner, canonical_repo = None, None  # 이름이 바뀌지 않은 경우
         info = {
             "desc": api_data.get("description") or "(GitHub에 등록된 설명이 없습니다)",
             "tags": api_data.get("topics") or [],
             "url": api_data.get("html_url") or ("https://github.com/%s/%s" % (owner, repo)),
             "default_branch": api_data.get("default_branch"),
             "stars": api_data.get("stargazers_count"),
+            "canonical_owner": canonical_owner,
+            "canonical_repo": canonical_repo,
             "error": False,
         }
     except urllib.error.HTTPError as exc:
@@ -802,6 +817,8 @@ def _fetch_description_info(owner, repo, token):
             "url": "https://github.com/%s/%s" % (owner, repo),
             "default_branch": None,
             "stars": None,
+            "canonical_owner": None,
+            "canonical_repo": None,
             "error": True,
         }
     except Exception as exc:
@@ -811,6 +828,8 @@ def _fetch_description_info(owner, repo, token):
             "url": "https://github.com/%s/%s" % (owner, repo),
             "default_branch": None,
             "stars": None,
+            "canonical_owner": None,
+            "canonical_repo": None,
             "error": True,
         }
 
@@ -849,6 +868,8 @@ def _fetch_remote_info(owner, repo, token):
         "remote_version": version_info["remote_version"],
         "url": desc_info["url"],
         "stars": desc_info.get("stars"),
+        "canonical_owner": desc_info.get("canonical_owner"),
+        "canonical_repo": desc_info.get("canonical_repo"),
         "error": desc_info["error"] or version_info["error"],
     }
 
@@ -1050,6 +1071,8 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None, plugin_id_
         "has_update": installed and _remote_is_newer(installed_version, remote_version),
         "has_config": has_config,
         "enabled": is_enabled_fn(local_id) if installed else None,
+        "canonical_owner": info.get("canonical_owner"),
+        "canonical_repo": info.get("canonical_repo"),
     }
     return item
 
@@ -2451,12 +2474,20 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 discovered_items = discovered_items[:_MAX_DISCOVERED_ITEMS]
 
         discovered_ids = {it["id"] for it in discovered_items}
+        # GitHub Topics 검색은 항상 저장소의 "현재(canonical)" 이름으로만 결과를
+        # 준다. 이걸 (owner, repo) 키로 모아두면, 아래 레지스트리 항목이 이름이
+        # 바뀐 옛 주소를 통해 같은 저장소를 가리키는지 판별할 수 있다.
+        discovered_repo_keys = {
+            (it["owner"].lower(), it["id"].lower())
+            for it in discovered_items if it.get("owner")
+        }
 
         # 직접 설치 이력(github.txt) — GitHub Topics로도 발견되지 않았지만, 이
         # 서버에서 Git URL로 직접 설치했던 저장소는 여기서 계속 추적한다(검색
         # 결과 유무와 무관하게 업데이트 확인을 이어가기 위함).
         registry_items = []
         seen_registry_ids = set()
+        seen_canonical_keys = set()
         excluded_for_registry = curated_ids | discovered_ids
         for plugin_id_key, url in _load_github_registry_entries():
             if not plugin_id_key:
@@ -2467,8 +2498,38 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             # 저장소 이름이 바뀌었더라도(update_url로 갱신된 경우 등) 설치 여부·버전·
             # 활성화 상태는 항상 실제 설치 폴더(plugin_id_key) 기준으로 판단한다.
             item = _fetch_repo_entry(url, token, is_enabled_fn, plugin_id_override=plugin_id_key)
-            item["user_registered"] = True
             seen_registry_ids.add(plugin_id_key)
+
+            # [저장소 이름 변경 감지] GitHub API는 옛 이름으로 조회해도 새 이름의
+            # 정보를 그대로 돌려준다(리다이렉트). canonical_owner/repo가 채워져
+            # 있다는 건 이 등록 주소가 실제로는 다른 이름으로 옮겨간 저장소를
+            # 가리킨다는 뜻이다. 그 새 이름이 이미 다른 카드(발견된 카드 또는
+            # 앞서 처리한 다른 레지스트리 항목)로 표시되고 있다면, 같은 저장소를
+            # 두 번 보여주지 않는다.
+            canonical_owner = item.get("canonical_owner")
+            canonical_repo = item.get("canonical_repo")
+            if canonical_owner and canonical_repo:
+                canonical_key = (canonical_owner.lower(), canonical_repo.lower())
+                if canonical_key in discovered_repo_keys or canonical_key in seen_canonical_keys:
+                    if _is_installed(plugin_id_key):
+                        # 옛 이름의 폴더가 실제로 아직 설치돼 있다면 카드 자체는
+                        # 계속 보여준다(삭제 등 관리가 필요할 수 있으므로) — 다만
+                        # 추적 주소만 최신 canonical 주소로 갱신해 이후에는 항상
+                        # 정확한 정보를 반영하게 한다.
+                        _remember_repo_install(
+                            "https://github.com/%s/%s" % (canonical_owner, canonical_repo),
+                            plugin_id=plugin_id_key,
+                        )
+                    else:
+                        # 설치된 파일이 없는 유령 등록(예: 재설치 없이 저장소만
+                        # 이름이 바뀐 경우) — 등록을 조용히 정리하고 중복 카드를
+                        # 추가하지 않는다.
+                        _unregister_repo(plugin_id_key)
+                        continue
+                else:
+                    seen_canonical_keys.add(canonical_key)
+
+            item["user_registered"] = True
             registry_items.append(item)
 
         local_items = _scan_uncurated_installed(
