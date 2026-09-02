@@ -787,7 +787,12 @@ def _fetch_description_info(owner, repo, token):
     표시·낡은 등록 주소를 정리하는 데 쓴다."""
     key = owner + "/" + repo
     cached = _DESC_CACHE.get(key)
-    if cached and (time.time() - cached[0]) < _DESC_CACHE_TTL_SECONDS:
+    # canonical_owner/repo 필드는 이후에 추가된 것이라, 그 이전에 저장된
+    # 캐시(메모리든 .cache.json 디스크 캐시든)는 이 키 자체가 없다. 필드가
+    # 없는 옛 캐시를 그대로 신뢰하면 이름이 바뀐 저장소를 영영 감지하지
+    # 못하므로(24시간 TTL이 남아있는 동안, 심지어 서버 재시작 후에도), 이
+    # 필드가 있는 캐시만 유효한 것으로 인정하고 없으면 다시 조회한다.
+    if cached and (time.time() - cached[0]) < _DESC_CACHE_TTL_SECONDS and "canonical_owner" in cached[1]:
         return cached[1]
 
     try:
