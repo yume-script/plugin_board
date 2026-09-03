@@ -325,15 +325,42 @@ def _parse_owner_repo(url):
 # 2021년에 폐지했지만 Gitea는 여전히 지원하므로, 토큰이 없는 사용자를 위해
 # Basic Auth(사용자명+비밀번호)도 함께 지원한다.
 # ------------------------------------------------------------------
-def _effective_gitea_cfg(url):
-    """URL에 담긴 자격증명(https://아이디:비밀번호@host/... 또는 https://토큰@host/...)
-    만으로 Gitea 인증 정보를 만든다. 서버별 전역 설정을 두지 않으므로 도메인 개수에
-    제한이 없다 — 저장소마다 다른 Gitea 서버·다른 계정을 자유롭게 쓸 수 있다."""
+def _parse_gitea_tokens_cfg(raw):
+    """설정 화면에 입력한 "호스트:토큰,호스트2:토큰2" 형식의 문자열을
+    {호스트(소문자): 토큰} 딕셔너리로 파싱한다. 형식이 안 맞는 조각은
+    조용히 건너뛴다(설정 파싱 실패로 전체 기능이 죽으면 안 되므로)."""
+    result = {}
+    if not raw:
+        return result
+    for chunk in str(raw).split(","):
+        chunk = chunk.strip()
+        if not chunk or ":" not in chunk:
+            continue
+        host, _, token = chunk.partition(":")
+        host = host.strip().lower()
+        token = token.strip()
+        if host and token:
+            result[host] = token
+    return result
+
+
+def _effective_gitea_cfg(url, configured_tokens=None):
+    """URL에 담긴 자격증명(https://아이디:비밀번호@host/... 또는 https://토큰@host/...)을
+    최우선으로 쓴다. URL에 자격증명이 없으면, 설정 화면에 등록해둔
+    GITEA_TOKENS(호스트별 읽기 전용 토큰)에서 이 URL의 호스트에 맞는 토큰을
+    찾아 폴백으로 쓴다 — 매번 URL에 자격증명을 넣지 않아도 등록된 서버는
+    바로 설치/업데이트할 수 있게 하기 위함이다. 서버별 전역 설정을 두지
+    않던 기존 동작(URL 자체의 자격증명)은 그대로 우선순위 1위를 유지한다."""
     _, username, password = _extract_url_credentials(url)
     if username and password:
         return {"token": None, "username": username, "password": password}
     if username:  # https://TOKEN@host/owner/repo 형태(토큰만 있는 경우)
         return {"token": username, "username": None, "password": None}
+    if configured_tokens:
+        host = (_parse_repo_url(url)[0] or "").lower()
+        token = configured_tokens.get(host)
+        if token:
+            return {"token": token, "username": None, "password": None}
     return {"token": None, "username": None, "password": None}
 
 
@@ -1019,12 +1046,14 @@ def _build_discovered_item(repo_json, version_info, is_enabled_fn, excluded_ids)
     }
 
 
-def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None, plugin_id_override=None):
+def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None, plugin_id_override=None, gitea_tokens=None):
     """url에서 얻은 원격 정보(설명·버전 등)로 카드를 만들되, 로컬 설치 여부·
     버전·활성화 상태는 plugin_id_override가 주어지면 그 값을(설치 폴더명
     기준으로) 우선 사용한다 — 등록된 Git 주소의 저장소 이름이 바뀌었어도
     실제 설치된 폴더는 이전 plugin_id 그대로일 수 있기 때문이다(레지스트리
-    항목 조회 시 사용, 신규설치 미리보기에는 override 없이 그대로 repo를 씀)."""
+    항목 조회 시 사용, 신규설치 미리보기에는 override 없이 그대로 repo를 씀).
+    gitea_tokens는 설정에 등록해둔 {호스트: 토큰} 딕셔너리로, URL 자체에
+    자격증명이 없는 Gitea 저장소를 조회할 때 폴백으로 쓰인다."""
     host, owner, repo = _parse_repo_url(url)
     if not host or not owner or not repo:
         pid = plugin_id_override or url
@@ -1042,8 +1071,8 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None, plugin_id_
 
     if not _is_github_host(host):
         # GitHub가 아닌 모든 호스트는 Gitea 호환 API로 시도한다(서버별 허용
-        # 목록 없음 — URL에 담긴 자격증명만으로 인증하므로 도메인 개수 제한이 없다).
-        gitea_cfg = _effective_gitea_cfg(url)
+        # 목록 없음 — URL에 담긴 자격증명 또는 설정에 등록된 GITEA_TOKENS로 인증).
+        gitea_cfg = _effective_gitea_cfg(url, gitea_tokens)
         scheme = _url_scheme(url)  # http로 준 주소는 http로 그대로 조회(523 방지)
         return _fetch_gitea_repo_entry(
             host, owner, repo, is_enabled_fn, gitea_cfg, scheme,
@@ -2172,14 +2201,17 @@ def _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme="https"):
     return False, "설치/업데이트 실패: %s" % (last_error or "알 수 없는 오류")
 
 
-def _install_or_update_from_url(url, token):
+def _install_or_update_from_url(url, token, gitea_tokens=None):
     """URL의 호스트를 보고 GitHub/Gitea 중 맞는 설치 엔진으로 위임한다.
     URL에 https://아이디:비밀번호@host/... (또는 https://토큰@host/...) 형식으로
-    자격증명이 직접 포함돼 있으면 그 값으로 인증한다. 서버별 전역 설정을 따로
-    두지 않으므로 몇 개의 Gitea 서버든, GitHub 계정이든 URL 하나로 자유롭게
-    설치할 수 있다. 설치에 성공하면 **자격증명이 담긴 URL 그대로**(정제하지
-    않고) github.txt에 기록해, 이후 대시보드에서 업데이트를 확인할 때도 같은
-    자격증명을 계속 재사용한다."""
+    자격증명이 직접 포함돼 있으면 그 값으로 인증한다. 없으면 gitea_tokens(설정에
+    등록해둔 {호스트: 토큰})에서 이 호스트에 맞는 토큰을 찾아 폴백으로 쓴다.
+    서버별 전역 설정을 강제하지 않으므로 몇 개의 Gitea 서버든, GitHub 계정이든
+    URL 하나로 자유롭게 설치할 수 있다. 설치에 성공하면 **자격증명이 담긴 URL
+    그대로**(정제하지 않고) github.txt에 기록해, 이후 대시보드에서 업데이트를
+    확인할 때도 같은 자격증명을 계속 재사용한다(URL 자체에 자격증명이 없고
+    GITEA_TOKENS로만 인증했다면, 등록되는 URL도 자격증명 없는 그대로다 —
+    다음 조회 때도 동일하게 GITEA_TOKENS로 폴백되므로 문제 없다)."""
     clean_url, url_username, url_password = _extract_url_credentials(url)
     host, owner, repo = _parse_repo_url(clean_url)
     if not host or not owner or not repo:
@@ -2189,7 +2221,7 @@ def _install_or_update_from_url(url, token):
         effective_token = url_password or url_username or token
         ok, msg = _install_or_update(owner, repo, effective_token)
     else:
-        gitea_cfg = _effective_gitea_cfg(url)
+        gitea_cfg = _effective_gitea_cfg(url, gitea_tokens)
         scheme = _url_scheme(clean_url)  # http로 준 주소는 http로 그대로 설치(523 방지)
         ok, msg = _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme)
 
@@ -2211,6 +2243,20 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             "label": "GitHub Personal Access Token (선택)",
             "type": "password",
             "required": False,
+        },
+        {
+            "key": "GITEA_TOKENS",
+            "label": "Gitea 저장소 읽기 토큰 (선택)",
+            "type": "password",
+            "required": False,
+            "description": (
+                "Git 저장소 URL에 매번 아이디:비밀번호나 토큰을 넣지 않아도, 등록해둔 "
+                "Gitea 서버는 바로 설치/업데이트할 수 있게 해줍니다. 각 Gitea 서버의 "
+                "저장소 읽기(read) 권한만 있는 토큰을 발급받아 등록하세요 — 쓰기 권한은 "
+                "필요 없습니다. 형식: \"호스트:토큰\", 여러 서버는 콤마(,)로 구분 "
+                "(예: gitea.derekkoo.win:여기에토큰,gitea2.example.com:토큰2). URL 자체에 "
+                "https://토큰@host/... 처럼 자격증명이 있으면 그쪽이 항상 우선합니다."
+            ),
         },
         {
             "key": "EXTRA_DISCOVERY_TOPICS",
@@ -2396,6 +2442,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         if action in ("install_git", "update"):
             cfg = self.get_plugin_config(db_type, default={})
             token = cfg.get("GITHUB_TOKEN") or None
+            gitea_tokens = _parse_gitea_tokens_cfg(cfg.get("GITEA_TOKENS"))
 
             git_url = str(item_data.get("git_url", "")).strip()
             if not git_url and plugin_id:
@@ -2417,7 +2464,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                     "'Git 주소 변경'으로 새 주소를 먼저 등록한 뒤 다시 시도해주세요."
                 )
 
-            return _install_or_update_from_url(git_url, token)
+            return _install_or_update_from_url(git_url, token, gitea_tokens=gitea_tokens)
 
         return False, "지원하지 않는 액션입니다: %s" % action
 
@@ -2431,6 +2478,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
     def get_dashboard_data(self, db_type, limit=10):
         cfg = self.get_plugin_config(db_type, default={})
         token = cfg.get("GITHUB_TOKEN") or None
+        gitea_tokens = _parse_gitea_tokens_cfg(cfg.get("GITEA_TOKENS"))
         auto_update_enabled = bool(cfg.get("AUTO_UPDATE_ENABLED"))
         is_admin = _is_admin_session()
 
@@ -2453,7 +2501,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         # plugin_board 자기 자신은 GitHub Topics 검색 결과와 무관하게 항상
         # 별도로 조회해 카드 목록 맨 앞에 고정한다("미검수" 표시 없이, 개발
         # 중인 버전도 항상 카드+업데이트 버튼으로 다룰 수 있도록).
-        self_item = _fetch_repo_entry(SELF_REPO_URL, token, is_enabled_fn)
+        self_item = _fetch_repo_entry(SELF_REPO_URL, token, is_enabled_fn, gitea_tokens=gitea_tokens)
         curated_ids = {self_item["id"]}
 
         # GitHub Topics 검색이 카드 목록의 유일한 수집 경로다. 검증 없이 자동
@@ -2527,7 +2575,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             # plugin_id_key(등록 시점의 1차 키)를 그대로 override로 넘겨, 이후 URL의
             # 저장소 이름이 바뀌었더라도(update_url로 갱신된 경우 등) 설치 여부·버전·
             # 활성화 상태는 항상 실제 설치 폴더(plugin_id_key) 기준으로 판단한다.
-            item = _fetch_repo_entry(url, token, is_enabled_fn, plugin_id_override=plugin_id_key)
+            item = _fetch_repo_entry(url, token, is_enabled_fn, plugin_id_override=plugin_id_key, gitea_tokens=gitea_tokens)
             seen_registry_ids.add(plugin_id_key)
 
             # [저장소 이름 변경 감지] GitHub API는 옛 이름으로 조회해도 새 이름의
