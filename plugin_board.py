@@ -943,9 +943,12 @@ def _topic_cache_key(topics):
 
 def _fetch_repos_by_topic(topics, token):
     """GitHub Search API(`/search/repositories?q=topic:...`)로 지정된 토픽이
-    달린 공개 저장소를 찾는다. 토픽 하나가 실패해도 나머지는 계속 시도하며,
-    전체 결과는 1시간 캐시한다(Search API는 분당 요청 제한이 따로 있어
-    아껴 써야 한다)."""
+    달린 공개 저장소를 찾는다. 토픽이 여러 개(기본 발견 토픽 + 추가 발견
+    토픽 + 카탈로그 토픽)면 동시에 병렬로 조회한다 — 예전에는 토픽마다
+    순차로 호출해서 토픽 개수만큼 지연이 그대로 누적됐다(캐시가 만료되는
+    1시간마다의 첫 로딩이 토픽을 늘릴수록 계속 느려지는 원인이었다). 토픽
+    하나가 실패해도 나머지는 계속 반영하며, 전체 결과는 1시간 캐시한다
+    (Search API는 분당 요청 제한이 따로 있어 아껴 써야 한다)."""
     topics = [t.strip() for t in topics if t and t.strip()]
     if not topics:
         return []
@@ -956,18 +959,24 @@ def _fetch_repos_by_topic(topics, token):
     if cached and (now - cached[0]) < _TOPIC_CACHE_TTL_SECONDS:
         return cached[1]
 
+    def _fetch_one(topic):
+        query = urllib.parse.quote("topic:%s" % topic, safe="")
+        url = "https://api.github.com/search/repositories?q=%s&per_page=50" % query
+        data = _http_get_json(url, token)
+        return data.get("items", []) or []
+
     seen = {}
-    for topic in topics:
-        try:
-            query = urllib.parse.quote("topic:%s" % topic, safe="")
-            url = "https://api.github.com/search/repositories?q=%s&per_page=50" % query
-            data = _http_get_json(url, token)
-            for repo_json in data.get("items", []) or []:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(topics))) as executor:
+        future_map = {executor.submit(_fetch_one, topic): topic for topic in topics}
+        for future in concurrent.futures.as_completed(future_map):
+            try:
+                items = future.result()
+            except Exception:
+                continue  # 토픽 하나가 실패해도 나머지 토픽 검색 결과는 계속 반영한다
+            for repo_json in items:
                 full_name = repo_json.get("full_name")
                 if full_name and full_name not in seen:
                     seen[full_name] = repo_json
-        except Exception:
-            continue  # 토픽 하나가 실패해도 나머지 토픽 검색은 계속한다
 
     results = list(seen.values())
     _TOPIC_CACHE[cache_key] = (now, results)
