@@ -2272,6 +2272,19 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             ),
         },
         {
+            "key": "CATALOG_TOPIC",
+            "label": "카탈로그 토픽 (선택)",
+            "type": "text",
+            "required": False,
+            "description": (
+                "이 토픽이 달린 저장소만 따로 모아보는 '카탈로그' 필터 탭을 추가합니다. "
+                "예: bookoasis-catalog. 빈 값이면 카탈로그 탭이 표시되지 않습니다. 여기에 "
+                "입력한 토픽은 발견 대상 토픽에도 자동으로 포함되므로(추가 발견 토픽에 "
+                "따로 적지 않아도 됩니다), 'bookoasis-plugin' 토픽이 없는 저장소도 이 "
+                "토픽만 달아두면 발견·카탈로그 탭 표시가 모두 가능합니다."
+            ),
+        },
+        {
             "key": "AUTO_UPDATE_ENABLED",
             "label": "사용 중인 플러그인 자동 업데이트",
             "type": "checkbox",
@@ -2508,7 +2521,10 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         # 노출되므로 "미검수" 표시를 유지한다.
         extra_topics_raw = str(cfg.get("EXTRA_DISCOVERY_TOPICS") or "").strip()
         extra_topics = [t.strip() for t in extra_topics_raw.split(",") if t.strip()]
-        all_topics = list(dict.fromkeys(DISCOVERY_TOPICS + extra_topics))  # 순서 유지 + 중복 제거
+        catalog_topic = str(cfg.get("CATALOG_TOPIC") or "").strip()
+        # 카탈로그 토픽은 검색 대상에도 포함시켜야, 기본 발견 토픽
+        # (bookoasis-plugin)이 없이 카탈로그 토픽만 달아둔 저장소도 발견된다.
+        all_topics = list(dict.fromkeys(DISCOVERY_TOPICS + extra_topics + ([catalog_topic] if catalog_topic else [])))
 
         discovered_items = []
         try:
@@ -2614,11 +2630,26 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             curated_ids | discovered_ids | seen_registry_ids, is_enabled_fn
         )
         _save_disk_cache()  # 이번 요청에서 새로 채워진 캐시를 재시작에도 살아남도록 저장
+
+        all_items = [self_item] + discovered_items + registry_items + local_items
+        if catalog_topic:
+            # 카탈로그 토픽이 설정돼 있으면, 각 카드의 실제 GitHub 토픽 목록(tags)에
+            # 그 토픽이 들어있는지로 "카탈로그" 필터 탭 소속 여부를 표시한다. 로컬
+            # 전용 카드(local_items)는 원격 토픽을 조회하지 않으므로 tags가 항상
+            # 비어있어 자연히 카탈로그에는 포함되지 않는다.
+            catalog_topic_lower = catalog_topic.lower()
+            for it in all_items:
+                it["in_catalog"] = catalog_topic_lower in {t.lower() for t in (it.get("tags") or [])}
+        else:
+            for it in all_items:
+                it["in_catalog"] = False
+
         return {
             "success": True,
-            "items": [self_item] + discovered_items + registry_items + local_items,
+            "items": all_items,
             "auto_update_enabled": auto_update_enabled,
             "is_admin": is_admin,
             "topic_search_at": topic_search_at,  # 초 단위 epoch, 검색 이력이 전혀 없으면 None
             "plugin_board_version": self_item.get("installed_version"),  # 헤더 제목 옆 버전 표기용
+            "catalog_topic": catalog_topic,  # 빈 문자열이면 프런트에서 "카탈로그" 탭을 숨긴다
         }

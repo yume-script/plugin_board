@@ -13,6 +13,7 @@
   let isAdmin = true; // 서버 응답을 받기 전 기본값 — 응답에서 갱신됨
   let activeFilter = "all";
   let activeOwner = "all"; // 제작자별 필터 — activeFilter(분류/설치여부)와 별개 축, AND로 결합
+  let catalogTopic = ""; // 서버 응답의 catalog_topic — 비어있으면 "카탈로그" 탭을 숨긴다
 
   // ------------------------------------------------------------------
   // 설치/업데이트가 끝난 뒤 Ctrl+F5(강력 새로고침)와 동등한 효과를 낸다.
@@ -1012,6 +1013,7 @@
       if (activeOwner !== "all" && (it.owner || "") !== activeOwner) return false;
       if (activeFilter === "all") return true;
       if (activeFilter === "uninstalled") return !it.installed;
+      if (activeFilter === "catalog") return !!it.in_catalog;
       return it.type === activeFilter;
     });
     if (items.length === 0) {
@@ -1079,6 +1081,11 @@
     };
 
     filtersEl.appendChild(makeBtn("all", "전체", true));
+    if (catalogTopic) {
+      // 카탈로그 토픽이 설정돼 있을 때만 탭을 노출한다 — 설정 안 하면 탭 자체가 없다.
+      const catalogCount = allItems.filter((it) => it.in_catalog).length;
+      filtersEl.appendChild(makeBtn("catalog", `카탈로그 (${catalogCount})`, false));
+    }
     types.forEach((t) => {
       const item = allItems.find((it) => it.type === t);
       filtersEl.appendChild(makeBtn(t, (item && item.type_label) || t, false));
@@ -1187,6 +1194,7 @@
 
       allItems = Array.isArray(json.items) ? json.items : [];
       isAdmin = json.is_admin !== false; // 명시적으로 false일 때만 비관리자로 간주
+      catalogTopic = typeof json.catalog_topic === "string" ? json.catalog_topic : "";
 
       const gitPanel = document.getElementById("pb-git-panel");
       if (gitPanel) gitPanel.hidden = !isAdmin; // 설치도 관리자만 가능하므로 패널 자체를 숨김
