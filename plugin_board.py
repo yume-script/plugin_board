@@ -2543,14 +2543,9 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             except Exception:
                 return True
 
-        # plugin_board 자기 자신은 GitHub Topics 검색 결과와 무관하게 항상
-        # 별도로 조회해 카드 목록 맨 앞에 고정한다("미검수" 표시 없이, 개발
-        # 중인 버전도 항상 카드+업데이트 버튼으로 다룰 수 있도록).
-        self_item = _fetch_repo_entry(SELF_REPO_URL, token, is_enabled_fn, gitea_tokens=gitea_tokens)
-        curated_ids = {self_item["id"]}
-
-        # GitHub Topics 검색이 카드 목록의 유일한 수집 경로다. 검증 없이 자동
-        # 노출되므로 "미검수" 표시를 유지한다.
+        # plugin_board 자기 자신 조회와 GitHub Topics 검색은 서로 무관한 두 개의
+        # 네트워크 요청이라 동시에 실행한다 — 순차로 하면 두 요청의 지연 시간이
+        # 그대로 더해진다(캐시가 만료된 시점의 첫 로딩에서 특히 체감된다).
         extra_topics_raw = str(cfg.get("EXTRA_DISCOVERY_TOPICS") or "").strip()
         extra_topics = [t.strip() for t in extra_topics_raw.split(",") if t.strip()]
         catalog_topic = str(cfg.get("CATALOG_TOPIC") or "").strip()
@@ -2558,11 +2553,25 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         # (bookoasis-plugin)이 없이 카탈로그 토픽만 달아둔 저장소도 발견된다.
         all_topics = list(dict.fromkeys(DISCOVERY_TOPICS + extra_topics + ([catalog_topic] if catalog_topic else [])))
 
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            self_future = executor.submit(
+                _fetch_repo_entry, SELF_REPO_URL, token, is_enabled_fn, gitea_tokens=gitea_tokens
+            )
+            topics_future = executor.submit(_fetch_repos_by_topic, all_topics, token)
+            # plugin_board 자기 자신은 GitHub Topics 검색 결과와 무관하게 항상
+            # 별도로 조회해 카드 목록 맨 앞에 고정한다("미검수" 표시 없이, 개발
+            # 중인 버전도 항상 카드+업데이트 버튼으로 다룰 수 있도록).
+            self_item = self_future.result()
+            try:
+                topic_repos = topics_future.result()
+            except Exception:
+                topic_repos = []
+
+        curated_ids = {self_item["id"]}
+
+        # GitHub Topics 검색이 카드 목록의 유일한 수집 경로다. 검증 없이 자동
+        # 노출되므로 "미검수" 표시를 유지한다.
         discovered_items = []
-        try:
-            topic_repos = _fetch_repos_by_topic(all_topics, token)
-        except Exception:
-            topic_repos = []
 
         # 검색 직후 _TOPIC_CACHE에 남은 타임스탬프를 그대로 읽어와, "마지막으로
         # 실제 검색한 시각"을 화면에 알려준다(캐시가 살아있어 재요청을 안 한
@@ -2610,20 +2619,57 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
 
         # 직접 설치 이력(github.txt) — GitHub Topics로도 발견되지 않았지만, 이
         # 서버에서 Git URL로 직접 설치했던 저장소는 여기서 계속 추적한다(검색
-        # 결과 유무와 무관하게 업데이트 확인을 이어가기 위함).
+        # 결과 유무와 무관하게 업데이트 확인을 이어가기 위함). 등록된 저장소가
+        # 여러 개면 정보 조회 자체를 병렬로 한다 — 순차로 하면 등록 개수만큼
+        # 지연이 그대로 누적된다(토픽 검색과 같은 이유).
+        excluded_for_registry = curated_ids | discovered_ids
+        registry_entries = []
+        seen_registry_keys = set()
+        for plugin_id_key, url in _load_github_registry_entries():
+            if not plugin_id_key or plugin_id_key in excluded_for_registry or plugin_id_key in seen_registry_keys:
+                continue
+            seen_registry_keys.add(plugin_id_key)
+            registry_entries.append((plugin_id_key, url))
+
+        fetched_registry_items = {}
+        if registry_entries:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(8, len(registry_entries))
+            ) as executor:
+                future_map = {
+                    executor.submit(
+                        _fetch_repo_entry, url, token, is_enabled_fn,
+                        plugin_id_override=plugin_id_key, gitea_tokens=gitea_tokens,
+                    ): plugin_id_key
+                    for plugin_id_key, url in registry_entries
+                }
+                for future in concurrent.futures.as_completed(future_map):
+                    plugin_id_key = future_map[future]
+                    try:
+                        fetched_registry_items[plugin_id_key] = future.result()
+                    except Exception as exc:
+                        installed = _is_installed(plugin_id_key)
+                        fetched_registry_items[plugin_id_key] = {
+                            "id": plugin_id_key, "owner": "", "title": plugin_id_key, "type": "other",
+                            "type_label": TYPE_LABELS["other"],
+                            "desc": "저장소 정보를 불러오지 못했습니다 (%s)" % exc,
+                            "tags": [], "features": [], "version_label": "—",
+                            "url": None, "error": True,
+                            "installed": installed,
+                            "installed_version": (_local_version(plugin_id_key) if installed else None),
+                            "has_update": False, "has_config": False, "enabled": None,
+                        }
+
         registry_items = []
         seen_registry_ids = set()
         seen_canonical_keys = set()
-        excluded_for_registry = curated_ids | discovered_ids
-        for plugin_id_key, url in _load_github_registry_entries():
-            if not plugin_id_key:
-                continue
-            if plugin_id_key in excluded_for_registry or plugin_id_key in seen_registry_ids:
-                continue
+        # 등록된 순서(registry_entries)를 그대로 유지해, 병렬로 가져왔더라도
+        # 요청마다 카드 순서가 흔들리지 않게 한다.
+        for plugin_id_key, url in registry_entries:
             # plugin_id_key(등록 시점의 1차 키)를 그대로 override로 넘겨, 이후 URL의
             # 저장소 이름이 바뀌었더라도(update_url로 갱신된 경우 등) 설치 여부·버전·
             # 활성화 상태는 항상 실제 설치 폴더(plugin_id_key) 기준으로 판단한다.
-            item = _fetch_repo_entry(url, token, is_enabled_fn, plugin_id_override=plugin_id_key, gitea_tokens=gitea_tokens)
+            item = fetched_registry_items[plugin_id_key]
             seen_registry_ids.add(plugin_id_key)
 
             # [저장소 이름 변경 감지] GitHub API는 옛 이름으로 조회해도 새 이름의
