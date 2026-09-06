@@ -883,6 +883,16 @@
     typeTag.textContent = item.type_label || "기타";
     tagsWrap.appendChild(typeTag);
 
+    // 카테고리 탭 UI 플러그인이 사이드바에서 몇 번째로 표시되는지(order 값).
+    // 0도 유효한 순서 값이므로 falsy 체크 대신 타입으로 존재 여부를 판단한다.
+    if (typeof item.tab_order === "number") {
+      const orderTag = document.createElement("span");
+      orderTag.className = "pb-tag pb-tag-order";
+      orderTag.title = "사이드바 카테고리 탭에서의 표시 순서 (숫자가 작을수록 앞에 표시됩니다)";
+      orderTag.textContent = `ORDER ${item.tab_order}`;
+      tagsWrap.appendChild(orderTag);
+    }
+
     if (item.has_update) {
       const updTag = document.createElement("span");
       updTag.className = "pb-tag pb-tag-update";

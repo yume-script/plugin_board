@@ -728,6 +728,18 @@ def _read_local_class_attrs(plugin_id):
     return attrs
 
 
+def _extract_tab_order(category_tab):
+    """category_tab 선언에서 order 값만 안전하게 뽑아낸다. category_tab이
+    없거나(검색형 메타데이터 등) order를 안 적었거나, order 값이 정수/실수가
+    아니면 None을 반환한다 — 카드에는 순서를 아예 표시하지 않는다."""
+    if not isinstance(category_tab, dict):
+        return None
+    order = category_tab.get("order")
+    if isinstance(order, bool) or not isinstance(order, (int, float)):
+        return None
+    return int(order)
+
+
 def _looks_like_plugin_dir(entry, full_path):
     """plugins/metadata 아래의 폴더가 실제 플러그인처럼 보이는지 판별한다.
     __pycache__, '-', 숨김 폴더 등 카드로 만들면 안 되는 항목을 걸러낸다."""
@@ -774,6 +786,7 @@ def _scan_uncurated_installed(curated_ids, is_enabled_fn):
             plugin_type = "tab"
         else:
             plugin_type = "other"
+        tab_order = _extract_tab_order(attrs.get("category_tab"))
 
         items.append({
             "id": entry,
@@ -793,6 +806,7 @@ def _scan_uncurated_installed(curated_ids, is_enabled_fn):
             "has_config": bool(attrs.get("config_schema")) or _has_settings_ui(entry),
             "enabled": is_enabled_fn(entry),
             "local_only": True,
+            "tab_order": tab_order,
         })
 
     return items
@@ -1021,12 +1035,14 @@ def _build_discovered_item(repo_json, version_info, is_enabled_fn, excluded_ids)
     plugin_type = TYPE_OVERRIDES.get(key, "other")
     has_config = False
     title = repo_name
+    tab_order = None
     if installed:
         local_attrs = _read_local_class_attrs(repo_name)
         if local_attrs.get("is_searchable"):
             plugin_type = "search"
         elif local_attrs.get("category_tab"):
             plugin_type = "tab"
+            tab_order = _extract_tab_order(local_attrs.get("category_tab"))
         has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(repo_name)
         title = local_attrs.get("name") or repo_name
 
@@ -1052,6 +1068,7 @@ def _build_discovered_item(repo_json, version_info, is_enabled_fn, excluded_ids)
         "has_config": has_config,
         "enabled": is_enabled_fn(repo_name) if installed else None,
         "discovered": True,
+        "tab_order": tab_order,
     }
 
 
@@ -1095,6 +1112,7 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None, plugin_id_
     installed_version = _local_version(local_id) if installed else None
     has_config = False
     title = local_id
+    tab_order = None
 
     if installed:
         # 이미 설치되어 있다면 실제 소스에서 분류·설정 여부·표시 이름을 더 정확히 추정
@@ -1103,6 +1121,7 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None, plugin_id_
             plugin_type = "search"
         elif local_attrs.get("category_tab"):
             plugin_type = "tab"
+            tab_order = _extract_tab_order(local_attrs.get("category_tab"))
         has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(local_id)
         title = local_attrs.get("name") or local_id
 
@@ -1134,6 +1153,7 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None, plugin_id_
         "enabled": is_enabled_fn(local_id) if installed else None,
         "canonical_owner": info.get("canonical_owner"),
         "canonical_repo": info.get("canonical_repo"),
+        "tab_order": tab_order,
     }
     return item
 
@@ -1148,6 +1168,7 @@ def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg, scheme=
     installed_version = _local_version(local_id) if installed else None
     has_config = False
     title = local_id
+    tab_order = None
 
     if installed:
         local_attrs = _read_local_class_attrs(local_id)
@@ -1155,6 +1176,7 @@ def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg, scheme=
             plugin_type = "search"
         elif local_attrs.get("category_tab"):
             plugin_type = "tab"
+            tab_order = _extract_tab_order(local_attrs.get("category_tab"))
         has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(local_id)
         title = local_attrs.get("name") or local_id
 
@@ -1183,6 +1205,7 @@ def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg, scheme=
         "has_config": has_config,
         "enabled": is_enabled_fn(local_id) if installed else None,
         "gitea": True,
+        "tab_order": tab_order,
     }
 
 

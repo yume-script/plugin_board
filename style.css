@@ -796,6 +796,17 @@
   cursor: help;
 }
 
+/* 카테고리 탭 UI 플러그인의 사이드바 표시 순서(category_tab.order) 표시.
+   경고성이 아닌 순수 정보 표시라 중립적인 회색조를 쓴다. */
+.pb-tag-order {
+  color: var(--app-text-secondary, var(--app-text-muted));
+  border-color: var(--app-border, rgba(255,255,255,0.35));
+  background: transparent;
+  font-weight: 600;
+  opacity: 0.9;
+  cursor: help;
+}
+
 /* 이미 설치되어 최신 상태인 카드에 표시되는 배지 (버튼 대체) */
 .pb-installed-badge {
   font-size: 11px;
