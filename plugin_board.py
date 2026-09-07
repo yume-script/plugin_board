@@ -1678,11 +1678,28 @@ def _validate_plugin_source(plugin_dir, detected_id):
         checks.append({"name": "소스", "ok": True, "detail": "%d개 .py 파일, BaseMetadataProvider 클래스 발견" % len(py_files)})
 
     if class_id is not None:
-        if str(class_id).strip() == str(detected_id).strip():
+        class_id_str = str(class_id).strip()
+        detected_id_str = str(detected_id).strip()
+        if class_id_str == detected_id_str:
             checks.append({"name": "클래스 id", "ok": True, "detail": class_id})
+        elif class_id_str.replace("-", "_") == detected_id_str.replace("-", "_"):
+            # 저장소 이름은 관례상 하이픈을 쓰고(예: bookoasis-m3u-player), 파이썬
+            # 식별자는 하이픈을 쓸 수 없어 클래스 id를 언더스코어로 짓는 경우가
+            # 흔하다(예: bookoasis_m3u_player). 표기 차이일 뿐 실질적으로 같은
+            # id이므로 이 차이만으로는 설치를 막지 않고 통과시키되, 코어가 이
+            # 값을 그대로 참조하는 곳(목록 표시 등)이 있을 수 있어 경고로 남긴다.
+            checks.append({
+                "name": "클래스 id", "ok": True, "warn": True,
+                "detail": (
+                    "경고: 코드 내 id='%s'와 감지된 id='%s'가 하이픈/언더스코어 표기만 "
+                    "달라 임시로 통과시켰습니다 — 코어가 이 값을 그대로 참조하는 곳이 "
+                    "있다면 목록에 정상적으로 안 보일 수 있으니, 가능하면 플러그인 "
+                    "코드의 id를 '%s'로 맞춰주세요." % (class_id, detected_id, detected_id)
+                ),
+            })
         else:
             checks.append({"name": "클래스 id", "ok": False,
-                            "detail": "코드 내 id='%s' \u2260 감지된 id='%s' — 설치 후 목록에 표시되지 않을 수 있습니다"
+                            "detail": "코드 내 id='%s' ≠ 감지된 id='%s' — 설치 후 목록에 표시되지 않을 수 있습니다"
                                       % (class_id, detected_id)})
     elif provider_found:
         checks.append({"name": "클래스 id", "ok": False, "detail": "플러그인 클래스에 id 속성이 없습니다"})
