@@ -1521,6 +1521,16 @@ def _parse_raw_base_url(raw_base_url):
     return None
 
 
+def _allow_plugin_subprocess():
+    """서버 환경변수 ALLOW_PLUGIN_SUBPROCESS가 true/1/yes/on(대소문자 무관)이면
+    플러그인 설치 시 subprocess import를 허용한다. 기본값은 차단이다 — 이 값을
+    설정하지 않은 서버는 이전과 동일하게 subprocess를 쓰는 플러그인의 설치를
+    막는다. 플러그인 설정이 아니라 서버 환경변수인 이유: 관리자 개개인이 아니라
+    서버 운영자가 내리는 신뢰 판단이라, 웹 UI의 플러그인별 설정과는 분리해
+    서버를 직접 관리하는 사람만 바꿀 수 있게 한다."""
+    return str(os.environ.get("ALLOW_PLUGIN_SUBPROCESS", "")).strip().lower() in ("1", "true", "yes", "on")
+
+
 def _validate_plugin_source(plugin_dir, detected_id):
     """설치 대상 플러그인 소스 정적 검증 (코드 실행 없음 — AST/파일 스캔만).
     개발 가이드 규격 기반. plugin_manager의 검증 항목과 동일한 기준을 쓴다.
@@ -1576,6 +1586,7 @@ def _validate_plugin_source(plugin_dir, detected_id):
     has_search = False
     has_apply = False
     forbidden_hits = []
+    subprocess_hits = []  # subprocess만 따로 모은다 — ALLOW_PLUGIN_SUBPROCESS로 예외 허용 가능
     cross_plugin_deps = set()  # plugins.metadata.<다른 플러그인 id>를 직접 import하는 경우
 
     for fname in py_files:
@@ -1598,14 +1609,14 @@ def _validate_plugin_source(plugin_dir, detected_id):
             elif isinstance(node, ast.Import):
                 for a in node.names:
                     if a.name == "subprocess" or a.name.startswith("subprocess."):
-                        forbidden_hits.append("%s: subprocess import 발견" % fname)
+                        subprocess_hits.append("%s: subprocess import 발견" % fname)
                     elif a.name.startswith("plugins.metadata."):
                         parts = a.name.split(".")
                         if len(parts) >= 3 and parts[2] not in ("base", detected_id):
                             cross_plugin_deps.add(parts[2])
             elif isinstance(node, ast.ImportFrom):
                 if node.module == "subprocess":
-                    forbidden_hits.append("%s: subprocess import 발견" % fname)
+                    subprocess_hits.append("%s: subprocess import 발견" % fname)
                 elif node.module and node.module.startswith("plugins.metadata."):
                     parts = node.module.split(".")
                     if len(parts) >= 3 and parts[2] not in ("base", detected_id):
@@ -1720,7 +1731,32 @@ def _validate_plugin_source(plugin_dir, detected_id):
         checks.append({"name": "필수 메서드", "ok": False, "detail": "클래스 없음"})
 
     checks.append({"name": "금지 패턴", "ok": not forbidden_hits,
-                    "detail": "; ".join(forbidden_hits[:3]) if forbidden_hits else "eval/exec/subprocess 없음"})
+                    "detail": "; ".join(forbidden_hits[:3]) if forbidden_hits else "eval/exec/os.system 없음"})
+
+    if subprocess_hits:
+        if _allow_plugin_subprocess():
+            # 서버가 ALLOW_PLUGIN_SUBPROCESS=true로 명시적으로 허용한 경우에만
+            # 통과시킨다 — 기본값은 여전히 차단이며, 통과하더라도 설치 결과
+            # 메시지에 경고로 남겨 관리자가 알아챌 수 있게 한다.
+            checks.append({
+                "name": "subprocess 사용", "ok": True, "warn": True,
+                "detail": (
+                    "경고: subprocess를 사용합니다(%s) — 서버 환경변수 "
+                    "ALLOW_PLUGIN_SUBPROCESS=true로 허용되어 있어 설치를 통과시켰습니다. "
+                    "이 플러그인이 실제로 외부 명령을 실행한다는 뜻이니, 신뢰할 수 있는 "
+                    "출처인지 다시 한번 확인하세요." % "; ".join(subprocess_hits[:3])
+                ),
+            })
+        else:
+            checks.append({
+                "name": "subprocess 사용", "ok": False,
+                "detail": (
+                    "%s — 서버 환경변수 ALLOW_PLUGIN_SUBPROCESS=true를 설정하면 설치를 "
+                    "허용할 수 있습니다(기본값은 차단)." % "; ".join(subprocess_hits[:3])
+                ),
+            })
+    else:
+        checks.append({"name": "subprocess 사용", "ok": True, "detail": "subprocess import 없음"})
 
     # 다른 플러그인 모듈(plugins.metadata.<다른 id>)을 직접 import하는 경우 —
     # 그 다른 플러그인이 이 서버에 설치돼 있지 않으면 설치 자체는 성공해도
