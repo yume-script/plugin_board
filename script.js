@@ -79,6 +79,17 @@
     return String(n);
   }
 
+  // GitHub/Gitea의 pushed_at·updated_at(ISO 8601) 또는 로컬 폴더 mtime 문자열을
+  // "YYYY-MM-DD"로 표시한다. 파싱 실패 시(형식이 다르거나 아예 없으면) null을
+  // 반환해 호출부가 아무것도 표시하지 않도록 한다.
+  function formatPushedAt(iso) {
+    if (!iso) return null;
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
   // 설치 아이콘(다운로드), 업데이트 아이콘(리프레시), 완료 아이콘(체크) — 전부 자체 SVG
   const INSTALL_ICON =
     '<svg viewBox="0 0 16 16"><path d="M8 0a.75.75 0 0 1 .75.75v7.19l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V.75A.75.75 0 0 1 8 0Z"/><path d="M1.5 10.5a.75.75 0 0 1 .75.75v2A.75.75 0 0 0 3 14h10a.75.75 0 0 0 .75-.75v-2a.75.75 0 0 1 1.5 0v2A2.25 2.25 0 0 1 13 15.5H3A2.25 2.25 0 0 1 .75 13.25v-2a.75.75 0 0 1 .75-.75Z"/></svg>';
@@ -711,23 +722,28 @@
       });
       actions.appendChild(trashBtn);
 
-      // Git URL로 직접 설치한 이력이 있는 카드(user_registered)에만 "Git 주소
-      // 변경"/"등록 해제" 버튼을 보여준다 — GitHub Topics 발견 카드나 로컬 전용
-      // 플러그인은 애초에 github.txt 레지스트리 항목이 아니라 대상이 아니다.
-      // 원본 저장소가 이름/owner/호스트를 옮겼거나(주소 변경) 아예 삭제된
-      // 경우(등록 해제)에 대한 대응 수단이다.
-      if (item.user_registered) {
+      // 모든 설치된 플러그인(자기 자신 제외) 카드에 "Git 주소 변경"/"등록 해제"
+      // 버튼을 동일하게 노출한다. 원래는 Git URL로 직접 등록한 이력(github.txt)이
+      // 있는 카드에만 보였지만, 토픽 발견 카드나 로컬 전용 플러그인도 나중에
+      // 저장소가 이름을 바꾸거나 URL 관리가 필요해질 수 있어 3버튼 체계로
+      // 통일했다. 아직 등록 이력이 없는 카드에서 "Git 주소 변경"을 쓰면 그
+      // 순간 새로 등록되고(update_url이 신규 등록도 지원), "등록 해제"는
+      // 등록된 게 없으면 그 사실을 안내만 하고 아무 것도 바꾸지 않는다.
+      {
         const editUrlBtn = document.createElement("button");
         editUrlBtn.type = "button";
         editUrlBtn.className = "pb-icon-btn";
-        editUrlBtn.title = "Git 주소 변경 (저장소가 다른 곳으로 옮겨간 경우)";
+        editUrlBtn.title = item.user_registered
+          ? "Git 주소 변경 (저장소가 다른 곳으로 옮겨간 경우)"
+          : "Git 주소 등록/변경 (등록하면 이후 이 주소로 업데이트를 확인합니다)";
         editUrlBtn.innerHTML = EDIT_ICON;
         editUrlBtn.addEventListener("click", async () => {
           const currentUrl = item.url || "";
           const input = window.prompt(
-            `'${item.title}'의 새 Git 저장소 주소를 입력하세요.\n` +
-              "(저장소가 다른 계정/호스트로 옮겨갔거나 이름이 바뀐 경우 여기에 새 주소를 입력하면,\n" +
-              " 재설치 없이 다음 '업데이트'부터 이 주소를 기준으로 확인합니다.)",
+            `'${item.title}'의 Git 저장소 주소를 입력하세요.\n` +
+              "(등록된 적이 없으면 새로 등록되고, 이미 등록돼 있다면 저장소가 다른 계정/호스트로\n" +
+              " 옮겨갔거나 이름이 바뀐 경우에 맞춰 갱신됩니다. 재설치 없이 다음 '업데이트'부터\n" +
+              " 이 주소를 기준으로 확인합니다.)",
             currentUrl
           );
           if (input === null) return; // 취소
@@ -770,7 +786,8 @@
           if (
             !window.confirm(
               `'${item.title}'의 등록된 Git 주소를 목록에서 제거할까요?\n` +
-                "설치된 플러그인 파일은 그대로 유지되며, 더 이상 이 주소로 업데이트를 확인하지 않습니다."
+                "설치된 플러그인 파일은 그대로 유지되며, 더 이상 이 주소로 업데이트를 확인하지 않습니다.\n" +
+                "(등록된 주소가 원래 없었다면 아무 변화도 없습니다.)"
             )
           ) {
             return;
@@ -785,7 +802,7 @@
               showToast(result.message || "등록이 해제되었습니다.", false);
               load();
             } else {
-              showToast((result && result.error) || "등록 해제에 실패했습니다.", true);
+              showToast((result && result.error) || "등록된 Git 주소가 없습니다.", true);
               unregisterBtn.disabled = false;
             }
           } catch (err) {
@@ -994,6 +1011,19 @@
       starsEl.innerHTML = `${STAR_ICON}${formatStars(item.stars)}`;
       starsEl.title = `별(star) ${item.stars.toLocaleString()}개 — 다운로드 횟수가 아닌 참고용 인기도 지표입니다`;
       footLeft.appendChild(starsEl);
+    }
+    // 최종 업데이트 일자 — GitHub/Gitea면 저장소의 마지막 코드 푸시 시각, 로컬
+    // 전용(local_only) 카드면 원격 정보가 없어 설치 폴더의 마지막 수정 시각을
+    // 근사치로 대신 쓴다(item.local_only로 구분해 안내 문구만 다르게 표시).
+    const pushedAtText = formatPushedAt(item.pushed_at);
+    if (pushedAtText) {
+      const pushedEl = document.createElement("span");
+      pushedEl.className = "pb-pushed-at";
+      pushedEl.textContent = `최종 업데이트 ${pushedAtText}`;
+      pushedEl.title = item.local_only
+        ? "이 서버에 설치된 폴더가 마지막으로 바뀐 시각입니다 (원격 저장소 정보를 알 수 없어 근사치로 표시)."
+        : "GitHub/Gitea 저장소에 마지막으로 코드가 반영된(push) 시각입니다.";
+      footLeft.appendChild(pushedEl);
     }
     if (footLeft.childNodes.length > 0) {
       foot.appendChild(footLeft);

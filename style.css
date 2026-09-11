@@ -693,6 +693,16 @@
   flex-shrink: 0;
 }
 
+/* 최종 업데이트 일자 — 별점처럼 강조할 정보는 아니라 중립적인 회색조로 표시 */
+.pb-pushed-at {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--app-text-secondary, var(--app-text-muted));
+  white-space: nowrap;
+  opacity: 0.85;
+  cursor: help;
+}
+
 .pb-btn-group {
   display: flex;
   align-items: center;
