@@ -232,6 +232,27 @@ def _github_api_error_message(exc, has_token):
     return "GitHub API 오류(%s)" % exc.code
 
 
+def _parse_version_json(text):
+    """VERSION 파일 내용을 JSON으로 파싱한다. 표준 형식은 중괄호로 감싼 JSON
+    객체(예: {"plugin version": "2.47.2"})지만, 중괄호 없이 키:값 한 줄만 적은
+    형태(예: "plugin version": "0.1.3")도 관대하게 허용한다 — 실수로 감싸는
+    중괄호를 빠뜨린 VERSION 파일이 실제로 종종 보이기 때문이다. 반환값은
+    (파싱된 dict, 관대한_형식으로_구제했는지) 튜플이며, 어느 쪽으로도 파싱에
+    실패하면 표준 형식 시도에서 난 예외를 그대로 올린다(호출부의 기존
+    except 처리가 이전과 동일하게 동작하도록)."""
+    try:
+        return json.loads(text), False
+    except (ValueError, TypeError) as exc:
+        stripped = (text or "").strip().rstrip(",")
+        if stripped.startswith("{") and stripped.endswith("}"):
+            raise  # 이미 중괄호로 감싼 형태인데 실패한 거라면 다른 문법 오류이니 그대로 올린다
+        try:
+            data = json.loads("{" + stripped + "}")
+        except Exception:
+            raise exc  # 구제 시도도 실패하면 원래(표준 형식) 예외를 올린다
+        return data, True
+
+
 def _http_get_json(url, token=None):
     req = urllib.request.Request(url, headers=_headers(token))
     with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT) as resp:
@@ -455,7 +476,7 @@ def _gitea_fetch_version(host, owner, repo, default_branch, gitea_cfg, scheme="h
             text = _gitea_get_text(
                 host, "/api/v1/repos/%s/%s/raw/%s/VERSION" % (owner, repo, branch), gitea_cfg, scheme
             )
-            data = json.loads(text)
+            data, _lenient = _parse_version_json(text)
             version = data.get("plugin version")
             if version:
                 return str(version)
@@ -656,7 +677,7 @@ def _local_version(plugin_id):
         return None
     try:
         with open(version_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            data, _lenient = _parse_version_json(f.read())
         return data.get("plugin version") or data.get("version")
     except Exception:
         return None
@@ -824,7 +845,7 @@ def _fetch_remote_version(owner, repo, default_branch, token):
             owner, repo, branch,
         )
         try:
-            data = json.loads(_http_get_text(raw_url, token))
+            data, _lenient = _parse_version_json(_http_get_text(raw_url, token))
             version = data.get("plugin version")
             if version:
                 return str(version)
@@ -1547,15 +1568,18 @@ def _validate_plugin_source(plugin_dir, detected_id):
     # 1. VERSION 파일 검사 (update_manifest 선언 시 필수, 미선언 시 경고만)
     vpath = os.path.join(plugin_dir, "VERSION")
     vfile_ok = False
+    vfile_lenient = False  # 중괄호 없이 "plugin version": "..." 형태만 있어 구제 파싱한 경우
     vdetail = ""
     if os.path.isfile(vpath):
         try:
             with open(vpath, "r", encoding="utf-8") as f:
-                vdata = json.load(f)
+                vdata, vfile_lenient = _parse_version_json(f.read())
             vkey = vdata.get("plugin version") or vdata.get("version")
             if vkey:
                 vfile_ok = True
                 vdetail = "버전 %s" % vkey
+                if vfile_lenient:
+                    vdetail += " (중괄호 없이 적혀 있어 관대하게 파싱함 — 표준 형식({\"plugin version\": \"%s\"})을 권장합니다)" % vkey
             else:
                 vdetail = "'plugin version' 키가 없습니다 (업데이트 체크 불가)"
         except Exception:
@@ -1564,10 +1588,10 @@ def _validate_plugin_source(plugin_dir, detected_id):
         vdetail = "VERSION 파일 없음"
 
     if manifest_files:
-        checks.append({"name": "VERSION", "ok": vfile_ok,
+        checks.append({"name": "VERSION", "ok": vfile_ok, "warn": vfile_ok and vfile_lenient,
                         "detail": (vdetail if vfile_ok else "update_manifest 선언 시 VERSION 필수 — " + vdetail)})
     else:
-        checks.append({"name": "VERSION", "ok": True, "warn": not vfile_ok,
+        checks.append({"name": "VERSION", "ok": True, "warn": (not vfile_ok) or vfile_lenient,
                         "detail": vdetail if vfile_ok else "경고: " + vdetail + " (업데이트 체크 불가)"})
 
     # 2~6. 파이썬 소스 AST 분석
@@ -1936,7 +1960,7 @@ def _detect_plugin_id_from_dir(plugin_dir, fallback_name=None):
     if os.path.isfile(vpath):
         try:
             with open(vpath, "r", encoding="utf-8") as f:
-                vdata = json.load(f)
+                vdata, _lenient = _parse_version_json(f.read())
             pid = vdata.get("id") or vdata.get("plugin_id")
             if pid and _PLUGIN_ID_RE.match(str(pid).strip()):
                 return str(pid).strip()
