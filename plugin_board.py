@@ -371,18 +371,54 @@ def _effective_gitea_cfg(url, configured_tokens=None):
     GITEA_TOKENS(호스트별 읽기 전용 토큰)에서 이 URL의 호스트에 맞는 토큰을
     찾아 폴백으로 쓴다 — 매번 URL에 자격증명을 넣지 않아도 등록된 서버는
     바로 설치/업데이트할 수 있게 하기 위함이다. 서버별 전역 설정을 두지
-    않던 기존 동작(URL 자체의 자격증명)은 그대로 우선순위 1위를 유지한다."""
+    않던 기존 동작(URL 자체의 자격증명)은 그대로 우선순위 1위를 유지한다.
+
+    "source" 필드는 실제로 어느 자격증명이 적용됐는지를 나타낸다
+    ("url_basic"/"url_token"/"config_token"/"none") — 인증 실패(401/403) 시
+    "URL에 박힌 옛날 자격증명이 우선 적용돼 GITEA_TOKENS가 아예 시도되지도
+    않았다"는 흔한 혼란을 에러 메시지에서 바로 짚어줄 수 있도록 함이다."""
     _, username, password = _extract_url_credentials(url)
     if username and password:
-        return {"token": None, "username": username, "password": password}
+        return {"token": None, "username": username, "password": password, "source": "url_basic"}
     if username:  # https://TOKEN@host/owner/repo 형태(토큰만 있는 경우)
-        return {"token": username, "username": None, "password": None}
+        return {"token": username, "username": None, "password": None, "source": "url_token"}
     if configured_tokens:
         host = (_parse_repo_url(url)[0] or "").lower()
         token = configured_tokens.get(host)
         if token:
-            return {"token": token, "username": None, "password": None}
-    return {"token": None, "username": None, "password": None}
+            return {"token": token, "username": None, "password": None, "source": "config_token"}
+    return {"token": None, "username": None, "password": None, "source": "none"}
+
+
+_GITEA_AUTH_SOURCE_LABEL = {
+    "url_basic": "등록된 주소에 포함된 아이디:비밀번호",
+    "url_token": "등록된 주소에 포함된 토큰",
+    "config_token": "설정(GITEA_TOKENS)에 등록한 토큰",
+    "none": "인증 정보 없음(공개 저장소로 간주하고 시도)",
+}
+
+
+def _gitea_auth_error_hint(gitea_cfg):
+    """401/403 오류 메시지에 덧붙일 안내문. 어떤 자격증명이 실제로 시도됐는지
+    밝혀서, "GITEA_TOKENS를 등록했는데도 안 된다"는 흔한 혼란(사실은 URL에
+    박힌 옛 자격증명이 우선 적용돼 GITEA_TOKENS가 아예 시도되지 않은 경우가
+    많음)을 바로 알아챌 수 있게 한다."""
+    source = (gitea_cfg or {}).get("source", "none")
+    label = _GITEA_AUTH_SOURCE_LABEL.get(source, "알 수 없는 인증 정보")
+    if source in ("url_basic", "url_token"):
+        return (
+            "(%s(으)로 인증을 시도했지만 실패했습니다. 이 주소가 우선 적용되므로 "
+            "설정에 GITEA_TOKENS를 등록해뒀어도 그쪽은 시도되지 않습니다 — 비밀번호/토큰이 "
+            "바뀌었거나 서버가 더 이상 이 인증 방식을 지원하지 않을 수 있습니다(Gitea 1.23+는 "
+            "Basic Auth 지원이 폐지됨). 카드의 '✏️ Git 주소 변경'으로 자격증명 없이 순수 "
+            "주소만 다시 등록하면, 이후 GITEA_TOKENS에 등록한 토큰이 대신 적용됩니다.)" % label
+        )
+    if source == "config_token":
+        return (
+            "(%s(으)로 인증을 시도했지만 실패했습니다. 토큰이 만료됐거나 저장소에 대한 "
+            "읽기 권한이 없을 수 있습니다 — 설정에서 토큰을 다시 확인해주세요.)" % label
+        )
+    return "(이 저장소는 인증 없이는 접근할 수 없습니다 — GITEA_TOKENS 설정에 토큰을 등록하거나, 주소에 자격증명을 포함해 다시 등록해주세요.)"
 
 
 def _effective_github_token(url, fallback_token):
@@ -452,7 +488,7 @@ def _gitea_fetch_description_info(host, owner, repo, gitea_cfg, scheme="https"):
             "error": False,
         }
     except urllib.error.HTTPError as exc:
-        hint = " (인증 정보를 확인해주세요)" if exc.code in (401, 403) else ""
+        hint = " " + _gitea_auth_error_hint(gitea_cfg) if exc.code in (401, 403) else ""
         info = {
             "desc": "Gitea API 호출 오류 (HTTP %s)%s" % (exc.code, hint),
             "tags": [], "url": fallback_url, "default_branch": None, "stars": None, "pushed_at": None, "error": True,
@@ -632,6 +668,15 @@ def _update_registered_repo_url(plugin_id, new_url):
     host, owner, repo = _parse_repo_url(new_url)
     if not host or not owner or not repo:
         return False, "Git 저장소 주소를 해석하지 못했습니다: %s" % new_url
+
+    # 주소가 바뀌면(자격증명만 바뀐 경우 포함) 예전 주소로 실패했던 결과가
+    # 캐시에 최대 24시간 남아있을 수 있다 — 예를 들어 URL에 박힌 옛 자격증명
+    # 때문에 401이 났던 걸 캐시가 기억한 채로, 자격증명을 뺀 새 주소로 바꿔도
+    # 같은 host/owner/repo라는 이유로 그 실패가 그대로 재사용된다. 바뀐 주소로
+    # 즉시 다시 확인되도록 관련 캐시를 지운다.
+    cache_key = ("%s/%s" % (owner, repo)) if _is_github_host(host) else ("gitea:%s/%s/%s" % (host, owner, repo))
+    _DESC_CACHE.pop(cache_key, None)
+    _VERSION_CACHE.pop(cache_key, None)
 
     _remember_repo_install(new_url, plugin_id=plugin_id)
     return True, "'%s'의 등록된 Git 주소를 갱신했습니다. '업데이트' 버튼으로 새 주소에서 최신 상태를 확인해보세요." % plugin_id
@@ -2320,7 +2365,7 @@ def _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme="https"):
                 result_msg += " 경고: " + "; ".join(warns)
             return True, result_msg
         except urllib.error.HTTPError as exc:
-            hint = " (인증 정보를 확인해주세요)" if exc.code in (401, 403) else ""
+            hint = " " + _gitea_auth_error_hint(gitea_cfg) if exc.code in (401, 403) else ""
             last_error = "HTTP %s%s" % (exc.code, hint)
         except Exception as exc:
             last_error = str(exc)
