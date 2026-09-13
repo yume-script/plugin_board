@@ -347,9 +347,15 @@ def _parse_owner_repo(url):
 # Basic Auth(사용자명+비밀번호)도 함께 지원한다.
 # ------------------------------------------------------------------
 def _parse_gitea_tokens_cfg(raw):
-    """설정 화면에 입력한 "호스트:토큰,호스트2:토큰2" 형식의 문자열을
-    {호스트(소문자): 토큰} 딕셔너리로 파싱한다. 형식이 안 맞는 조각은
-    조용히 건너뛴다(설정 파싱 실패로 전체 기능이 죽으면 안 되므로)."""
+    """설정 화면에 입력한 문자열을 {호스트(소문자): {"token": ...} 또는
+    {"username": ..., "password": ...}} 딕셔너리로 파싱한다. 한 줄(콤마 구분
+    조각)에 콜론이 몇 개냐로 형식을 구분한다:
+    - "호스트:토큰" (콜론 1개) → 토큰 인증
+    - "호스트:아이디:비밀번호" (콜론 2개) → Basic Auth(아이디/비밀번호만 쓰는
+      Gitea 서버를 위함 — 토큰 발급이 없거나 번거로운 경우, URL에 자격증명을
+      박아넣지 않고도 설정만으로 완전히 관리할 수 있게 한다)
+    형식이 안 맞는 조각(콜론 없음, 3개 이상 등)은 조용히 건너뛴다(설정 파싱
+    실패로 전체 기능이 죽으면 안 되므로)."""
     result = {}
     if not raw:
         return result
@@ -357,26 +363,37 @@ def _parse_gitea_tokens_cfg(raw):
         chunk = chunk.strip()
         if not chunk or ":" not in chunk:
             continue
-        host, _, token = chunk.partition(":")
-        host = host.strip().lower()
-        token = token.strip()
-        if host and token:
-            result[host] = token
+        parts = chunk.split(":")
+        host = parts[0].strip().lower()
+        if not host:
+            continue
+        if len(parts) == 2:
+            token = parts[1].strip()
+            if token:
+                result[host] = {"token": token}
+        elif len(parts) == 3:
+            username, password = parts[1].strip(), parts[2].strip()
+            if username and password:
+                result[host] = {"username": username, "password": password}
+        # 콜론이 3개 이상(len(parts) > 3)이면 형식이 불분명하니 건너뛴다 —
+        # 비밀번호 자체에 콜론이 들어가는 경우까지는 지원하지 않는다.
     return result
 
 
 def _effective_gitea_cfg(url, configured_tokens=None):
     """URL에 담긴 자격증명(https://아이디:비밀번호@host/... 또는 https://토큰@host/...)을
     최우선으로 쓴다. URL에 자격증명이 없으면, 설정 화면에 등록해둔
-    GITEA_TOKENS(호스트별 읽기 전용 토큰)에서 이 URL의 호스트에 맞는 토큰을
-    찾아 폴백으로 쓴다 — 매번 URL에 자격증명을 넣지 않아도 등록된 서버는
-    바로 설치/업데이트할 수 있게 하기 위함이다. 서버별 전역 설정을 두지
-    않던 기존 동작(URL 자체의 자격증명)은 그대로 우선순위 1위를 유지한다.
+    GITEA_TOKENS(호스트별 토큰 또는 아이디/비밀번호)에서 이 URL의 호스트에
+    맞는 항목을 찾아 폴백으로 쓴다 — 매번 URL에 자격증명을 넣지 않아도
+    등록된 서버는 바로 설치/업데이트할 수 있게 하기 위함이다. 서버별 전역
+    설정을 두지 않던 기존 동작(URL 자체의 자격증명)은 그대로 우선순위
+    1위를 유지한다.
 
     "source" 필드는 실제로 어느 자격증명이 적용됐는지를 나타낸다
-    ("url_basic"/"url_token"/"config_token"/"none") — 인증 실패(401/403) 시
-    "URL에 박힌 옛날 자격증명이 우선 적용돼 GITEA_TOKENS가 아예 시도되지도
-    않았다"는 흔한 혼란을 에러 메시지에서 바로 짚어줄 수 있도록 함이다."""
+    ("url_basic"/"url_token"/"config_token"/"config_basic"/"none") — 인증
+    실패(401/403) 시 "URL에 박힌 옛날 자격증명이 우선 적용돼 GITEA_TOKENS가
+    아예 시도되지도 않았다"는 흔한 혼란을 에러 메시지에서 바로 짚어줄 수
+    있도록 함이다."""
     _, username, password = _extract_url_credentials(url)
     if username and password:
         return {"token": None, "username": username, "password": password, "source": "url_basic"}
@@ -384,9 +401,15 @@ def _effective_gitea_cfg(url, configured_tokens=None):
         return {"token": username, "username": None, "password": None, "source": "url_token"}
     if configured_tokens:
         host = (_parse_repo_url(url)[0] or "").lower()
-        token = configured_tokens.get(host)
-        if token:
-            return {"token": token, "username": None, "password": None, "source": "config_token"}
+        entry = configured_tokens.get(host)
+        if entry:
+            if entry.get("token"):
+                return {"token": entry["token"], "username": None, "password": None, "source": "config_token"}
+            if entry.get("username") and entry.get("password"):
+                return {
+                    "token": None, "username": entry["username"], "password": entry["password"],
+                    "source": "config_basic",
+                }
     return {"token": None, "username": None, "password": None, "source": "none"}
 
 
@@ -394,6 +417,7 @@ _GITEA_AUTH_SOURCE_LABEL = {
     "url_basic": "등록된 주소에 포함된 아이디:비밀번호",
     "url_token": "등록된 주소에 포함된 토큰",
     "config_token": "설정(GITEA_TOKENS)에 등록한 토큰",
+    "config_basic": "설정(GITEA_TOKENS)에 등록한 아이디/비밀번호",
     "none": "인증 정보 없음(공개 저장소로 간주하고 시도)",
 }
 
@@ -411,14 +435,14 @@ def _gitea_auth_error_hint(gitea_cfg):
             "설정에 GITEA_TOKENS를 등록해뒀어도 그쪽은 시도되지 않습니다 — 비밀번호/토큰이 "
             "바뀌었거나 서버가 더 이상 이 인증 방식을 지원하지 않을 수 있습니다(Gitea 1.23+는 "
             "Basic Auth 지원이 폐지됨). 카드의 '✏️ Git 주소 변경'으로 자격증명 없이 순수 "
-            "주소만 다시 등록하면, 이후 GITEA_TOKENS에 등록한 토큰이 대신 적용됩니다.)" % label
+            "주소만 다시 등록하면, 이후 GITEA_TOKENS에 등록한 항목이 대신 적용됩니다.)" % label
         )
-    if source == "config_token":
+    if source in ("config_token", "config_basic"):
         return (
-            "(%s(으)로 인증을 시도했지만 실패했습니다. 토큰이 만료됐거나 저장소에 대한 "
-            "읽기 권한이 없을 수 있습니다 — 설정에서 토큰을 다시 확인해주세요.)" % label
+            "(%s(으)로 인증을 시도했지만 실패했습니다. 정보가 만료됐거나 저장소에 대한 "
+            "읽기 권한이 없을 수 있습니다 — 설정에서 다시 확인해주세요.)" % label
         )
-    return "(이 저장소는 인증 없이는 접근할 수 없습니다 — GITEA_TOKENS 설정에 토큰을 등록하거나, 주소에 자격증명을 포함해 다시 등록해주세요.)"
+    return "(이 저장소는 인증 없이는 접근할 수 없습니다 — GITEA_TOKENS 설정에 토큰(또는 아이디:비밀번호)을 등록하거나, 주소에 자격증명을 포함해 다시 등록해주세요.)"
 
 
 def _effective_github_token(url, fallback_token):
@@ -2420,16 +2444,19 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         },
         {
             "key": "GITEA_TOKENS",
-            "label": "Gitea 저장소 읽기 토큰 (선택)",
+            "label": "Gitea 서버 인증 정보 (선택)",
             "type": "password",
             "required": False,
             "description": (
-                "Git 저장소 URL에 매번 아이디:비밀번호나 토큰을 넣지 않아도, 등록해둔 "
-                "Gitea 서버는 바로 설치/업데이트할 수 있게 해줍니다. 각 Gitea 서버의 "
-                "저장소 읽기(read) 권한만 있는 토큰을 발급받아 등록하세요 — 쓰기 권한은 "
-                "필요 없습니다. 형식: \"호스트:토큰\", 여러 서버는 콤마(,)로 구분 "
-                "(예: gitea.derekkoo.win:여기에토큰,gitea2.example.com:토큰2). URL 자체에 "
-                "https://토큰@host/... 처럼 자격증명이 있으면 그쪽이 항상 우선합니다."
+                "Git 저장소 URL에 자격증명을 직접 넣지 않아도, 등록해둔 Gitea 서버는 "
+                "바로 설치/업데이트할 수 있게 해줍니다. 두 형식을 함께 쓸 수 있습니다 — "
+                "\"호스트:토큰\"(토큰 발급이 가능한 서버, 저장소 읽기 권한만 있으면 충분) "
+                "또는 \"호스트:아이디:비밀번호\"(토큰 없이 아이디/비밀번호만 쓰는 서버). "
+                "여러 서버는 콤마(,)로 구분 "
+                "(예: gitea.derekkoo.win:여기에토큰,gitea2.example.com:아이디:비밀번호). "
+                "URL 자체에 https://토큰@host/... 또는 https://아이디:비밀번호@host/...처럼 "
+                "자격증명이 있으면 그쪽이 항상 우선합니다 — 이 설정만으로 관리하려면 "
+                "Git 주소는 자격증명 없이 순수 주소로 등록하세요."
             ),
         },
         {
