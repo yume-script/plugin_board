@@ -562,6 +562,10 @@
   color: color-mix(in srgb, #9370d8 88%, var(--app-text-primary));
   background: color-mix(in srgb, #9370d8 16%, transparent);
 }
+.pb-card-icon-widget {
+  color: color-mix(in srgb, #4fb286 88%, var(--app-text-primary));
+  background: color-mix(in srgb, #4fb286 16%, transparent);
+}
 .pb-card-icon-other {
   color: var(--app-text-secondary, var(--app-text-muted));
   background: color-mix(in srgb, var(--app-text-muted) 14%, transparent);

@@ -107,6 +107,7 @@ TYPE_OVERRIDES = {
 TYPE_LABELS = {
     "search": "검색형 메타데이터",
     "tab": "카테고리 탭 UI",
+    "widget": "홈화면 위젯",
     "other": "기타",
 }
 
@@ -875,6 +876,8 @@ def _scan_uncurated_installed(curated_ids, is_enabled_fn):
             plugin_type = "search"
         elif attrs.get("category_tab"):
             plugin_type = "tab"
+        elif attrs.get("dashboard_widget"):
+            plugin_type = "widget"
         else:
             plugin_type = "other"
         tab_order = _extract_tab_order(attrs.get("category_tab"))
@@ -1150,6 +1153,8 @@ def _build_discovered_item(repo_json, version_info, is_enabled_fn, excluded_ids)
         elif local_attrs.get("category_tab"):
             plugin_type = "tab"
             tab_order = _extract_tab_order(local_attrs.get("category_tab"))
+        elif local_attrs.get("dashboard_widget"):
+            plugin_type = "widget"
         has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(repo_name)
         title = local_attrs.get("name") or repo_name
 
@@ -1230,6 +1235,8 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None, plugin_id_
         elif local_attrs.get("category_tab"):
             plugin_type = "tab"
             tab_order = _extract_tab_order(local_attrs.get("category_tab"))
+        elif local_attrs.get("dashboard_widget"):
+            plugin_type = "widget"
         has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(local_id)
         title = local_attrs.get("name") or local_id
 
@@ -1286,6 +1293,8 @@ def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg, scheme=
         elif local_attrs.get("category_tab"):
             plugin_type = "tab"
             tab_order = _extract_tab_order(local_attrs.get("category_tab"))
+        elif local_attrs.get("dashboard_widget"):
+            plugin_type = "widget"
         has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(local_id)
         title = local_attrs.get("name") or local_id
 
