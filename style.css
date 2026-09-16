@@ -1100,6 +1100,100 @@
   line-height: 1.5;
 }
 
+/* "Gitea 서버" 설정 필드 — 등록된 서버 목록 + 새 서버 추가 폼 */
+.pb-gitea-servers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.pb-gitea-servers-empty {
+  margin: 0;
+  padding: 8px 2px;
+  font-size: 12px;
+  color: var(--app-text-muted);
+}
+.pb-gitea-servers-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--app-input-bg, var(--app-bg-main));
+  border: 1px solid var(--app-border, rgba(255,255,255,0.15));
+}
+.pb-gitea-servers-host {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--app-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pb-gitea-servers-auth {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--app-text-muted);
+  white-space: nowrap;
+}
+.pb-gitea-servers-del {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--app-text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pb-gitea-servers-del:hover {
+  color: color-mix(in srgb, #c0554f 88%, var(--app-text-primary));
+  background: color-mix(in srgb, #c0554f 14%, transparent);
+}
+.pb-gitea-servers-form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pb-gitea-servers-form input {
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: 6px;
+  background: var(--app-input-bg, var(--app-bg-main));
+  border: 1px solid var(--app-border, rgba(255,255,255,0.15));
+  color: var(--app-text-primary);
+  font-size: 12.5px;
+  font-family: inherit;
+}
+.pb-gitea-servers-form input::placeholder {
+  color: var(--app-text-muted);
+}
+.pb-gitea-servers-form button {
+  flex: 0 0 auto;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: inherit;
+  color: #fff;
+  background: var(--app-accent);
+  border: 1px solid var(--app-accent);
+  padding: 9px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter .15s ease;
+}
+.pb-gitea-servers-form button:hover {
+  filter: brightness(1.1);
+}
+
 .pb-modal-foot {
   display: flex;
   justify-content: flex-end;

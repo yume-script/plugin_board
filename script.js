@@ -361,6 +361,157 @@
     return modal;
   }
 
+  // ------------------------------------------------------------------
+  // GITEA_TOKENS 설정값("호스트:토큰" 또는 "호스트:아이디:비밀번호"를 콤마로
+  // 구분한 문자열)을 사람이 편집하기 쉬운 "서버 추가/삭제" UI로 대체한다.
+  // 백엔드(_parse_gitea_tokens_cfg)가 읽는 문자열 형식 자체는 그대로 두고,
+  // 프론트에서만 파싱/조립해 hidden input에 채워 넣으므로 저장 흐름은 기존과
+  // 완전히 동일하다(다른 config_schema 필드처럼 name 속성만으로 자동 수집됨).
+  // ------------------------------------------------------------------
+  function parseGiteaTokensValue(raw) {
+    const entries = [];
+    String(raw || "").split(",").forEach((chunk) => {
+      chunk = chunk.trim();
+      if (!chunk || !chunk.includes(":")) return;
+      const parts = chunk.split(":");
+      const host = (parts[0] || "").trim();
+      if (!host) return;
+      if (parts.length === 2) {
+        const token = parts[1].trim();
+        if (token) entries.push({ host, token });
+      } else if (parts.length === 3) {
+        // "호스트:아이디:비밀번호" — 이 UI엔 아이디/비밀번호 입력칸이 없지만,
+        // 예전에(또는 다른 경로로) 등록해둔 항목을 삭제 없이는 화면에서
+        // 지워버리지 않도록 읽기 전용으로 계속 보여주고 값도 그대로 유지한다.
+        const username = parts[1].trim();
+        const password = parts[2].trim();
+        if (username && password) entries.push({ host, username, password });
+      }
+      // 콜론이 4개 이상이면 형식이 불분명하니 이 UI에서는 건너뛴다(원본 저장값
+      // 자체를 지우진 않지만, 이 필드를 한 번이라도 저장하면 사라질 수 있음).
+    });
+    return entries;
+  }
+
+  function serializeGiteaTokensValue(entries) {
+    return entries
+      .map((e) => (e.token ? `${e.host}:${e.token}` : `${e.host}:${e.username}:${e.password}`))
+      .join(",");
+  }
+
+  function buildGiteaServersField(key, currentValue) {
+    const container = document.createElement("div");
+    container.className = "pb-gitea-servers";
+
+    const hidden = document.createElement("input");
+    hidden.type = "hidden";
+    hidden.name = key; // 저장 시 이 값이 그대로 GITEA_TOKENS로 수집된다(다른 필드와 동일한 방식)
+
+    const listEl = document.createElement("div");
+    listEl.className = "pb-gitea-servers-list";
+
+    let entries = parseGiteaTokensValue(currentValue);
+
+    const syncHidden = () => { hidden.value = serializeGiteaTokensValue(entries); };
+
+    const renderList = () => {
+      listEl.innerHTML = "";
+      if (entries.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "pb-gitea-servers-empty";
+        empty.textContent = "등록된 Gitea 서버가 없습니다.";
+        listEl.appendChild(empty);
+        return;
+      }
+      entries.forEach((entry, idx) => {
+        const row = document.createElement("div");
+        row.className = "pb-gitea-servers-row";
+
+        const hostEl = document.createElement("span");
+        hostEl.className = "pb-gitea-servers-host";
+        hostEl.textContent = entry.host;
+
+        const authEl = document.createElement("span");
+        authEl.className = "pb-gitea-servers-auth";
+        authEl.textContent = entry.token
+          ? "토큰 " + "•".repeat(Math.min(entry.token.length, 10))
+          : "아이디/비밀번호 설정됨 (" + entry.username + ")";
+
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "pb-gitea-servers-del";
+        delBtn.title = "삭제";
+        delBtn.innerHTML = "&times;";
+        delBtn.addEventListener("click", () => {
+          entries.splice(idx, 1);
+          syncHidden();
+          renderList();
+        });
+
+        row.append(hostEl, authEl, delBtn);
+        listEl.appendChild(row);
+      });
+    };
+
+    const formRow = document.createElement("div");
+    formRow.className = "pb-gitea-servers-form";
+    const hostInput = document.createElement("input");
+    hostInput.type = "text";
+    hostInput.placeholder = "https://git.example.com";
+    hostInput.autocomplete = "off";
+    const tokenInput = document.createElement("input");
+    tokenInput.type = "text";
+    tokenInput.placeholder = "토큰 (선택 — 비공개 저장소용)";
+    tokenInput.autocomplete = "off";
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.textContent = "+ 추가";
+
+    const addEntry = () => {
+      // 호스트만 추출(https:// 등 스킴이 붙어 있어도 host만 저장) — 백엔드가
+      // host 문자열 그대로를 URL의 호스트와 대소문자 무관 비교하기 때문에,
+      // 스킴/경로가 섞여 있으면 매칭이 안 될 수 있어 여기서 정리해둔다.
+      let host = hostInput.value.trim();
+      if (!host) {
+        showToast("Gitea 서버 주소를 입력해주세요.", true);
+        return;
+      }
+      host = host.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").split("/")[0].trim();
+      if (!host) {
+        showToast("올바른 서버 주소를 입력해주세요.", true);
+        return;
+      }
+      const token = tokenInput.value.trim();
+      if (entries.some((e) => e.host.toLowerCase() === host.toLowerCase())) {
+        showToast(`이미 등록된 서버입니다: ${host} (먼저 삭제 후 다시 추가해주세요)`, true);
+        return;
+      }
+      entries.push(token ? { host, token } : { host, token: "" });
+      if (!token) {
+        // 토큰 없이 추가하는 건(공개 저장소 등) 허용하되, 빈 토큰 항목은
+        // 저장 형식("호스트:토큰")상 의미가 없으므로 실제로는 등록하지 않는다.
+        entries.pop();
+        showToast("토큰 없이는 등록할 수 없습니다 — 공개 저장소는 등록하지 않아도 그대로 동작합니다.", true);
+        return;
+      }
+      syncHidden();
+      renderList();
+      hostInput.value = "";
+      tokenInput.value = "";
+      hostInput.focus();
+    };
+
+    addBtn.addEventListener("click", addEntry);
+    tokenInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addEntry(); });
+    hostInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); tokenInput.focus(); } });
+
+    formRow.append(hostInput, tokenInput, addBtn);
+    syncHidden();
+    renderList();
+    container.append(listEl, formRow, hidden);
+    return container;
+  }
+
   function renderSchemaField(field, currentValue) {
     const label = field.label || field.key;
     const required = !!field.required;
@@ -378,7 +529,9 @@
     labelEl.innerHTML = `${label} ${requiredMark}`;
     wrap.appendChild(labelEl);
 
-    if (type === "checkbox") {
+    if (type === "gitea_servers") {
+      wrap.appendChild(buildGiteaServersField(key, currentValue));
+    } else if (type === "checkbox") {
       const row = document.createElement("label");
       row.className = "pb-field-checkbox-row";
       const input = document.createElement("input");
