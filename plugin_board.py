@@ -793,7 +793,15 @@ def _read_local_class_attrs(plugin_id):
     """설치된 플러그인의 메인 .py에서 name/id/is_searchable/category_tab 등
     주요 클래스 속성을 AST로만(코드 실행 없이) 읽어온다. GitHub Topics
     검색으로 아직 발견되지 않았거나 검색 결과가 부실한 플러그인의 표시
-    이름·분류를 최대한 정확히 추정하는 데 사용한다."""
+    이름·분류를 최대한 정확히 추정하는 데 사용한다.
+
+    "홈화면 위젯"(BookOasis 코어의 /api/media/dashboard/widgets/<id>/data)은
+    category_tab/is_searchable와 달리 별도의 선언용 클래스 속성이 없다 —
+    get_dashboard_data(self, db_type, limit=10) 메서드를 구현했는지만으로
+    판단되는 구조라서, 클래스 바디에서 그 이름의 메서드 정의(FunctionDef/
+    AsyncFunctionDef)가 있는지도 함께 검사해 has_dashboard_data_method로
+    담아둔다(plugin_board 자신도 이 메서드가 있지만, category_tab이 먼저
+    체크되므로 "탭" 분류가 우선한다 — 분류 우선순위는 호출부 참고)."""
     path = _find_module_file(os.path.join(_plugins_metadata_dir(), plugin_id), plugin_id)
     if not path:
         return {}
@@ -815,6 +823,8 @@ def _read_local_class_attrs(plugin_id):
                                 attrs[target.id] = ast.literal_eval(stmt.value)
                             except Exception:
                                 pass
+                elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name == "get_dashboard_data":
+                    attrs["has_dashboard_data_method"] = True
             if attrs:
                 break  # 관례상 파일당 provider 클래스는 하나
     return attrs
@@ -876,7 +886,7 @@ def _scan_uncurated_installed(curated_ids, is_enabled_fn):
             plugin_type = "search"
         elif attrs.get("category_tab"):
             plugin_type = "tab"
-        elif attrs.get("dashboard_widget"):
+        elif attrs.get("dashboard_widget") or attrs.get("has_dashboard_data_method"):
             plugin_type = "widget"
         else:
             plugin_type = "other"
@@ -1153,7 +1163,7 @@ def _build_discovered_item(repo_json, version_info, is_enabled_fn, excluded_ids)
         elif local_attrs.get("category_tab"):
             plugin_type = "tab"
             tab_order = _extract_tab_order(local_attrs.get("category_tab"))
-        elif local_attrs.get("dashboard_widget"):
+        elif local_attrs.get("dashboard_widget") or local_attrs.get("has_dashboard_data_method"):
             plugin_type = "widget"
         has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(repo_name)
         title = local_attrs.get("name") or repo_name
@@ -1235,7 +1245,7 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None, plugin_id_
         elif local_attrs.get("category_tab"):
             plugin_type = "tab"
             tab_order = _extract_tab_order(local_attrs.get("category_tab"))
-        elif local_attrs.get("dashboard_widget"):
+        elif local_attrs.get("dashboard_widget") or local_attrs.get("has_dashboard_data_method"):
             plugin_type = "widget"
         has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(local_id)
         title = local_attrs.get("name") or local_id
@@ -1293,7 +1303,7 @@ def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg, scheme=
         elif local_attrs.get("category_tab"):
             plugin_type = "tab"
             tab_order = _extract_tab_order(local_attrs.get("category_tab"))
-        elif local_attrs.get("dashboard_widget"):
+        elif local_attrs.get("dashboard_widget") or local_attrs.get("has_dashboard_data_method"):
             plugin_type = "widget"
         has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(local_id)
         title = local_attrs.get("name") or local_id
@@ -2454,7 +2464,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         {
             "key": "GITEA_TOKENS",
             "label": "Gitea 서버",
-            "type": "gitea_servers",
+            "type": "password",
             "required": False,
             "description": (
                 "Git 저장소 URL에 자격증명을 직접 넣지 않아도, 등록해둔 Gitea 서버는 "

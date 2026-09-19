@@ -529,7 +529,13 @@
     labelEl.innerHTML = `${label} ${requiredMark}`;
     wrap.appendChild(labelEl);
 
-    if (type === "gitea_servers") {
+    if (key === "GITEA_TOKENS") {
+      // 코어의 범용 "환경설정 → 플러그인 설정" 화면은 이 필드가 무슨 커스텀
+      // type인지 모르므로(표준 타입만 렌더링 가능), config_schema에는 표준
+      // 타입("password")을 그대로 선언해둔다 — 대신 이 모달(plugin_board
+      // 자신의 카드에서 여는 설정 창)에서만 key로 식별해 전용 위젯으로
+      // 바꿔치기한다. 저장되는 값 형식은 동일하므로 코어 화면에서 수정해도
+      // (거칠지만) 여전히 정상 동작한다.
       wrap.appendChild(buildGiteaServersField(key, currentValue));
     } else if (type === "checkbox") {
       const row = document.createElement("label");
