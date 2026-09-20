@@ -505,7 +505,7 @@ def _gitea_fetch_description_info(host, owner, repo, gitea_cfg, scheme="https"):
         data = _gitea_get_json(host, "/api/v1/repos/%s/%s" % (owner, repo), gitea_cfg, scheme)
         info = {
             "desc": data.get("description") or "(등록된 설명이 없습니다)",
-            "tags": [],  # Gitea 토픽 발견은 v1 미지원(GitHub Topics 전용 기능)
+            "tags": data.get("topics") or [],
             "url": data.get("html_url") or fallback_url,
             "default_branch": data.get("default_branch"),
             "stars": data.get("stars_count"),
@@ -1115,6 +1115,123 @@ def _fetch_repos_by_topic(topics, token):
     results = list(seen.values())
     _TOPIC_CACHE[cache_key] = (now, results)
     return results
+
+
+def _gitea_cfg_from_tokens_entry(entry):
+    """GITEA_TOKENS에서 얻은 {"token": ...} 또는 {"username": ..., "password": ...}
+    항목을 _gitea_headers()가 바로 쓸 수 있는 gitea_cfg 형태로 변환한다.
+    URL 자체의 자격증명(_effective_gitea_cfg)과 달리, 여기는 처음부터 설정에
+    등록된 서버만 대상으로 하는 토픽 검색 전용이라 URL을 거치지 않는다."""
+    if not entry:
+        return {"token": None, "username": None, "password": None, "source": "none"}
+    if entry.get("token"):
+        return {"token": entry["token"], "username": None, "password": None, "source": "config_token"}
+    if entry.get("username") and entry.get("password"):
+        return {
+            "token": None, "username": entry["username"], "password": entry["password"],
+            "source": "config_basic",
+        }
+    return {"token": None, "username": None, "password": None, "source": "none"}
+
+
+def _fetch_gitea_repos_by_topic(host, gitea_cfg, scheme, topics):
+    """Gitea 저장소 검색 API(`GET /repos/search?q=<토픽>&topic=true`)로 지정된
+    토픽이 달린 저장소를 찾는다. GitHub Topics와 달리 전역 검색 대상이 없어
+    "어느 서버를 검색할지"부터 알아야 하므로, GITEA_TOKENS에 등록해둔 서버만
+    대상으로 한다(신뢰 여부를 이미 표시한 서버이기도 하다). 토픽별 병렬 조회·
+    1시간 캐시는 GitHub 쪽과 동일하다. 캐시 키에 호스트를 포함해 서버별로
+    독립적으로 캐시된다."""
+    topics = [t.strip() for t in topics if t and t.strip()]
+    if not topics:
+        return []
+
+    cache_key = "gitea:%s:%s" % (host, _topic_cache_key(topics))
+    now = time.time()
+    cached = _TOPIC_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _TOPIC_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    def _fetch_one(topic):
+        query = urllib.parse.quote(topic, safe="")
+        path = "/api/v1/repos/search?q=%s&topic=true&limit=50" % query
+        data = _gitea_get_json(host, path, gitea_cfg, scheme)
+        return data.get("data") or []
+
+    seen = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(topics))) as executor:
+        future_map = {executor.submit(_fetch_one, topic): topic for topic in topics}
+        for future in concurrent.futures.as_completed(future_map):
+            try:
+                items = future.result()
+            except Exception:
+                continue  # 토픽 하나(또는 이 서버 자체)가 실패해도 나머지는 계속 반영한다
+            for repo_json in items:
+                full_name = repo_json.get("full_name") or (
+                    "%s/%s" % ((repo_json.get("owner") or {}).get("login", ""), repo_json.get("name", ""))
+                )
+                if full_name and full_name not in seen:
+                    seen[full_name] = repo_json
+
+    results = list(seen.values())
+    _TOPIC_CACHE[cache_key] = (now, results)
+    return results
+
+
+def _build_gitea_discovered_item(host, repo_json, remote_version, is_enabled_fn, excluded_ids):
+    """Gitea 토픽 검색 결과 하나를 카드 항목으로 변환한다. GitHub 발견 카드
+    (_build_discovered_item)와 동일한 모양으로 만들어, 같은 "토픽 발견(미검수)"
+    묶음에 자연스럽게 섞여 표시되게 한다. remote_version은 _gitea_fetch_version()
+    이 돌려주는 순수 버전 문자열(또는 None)이다."""
+    owner_login = ((repo_json.get("owner") or {}).get("login")) or ""
+    repo_name = repo_json.get("name") or ""
+    if not owner_login or not repo_name or repo_name in excluded_ids:
+        return None
+
+    key = owner_login + "/" + repo_name
+    installed = _is_installed(repo_name)
+    installed_version = _local_version(repo_name) if installed else None
+    plugin_type = TYPE_OVERRIDES.get(key, "other")
+    has_config = False
+    title = repo_name
+    tab_order = None
+
+    if installed:
+        local_attrs = _read_local_class_attrs(repo_name)
+        if local_attrs.get("is_searchable"):
+            plugin_type = "search"
+        elif local_attrs.get("category_tab"):
+            plugin_type = "tab"
+            tab_order = _extract_tab_order(local_attrs.get("category_tab"))
+        elif local_attrs.get("dashboard_widget") or local_attrs.get("has_dashboard_data_method"):
+            plugin_type = "widget"
+        has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(repo_name)
+        title = local_attrs.get("name") or repo_name
+
+    version_label = ("v" + remote_version) if remote_version else "—"
+
+    return {
+        "id": repo_name,
+        "owner": owner_login,
+        "title": title,
+        "type": plugin_type,
+        "type_label": TYPE_LABELS.get(plugin_type, TYPE_LABELS["other"]),
+        "desc": repo_json.get("description") or "(등록된 설명이 없습니다)",
+        "tags": repo_json.get("topics") or [],
+        "features": [],
+        "version_label": version_label,
+        "url": repo_json.get("html_url") or ("https://%s/%s" % (host, key)),
+        "stars": repo_json.get("stars_count"),
+        "pushed_at": repo_json.get("updated_at"),
+        "error": False,
+        "installed": installed,
+        "installed_version": installed_version,
+        "has_update": installed and _remote_is_newer(installed_version, remote_version),
+        "has_config": has_config,
+        "enabled": is_enabled_fn(repo_name) if installed else None,
+        "discovered": True,
+        "tab_order": tab_order,
+        "gitea": True,
+    }
 
 
 def _fetch_versions_parallel(specs, token, max_workers=8):
@@ -2729,9 +2846,10 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             except Exception:
                 return True
 
-        # plugin_board 자기 자신 조회와 GitHub Topics 검색은 서로 무관한 두 개의
-        # 네트워크 요청이라 동시에 실행한다 — 순차로 하면 두 요청의 지연 시간이
-        # 그대로 더해진다(캐시가 만료된 시점의 첫 로딩에서 특히 체감된다).
+        # plugin_board 자기 자신 조회, GitHub Topics 검색, 그리고 GITEA_TOKENS에
+        # 등록된 각 Gitea 서버의 토픽 검색까지 — 전부 서로 무관한 네트워크
+        # 요청이라 한꺼번에 동시에 실행한다. 순차로 하면 서버 개수만큼 지연이
+        # 그대로 쌓인다(토픽 검색과 같은 이유로 이미 겪었던 문제).
         extra_topics_raw = str(cfg.get("EXTRA_DISCOVERY_TOPICS") or "").strip()
         extra_topics = [t.strip() for t in extra_topics_raw.split(",") if t.strip()]
         catalog_topic = str(cfg.get("CATALOG_TOPIC") or "").strip()
@@ -2739,11 +2857,20 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         # (bookoasis-plugin)이 없이 카탈로그 토픽만 달아둔 저장소도 발견된다.
         all_topics = list(dict.fromkeys(DISCOVERY_TOPICS + extra_topics + ([catalog_topic] if catalog_topic else [])))
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2 + len(gitea_tokens)) as executor:
             self_future = executor.submit(
                 _fetch_repo_entry, SELF_REPO_URL, token, is_enabled_fn, gitea_tokens=gitea_tokens
             )
             topics_future = executor.submit(_fetch_repos_by_topic, all_topics, token)
+            # GITEA_TOKENS에 등록된 서버만 대상으로 한다 — Gitea는 GitHub처럼
+            # "전 세계 어디든" 검색할 단일 대상이 없으므로, 이미 신뢰 표시를
+            # 해둔(토큰/자격증명을 등록한) 서버로 범위를 한정한다.
+            gitea_topic_futures = {
+                host: executor.submit(
+                    _fetch_gitea_repos_by_topic, host, _gitea_cfg_from_tokens_entry(entry), "https", all_topics
+                )
+                for host, entry in gitea_tokens.items()
+            }
             # plugin_board 자기 자신은 GitHub Topics 검색 결과와 무관하게 항상
             # 별도로 조회해 카드 목록 맨 앞에 고정한다("미검수" 표시 없이, 개발
             # 중인 버전도 항상 카드+업데이트 버튼으로 다룰 수 있도록).
@@ -2752,11 +2879,17 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 topic_repos = topics_future.result()
             except Exception:
                 topic_repos = []
+            gitea_topic_repos = {}
+            for host, fut in gitea_topic_futures.items():
+                try:
+                    gitea_topic_repos[host] = fut.result()
+                except Exception:
+                    gitea_topic_repos[host] = []
 
         curated_ids = {self_item["id"]}
 
-        # GitHub Topics 검색이 카드 목록의 유일한 수집 경로다. 검증 없이 자동
-        # 노출되므로 "미검수" 표시를 유지한다.
+        # GitHub Topics 검색(+ 등록된 Gitea 서버별 토픽 검색)이 카드 목록의
+        # 수집 경로다. 검증 없이 자동 노출되므로 "미검수" 표시를 유지한다.
         discovered_items = []
 
         # 검색 직후 _TOPIC_CACHE에 남은 타임스탬프를 그대로 읽어와, "마지막으로
@@ -2790,9 +2923,52 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                     continue
                 seen_discovered_ids.add(item["id"])
                 discovered_items.append(item)
+        else:
+            seen_discovered_ids = set()
 
-            if len(discovered_items) > _MAX_DISCOVERED_ITEMS:
-                discovered_items = discovered_items[:_MAX_DISCOVERED_ITEMS]
+        # Gitea 서버별 토픽 검색 결과도 같은 방식(버전 병렬 조회 → 노이즈 필터)으로
+        # 처리해 같은 discovered_items 묶음에 합친다.
+        for host, repo_list in gitea_topic_repos.items():
+            if not repo_list:
+                continue
+            gitea_cfg_h = _gitea_cfg_from_tokens_entry(gitea_tokens.get(host))
+            version_specs_g = []
+            for repo_json in repo_list:
+                owner_login = ((repo_json.get("owner") or {}).get("login")) or ""
+                repo_name = repo_json.get("name") or ""
+                if owner_login and repo_name and repo_name not in (curated_ids | seen_discovered_ids):
+                    version_specs_g.append((owner_login, repo_name, repo_json.get("default_branch")))
+
+            version_map_g = {}
+            if version_specs_g:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(version_specs_g))) as vexec:
+                    vfuture_map = {
+                        vexec.submit(_gitea_fetch_version, host, o, r, db, gitea_cfg_h, "https"): (o, r)
+                        for (o, r, db) in version_specs_g
+                    }
+                    for vfut in concurrent.futures.as_completed(vfuture_map):
+                        owner_repo_key = vfuture_map[vfut]
+                        try:
+                            version_map_g[owner_repo_key] = vfut.result()
+                        except Exception:
+                            version_map_g[owner_repo_key] = None
+
+            for repo_json in repo_list:
+                owner_login = ((repo_json.get("owner") or {}).get("login")) or ""
+                repo_name = repo_json.get("name") or ""
+                remote_version = version_map_g.get((owner_login, repo_name))
+                item = _build_gitea_discovered_item(
+                    host, repo_json, remote_version, is_enabled_fn, curated_ids | seen_discovered_ids
+                )
+                if not item:
+                    continue
+                if not item["installed"] and item["version_label"] == "—":
+                    continue
+                seen_discovered_ids.add(item["id"])
+                discovered_items.append(item)
+
+        if len(discovered_items) > _MAX_DISCOVERED_ITEMS:
+            discovered_items = discovered_items[:_MAX_DISCOVERED_ITEMS]
 
         discovered_ids = {it["id"] for it in discovered_items}
         # GitHub Topics 검색은 항상 저장소의 "현재(canonical)" 이름으로만 결과를
