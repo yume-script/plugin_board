@@ -1158,13 +1158,16 @@ def _fetch_gitea_repos_by_topic(host, gitea_cfg, scheme, topics):
         return data.get("data") or []
 
     seen = {}
+    errors = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(topics))) as executor:
         future_map = {executor.submit(_fetch_one, topic): topic for topic in topics}
         for future in concurrent.futures.as_completed(future_map):
+            topic = future_map[future]
             try:
                 items = future.result()
-            except Exception:
-                continue  # 토픽 하나(또는 이 서버 자체)가 실패해도 나머지는 계속 반영한다
+            except Exception as exc:
+                errors.append("%s: %s" % (topic, exc))
+                continue  # 토픽 하나만 실패했다면 나머지 토픽 결과는 계속 반영한다
             for repo_json in items:
                 full_name = repo_json.get("full_name") or (
                     "%s/%s" % ((repo_json.get("owner") or {}).get("login", ""), repo_json.get("name", ""))
@@ -1173,6 +1176,14 @@ def _fetch_gitea_repos_by_topic(host, gitea_cfg, scheme, topics):
                     seen[full_name] = repo_json
 
     results = list(seen.values())
+    if not results and errors and len(errors) == len(topics):
+        # 토픽을 하나도 성공하지 못했다 — "정말로 결과가 없다"와 "검색 자체가
+        # 실패했다"를 구분하지 않고 조용히 빈 목록을 돌려주면(예전 동작),
+        # 인증 실패나 API 경로 문제 같은 진짜 원인이 영원히 보이지 않게 된다.
+        # 예외를 그대로 올려 호출부가 에러 카드로 표시할 수 있게 하고,
+        # 실패를 "빈 결과"로 캐시해 문제를 1시간 동안 숨기지도 않는다.
+        raise RuntimeError(errors[0])
+
     _TOPIC_CACHE[cache_key] = (now, results)
     return results
 
@@ -2891,11 +2902,13 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             except Exception:
                 topic_repos = []
             gitea_topic_repos = {}
+            gitea_topic_errors = {}
             for host, fut in gitea_topic_futures.items():
                 try:
                     gitea_topic_repos[host] = fut.result()
-                except Exception:
+                except Exception as exc:
                     gitea_topic_repos[host] = []
+                    gitea_topic_errors[host] = str(exc)
 
         curated_ids = {self_item["id"]}
 
@@ -2977,6 +2990,27 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                     continue
                 seen_discovered_ids.add(item["id"])
                 discovered_items.append(item)
+
+        # Gitea 토픽 검색이 서버 단위로 완전히 실패했다면(인증 오류, API 경로
+        # 불일치 등) "결과가 없다"와 구분되지 않게 조용히 숨기지 않고 에러
+        # 카드로 노출한다 — 원인 파악이 최소한 가능해야 하므로. 관리자에게만
+        # 의미 있는 정보라 admin이 아니면 카드를 만들지 않는다.
+        if is_admin:
+            for host, err_msg in gitea_topic_errors.items():
+                discovered_items.append({
+                    "id": "gitea-search-error:" + host,
+                    "owner": "",
+                    "title": "%s 토픽 검색 실패" % host,
+                    "type": "other",
+                    "type_label": TYPE_LABELS["other"],
+                    "desc": "이 Gitea 서버에서 토픽 검색이 실패했습니다: %s" % err_msg,
+                    "tags": [], "features": [], "version_label": "—",
+                    "url": "https://%s" % host,
+                    "error": True,
+                    "installed": False, "installed_version": None, "has_update": False,
+                    "has_config": False, "enabled": None,
+                    "discovered": True, "gitea": True,
+                })
 
         if len(discovered_items) > _MAX_DISCOVERED_ITEMS:
             discovered_items = discovered_items[:_MAX_DISCOVERED_ITEMS]
