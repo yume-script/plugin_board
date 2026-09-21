@@ -2846,10 +2846,10 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             except Exception:
                 return True
 
-        # plugin_board 자기 자신 조회, GitHub Topics 검색, 그리고 GITEA_TOKENS에
-        # 등록된 각 Gitea 서버의 토픽 검색까지 — 전부 서로 무관한 네트워크
-        # 요청이라 한꺼번에 동시에 실행한다. 순차로 하면 서버 개수만큼 지연이
-        # 그대로 쌓인다(토픽 검색과 같은 이유로 이미 겪었던 문제).
+        # plugin_board 자기 자신 조회, GitHub Topics 검색, 그리고 Gitea 서버들의
+        # 토픽 검색까지 — 전부 서로 무관한 네트워크 요청이라 한꺼번에 동시에
+        # 실행한다. 순차로 하면 서버 개수만큼 지연이 그대로 쌓인다(토픽 검색과
+        # 같은 이유로 이미 겪었던 문제).
         extra_topics_raw = str(cfg.get("EXTRA_DISCOVERY_TOPICS") or "").strip()
         extra_topics = [t.strip() for t in extra_topics_raw.split(",") if t.strip()]
         catalog_topic = str(cfg.get("CATALOG_TOPIC") or "").strip()
@@ -2857,19 +2857,30 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         # (bookoasis-plugin)이 없이 카탈로그 토픽만 달아둔 저장소도 발견된다.
         all_topics = list(dict.fromkeys(DISCOVERY_TOPICS + extra_topics + ([catalog_topic] if catalog_topic else [])))
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2 + len(gitea_tokens)) as executor:
+        # Gitea 토픽 검색 대상 서버 = GITEA_TOKENS에 등록된 서버 + 이미 Git
+        # URL로 설치/등록해둔 저장소(github.txt)의 호스트. 후자는 GITEA_TOKENS에
+        # 토큰을 따로 등록해두지 않은 공개 저장소 서버라도, "이미 한 번 써본
+        # (신뢰한) 서버"이므로 그 서버의 다른 플러그인도 자동으로 찾아볼 수
+        # 있게 한다 — 매번 새 서버마다 토큰을 등록해야만 발견이 되는 건 아니다.
+        # 인증 정보는 GITEA_TOKENS 항목이 있으면 그걸 쓰고, 없으면 등록된 URL
+        # 자체에 담긴 자격증명(있다면)을, 그마저 없으면 인증 없이 시도한다.
+        registry_entries_all = _load_github_registry_entries()
+        gitea_hosts_to_search = {
+            host: _gitea_cfg_from_tokens_entry(entry) for host, entry in gitea_tokens.items()
+        }
+        for _pid, _url in registry_entries_all:
+            h, _o, _r = _parse_repo_url(_url)
+            if h and not _is_github_host(h) and h.lower() not in gitea_hosts_to_search:
+                gitea_hosts_to_search[h.lower()] = _effective_gitea_cfg(_url, gitea_tokens)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2 + len(gitea_hosts_to_search)) as executor:
             self_future = executor.submit(
                 _fetch_repo_entry, SELF_REPO_URL, token, is_enabled_fn, gitea_tokens=gitea_tokens
             )
             topics_future = executor.submit(_fetch_repos_by_topic, all_topics, token)
-            # GITEA_TOKENS에 등록된 서버만 대상으로 한다 — Gitea는 GitHub처럼
-            # "전 세계 어디든" 검색할 단일 대상이 없으므로, 이미 신뢰 표시를
-            # 해둔(토큰/자격증명을 등록한) 서버로 범위를 한정한다.
             gitea_topic_futures = {
-                host: executor.submit(
-                    _fetch_gitea_repos_by_topic, host, _gitea_cfg_from_tokens_entry(entry), "https", all_topics
-                )
-                for host, entry in gitea_tokens.items()
+                host: executor.submit(_fetch_gitea_repos_by_topic, host, gcfg, "https", all_topics)
+                for host, gcfg in gitea_hosts_to_search.items()
             }
             # plugin_board 자기 자신은 GitHub Topics 검색 결과와 무관하게 항상
             # 별도로 조회해 카드 목록 맨 앞에 고정한다("미검수" 표시 없이, 개발
@@ -2931,7 +2942,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         for host, repo_list in gitea_topic_repos.items():
             if not repo_list:
                 continue
-            gitea_cfg_h = _gitea_cfg_from_tokens_entry(gitea_tokens.get(host))
+            gitea_cfg_h = gitea_hosts_to_search.get(host) or _gitea_cfg_from_tokens_entry(gitea_tokens.get(host))
             version_specs_g = []
             for repo_json in repo_list:
                 owner_login = ((repo_json.get("owner") or {}).get("login")) or ""
@@ -2987,7 +2998,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         excluded_for_registry = curated_ids | discovered_ids
         registry_entries = []
         seen_registry_keys = set()
-        for plugin_id_key, url in _load_github_registry_entries():
+        for plugin_id_key, url in registry_entries_all:
             if not plugin_id_key or plugin_id_key in excluded_for_registry or plugin_id_key in seen_registry_keys:
                 continue
             seen_registry_keys.add(plugin_id_key)
