@@ -1230,21 +1230,25 @@
     items.forEach((item) => gridEl.appendChild(buildCard(item)));
   }
 
-  // 실제 데이터에 존재하는 type만으로 필터 버튼과 집계를 동적으로 구성한다.
-  function buildFiltersAndTally() {
+  // 제작자(activeOwner) 선택에 따라 달라지는 숫자들 — 상단 집계 박스, 그리고
+  // "미설치 (N)"/"카탈로그 (N)" 버튼 라벨 — 만 다시 계산해 갱신한다. 필터
+  // 버튼 자체(활성 상태·클릭 핸들러)는 그대로 두고 텍스트만 바꾼다. 제작자
+  // 드롭다운 자체의 항목별 개수(예: "javara999 (7)")는 전체 데이터 기준
+  // 절대값이라 여기서 건드리지 않는다(별도로 buildFiltersAndTally에서 계산).
+  function refreshOwnerScopedCounts() {
+    const baseItems =
+      activeOwner === "all" ? allItems : allItems.filter((it) => (it.owner || "") === activeOwner);
+
     const counts = {};
-    allItems.forEach((it) => {
+    baseItems.forEach((it) => {
       const t = it.type || "other";
       counts[t] = (counts[t] || 0) + 1;
     });
-    const types = Object.keys(counts).sort();
-    const installedCount = allItems.filter((it) => it.installed).length;
-    const uninstalledCount = allItems.length - installedCount;
-    // "미검수" 집계는 설치 전(=아직 검토가 필요한) 발견 카드만 센다. 이미 설치되어
-    // 사용 중인 발견 카드는 카드 태그도 "설치됨"으로 바뀌므로 여기서도 제외한다.
-    const uninstalledDiscoveredCount = allItems.filter((it) => it.discovered && !it.installed).length;
+    const installedCount = baseItems.filter((it) => it.installed).length;
+    const uninstalledCount = baseItems.length - installedCount;
+    const uninstalledDiscoveredCount = baseItems.filter((it) => it.discovered && !it.installed).length;
+    const catalogCount = baseItems.filter((it) => it.in_catalog).length;
 
-    // 집계
     tallyEl.innerHTML = "";
     const addTally = (value, label) => {
       const block = document.createElement("div");
@@ -1255,17 +1259,37 @@
       block.append(strong, span);
       tallyEl.appendChild(block);
     };
-    addTally(allItems.length, "등록 플러그인");
+    addTally(baseItems.length, "등록 플러그인");
     addTally(installedCount, "이 서버에 설치됨");
     if (uninstalledDiscoveredCount > 0) {
       addTally(uninstalledDiscoveredCount, "토픽 발견(미검수)");
     }
-    types.forEach((t) => {
+    Object.keys(counts).sort().forEach((t) => {
       const item = allItems.find((it) => it.type === t);
       addTally(counts[t], (item && item.type_label) || t);
     });
 
-    // 필터 버튼
+    const uninstalledBtn = filtersEl.querySelector('[data-filter="uninstalled"]');
+    if (uninstalledBtn) uninstalledBtn.textContent = `미설치 (${uninstalledCount})`;
+
+    if (catalogTopic) {
+      const catalogBtn = filtersEl.querySelector('[data-filter="catalog"]');
+      if (catalogBtn) catalogBtn.textContent = `카탈로그 (${catalogCount})`;
+    }
+  }
+
+  // 실제 데이터에 존재하는 type만으로 필터 버튼과 집계를 동적으로 구성한다.
+  function buildFiltersAndTally() {
+    const counts = {};
+    allItems.forEach((it) => {
+      const t = it.type || "other";
+      counts[t] = (counts[t] || 0) + 1;
+    });
+    const types = Object.keys(counts).sort();
+
+    // 필터 버튼 — 숫자가 들어가는 "카탈로그"/"미설치" 라벨은 임시로 만들어두고,
+    // 아래 refreshOwnerScopedCounts()가 마지막에 실제 값으로 채운다(제작자
+    // 필터에 따라 값이 달라지므로 한 곳에서만 계산한다).
     filtersEl.innerHTML = "";
     const makeBtn = (filter, label, active) => {
       const btn = document.createElement("button");
@@ -1287,15 +1311,14 @@
     filtersEl.appendChild(makeBtn("all", "전체", true));
     if (catalogTopic) {
       // 카탈로그 토픽이 설정돼 있을 때만 탭을 노출한다 — 설정 안 하면 탭 자체가 없다.
-      const catalogCount = allItems.filter((it) => it.in_catalog).length;
-      filtersEl.appendChild(makeBtn("catalog", `카탈로그 (${catalogCount})`, false));
+      filtersEl.appendChild(makeBtn("catalog", "카탈로그", false));
     }
     types.forEach((t) => {
       const item = allItems.find((it) => it.type === t);
       filtersEl.appendChild(makeBtn(t, (item && item.type_label) || t, false));
     });
     // "설치 여부"는 type과 별개 축이라 마지막에 별도 필터로 추가한다.
-    filtersEl.appendChild(makeBtn("uninstalled", `미설치 (${uninstalledCount})`, false));
+    filtersEl.appendChild(makeBtn("uninstalled", "미설치", false));
 
     // 제작자별 필터 — owner 값 종류가 많아질 수 있어 버튼 나열 대신 드롭다운으로
     // 구성한다. activeFilter(분류/설치여부)와는 별개 축이라 AND로 함께 적용된다.
@@ -1335,6 +1358,7 @@
 
       select.addEventListener("change", () => {
         activeOwner = select.value;
+        refreshOwnerScopedCounts();
         render();
       });
 
@@ -1342,6 +1366,10 @@
     } else {
       activeOwner = "all";
     }
+
+    // 위에서 activeOwner가 최종 확정된 뒤(제작자 목록에 없어져 "전체"로
+    // 되돌아간 경우 포함) 집계/버튼 숫자를 채운다.
+    refreshOwnerScopedCounts();
   }
 
   // 헤더 제목("플러그인게시판") 옆에 plugin_board 자기 자신의 현재 설치된
