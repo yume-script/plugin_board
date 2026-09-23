@@ -65,6 +65,12 @@ _install_or_update_gitea)는 원래 "저장소 이름과 같은 .py 파일이 �
   올리고, 결과 순서를 설정 순서(카탈로그 → 추가 발견 → 기본 토픽)로 고정했다.
 - GitHub Search API를 per_page=100, 토픽당 최대 3페이지까지 조회(50개 넘는 토픽 대비).
 - 응답에 실제로 검색한 토픽 목록(searched_topics)을 실어 화면에 표시한다.
+[PATCH-9] Gitea 서버에도 같은 기준 적용:
+- 토픽 검색·소유자 스캔을 X-Total-Count 헤더 기준으로 끝까지 페이지 조회(Gitea는 서버 설정
+  MAX_RESPONSE_ITEMS 때문에 limit을 크게 줘도 보통 50개씩만 돌려준다).
+- 토픽 결과를 설정 순서(카탈로그 → 추가 발견 → 기본)대로 병합하고, 서버당 상한을 200개로 올림.
+- 같은 이름의 저장소가 GitHub와 Gitea에 모두 있을 때, 이 서버가 Gitea 쪽에서 설치했으면
+  Gitea 카드를 남긴다(예전에는 GitHub 카드가 먼저 자리를 차지해 Gitea 카드가 조용히 버려졌다).
 
 가이드 문서(플러그인 개발 가이드 §3, §6)의 계약을 따른다:
 - 필수: search(), apply()
@@ -135,8 +141,8 @@ _MAX_DISCOVERED_ITEMS = 200
 _GITHUB_SEARCH_PAGES = 3  # 토픽당 최대 3페이지(100개씩)
 # [PATCH-7] Gitea 서버는 VERSION 파일이 있는 저장소만 카드가 되므로(소유자 스캔 포함) 노이즈가
 # 적다. GitHub 토픽 상한(30)에 섞여 잘리지 않도록 서버별로 따로 센다.
-_MAX_GITEA_ITEMS_PER_HOST = 100
-_GITEA_OWNER_SCAN_PAGES = 5  # 소유자당 최대 5페이지(50개씩) = 250개
+_MAX_GITEA_ITEMS_PER_HOST = 200
+_GITEA_SEARCH_MAX_PAGES = 6  # 검색 1건당 최대 6페이지(서버 설정상 보통 50개씩) = 300개
 
 _TOPIC_CACHE = {}  # {"topic1,topic2": (timestamp, [repo_json, ...])}
 _TOPIC_CACHE_TTL_SECONDS = 3600  # 1시간마다 검색 결과를 다시 조회
@@ -711,6 +717,33 @@ def _gitea_get_text(host, path, gitea_cfg, scheme="https"):
     req = urllib.request.Request("%s://%s%s" % (scheme, host, path), headers=_gitea_headers(gitea_cfg))
     with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT) as resp:
         return resp.read().decode("utf-8")
+
+
+def _gitea_search_paged(host, path, gitea_cfg, scheme="https", max_pages=None):
+    """[PATCH-9] Gitea 저장소 검색(/api/v1/repos/search)을 끝까지 페이지 조회한다.
+    Gitea는 limit을 크게 줘도 서버 설정(MAX_RESPONSE_ITEMS, 기본 50)만큼만 돌려주므로,
+    응답 헤더 X-Total-Count(전체 개수)를 기준으로 다 모을 때까지 page를 넘긴다.
+    헤더가 없는 구버전 서버는 빈 페이지가 나올 때까지 넘긴다."""
+    max_pages = max_pages or _GITEA_SEARCH_MAX_PAGES
+    sep = "&" if "?" in path else "?"
+    items = []
+    total = None
+    for page in range(1, max_pages + 1):
+        req = urllib.request.Request(
+            "%s://%s%s%slimit=50&page=%d" % (scheme, host, path, sep, page), headers=_gitea_headers(gitea_cfg)
+        )
+        with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT) as resp:
+            if total is None:
+                try:
+                    total = int(resp.headers.get("X-Total-Count") or "")
+                except ValueError:
+                    total = None
+            data = json.loads(resp.read().decode("utf-8"))
+        batch = (data or {}).get("data") or []
+        items.extend(batch)
+        if not batch or (total is not None and len(items) >= total):
+            break
+    return items
 
 
 def _gitea_download_zip(host, path, dest_path, gitea_cfg, scheme="https"):
@@ -1518,27 +1551,29 @@ def _fetch_gitea_repos_by_topic(host, gitea_cfg, scheme, topics):
 
     def _fetch_one(topic):
         query = urllib.parse.quote(topic, safe="")
-        path = "/api/v1/repos/search?q=%s&topic=true&limit=50" % query
-        data = _gitea_get_json(host, path, gitea_cfg, scheme)
-        return data.get("data") or []
+        return _gitea_search_paged(host, "/api/v1/repos/search?q=%s&topic=true" % query, gitea_cfg, scheme)
 
-    seen = {}
+    per_topic = {}
     errors = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(topics))) as executor:
         future_map = {executor.submit(_fetch_one, topic): topic for topic in topics}
         for future in concurrent.futures.as_completed(future_map):
             topic = future_map[future]
             try:
-                items = future.result()
+                per_topic[topic] = future.result()
             except Exception as exc:
                 errors.append("%s: %s" % (topic, exc))
                 continue  # 토픽 하나만 실패했다면 나머지 토픽 결과는 계속 반영한다
-            for repo_json in items:
-                full_name = repo_json.get("full_name") or (
-                    "%s/%s" % ((repo_json.get("owner") or {}).get("login", ""), repo_json.get("name", ""))
-                )
-                if full_name and full_name not in seen:
-                    seen[full_name] = repo_json
+
+    # [PATCH-9] 도착 순서가 아니라 설정 순서대로 병합(GitHub 쪽과 같은 규칙)
+    seen = {}
+    for topic in topics:
+        for repo_json in per_topic.get(topic) or []:
+            full_name = repo_json.get("full_name") or (
+                "%s/%s" % ((repo_json.get("owner") or {}).get("login", ""), repo_json.get("name", ""))
+            )
+            if full_name and full_name not in seen:
+                seen[full_name] = repo_json
 
     results = list(seen.values())
     if not results and errors and len(errors) == len(topics):
@@ -1575,14 +1610,7 @@ def _gitea_list_owner_repos_uncached(host, owner, gitea_cfg, scheme):
     uid = _gitea_owner_id(host, owner, gitea_cfg, scheme)
     if uid is None:
         raise RuntimeError("소유자 '%s'를 찾을 수 없습니다" % owner)
-    repos = []
-    for page in range(1, _GITEA_OWNER_SCAN_PAGES + 1):
-        path = "/api/v1/repos/search?uid=%s&exclusive=true&limit=50&page=%d" % (uid, page)
-        data = (_gitea_get_json(host, path, gitea_cfg, scheme) or {}).get("data") or []
-        repos.extend(data)
-        if len(data) < 50:
-            break
-    return repos
+    return _gitea_search_paged(host, "/api/v1/repos/search?uid=%s&exclusive=true" % uid, gitea_cfg, scheme)
 
 
 def _fetch_gitea_repos_by_owner(host, gitea_cfg, scheme, owners):
@@ -2879,7 +2907,7 @@ def _test_gitea_server(params, configured_tokens, topics):
     password = str(params.get("password") or "").strip() or saved.get("password")
 
     checks = []
-    report = {"host": host, "scheme": scheme, "checks": checks, "repos": []}
+    report = {"host": host, "scheme": scheme, "checks": checks, "repos": [], "topics": list(topics)}
     if not host:
         checks.append({"label": "서버 주소", "status": "fail", "detail": "주소를 입력해주세요."})
         return report
@@ -2945,8 +2973,8 @@ def _test_gitea_server(params, configured_tokens, topics):
     def search(cfg):
         found = {}
         for topic in topics:
-            path = "/api/v1/repos/search?q=%s&topic=true&limit=50" % urllib.parse.quote(topic, safe="")
-            for repo_json in (_gitea_get_json(host, path, cfg, scheme) or {}).get("data") or []:
+            path = "/api/v1/repos/search?q=%s&topic=true" % urllib.parse.quote(topic, safe="")
+            for repo_json in _gitea_search_paged(host, path, cfg, scheme):
                 name = repo_json.get("full_name") or repo_json.get("name")
                 if name:
                     found[name] = bool(repo_json.get("private"))
@@ -4224,7 +4252,16 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             version_infos = _fetch_versions_parallel(version_specs, token)
 
             seen_discovered_ids = set()
+            # [PATCH-9] 이 서버가 Gitea 쪽에서 설치한 플러그인은 같은 이름의 GitHub 저장소가
+            # 발견돼도 GitHub 카드로 대신하지 않는다(아래 Gitea 처리에서 카드가 만들어진다).
+            gitea_tracked = set()
+            for _pid, _url in registry_entries_all:
+                _h, _o, _r = _parse_repo_url(_url)
+                if _h and not _is_github_host(_h):
+                    gitea_tracked.update(v.lower() for v in _name_variants(_pid) + _name_variants(_r))
             for repo_json in topic_repos:
+                if str(repo_json.get("name") or "").lower() in gitea_tracked:
+                    continue
                 owner_login = ((repo_json.get("owner") or {}).get("login")) or ""
                 repo_name = repo_json.get("name") or ""
                 vinfo = version_infos.get((owner_login, repo_name))
@@ -4286,7 +4323,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 if not item["installed"] and item["version_label"] == "—":
                     continue
                 if host_item_count >= _MAX_GITEA_ITEMS_PER_HOST:
-                    break
+                    break  # 안전장치 상한 — VERSION 필터를 통과한 저장소만 센다
                 host_item_count += 1
                 seen_discovered_ids.add(item["id"])
                 discovered_items.append(item)

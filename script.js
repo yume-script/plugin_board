@@ -500,6 +500,12 @@
       row.append(mark, label, detail);
       targetEl.appendChild(row);
     });
+    if (Array.isArray(data.topics) && data.topics.length) {
+      const topicsEl = document.createElement("div");
+      topicsEl.className = "pb-gitea-test-repos";
+      topicsEl.textContent = "검색 토픽: " + data.topics.join(", ");
+      targetEl.appendChild(topicsEl);
+    }
     const repos = data.repos || [];
     if (repos.length) {
       const list = document.createElement("div");
