@@ -1274,3 +1274,9 @@
     transition: none;
   }
 }
+
+/* [PATCH-4] hidden 속성이 버튼/패널의 display 지정에 덮이지 않도록 보장한다
+   (관리자 전용 버튼을 fail-closed로 숨긴 채 시작하므로 필요). */
+.pb-root [hidden] {
+  display: none !important;
+}

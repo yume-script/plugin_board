@@ -25,10 +25,25 @@ _install_or_update_gitea)는 원래 "저장소 이름과 같은 .py 파일이 �
 패널로 직접 입력된 저장소는 운영자가 사전 검수한 목록이 아니므로, 이 버전부터는 두
 설치 경로 모두 동일한 정적 검증을 통과해야만 폴더를 교체한다.
 (참고: https://github.com/madnite1/plugin_manager)
+[PATCH-4] 플러그인 개발 가이드(1.1.1+) 기준 정비:
+- 관리자 판별을 fail-closed로 변경(세션 role을 확인할 수 없으면 비관리자로 간주).
+- 카드 버튼 액션을 문서화된 범용 RPC 경로(run_context_menu_action,
+  /api/media/context-menu/book/plugins/action)로 이전. apply()는 하위 호환용으로만 유지.
+- 설치 폴더명과 클래스 id를 분리해서 다룬다. 신규 설치 폴더는 클래스 id 기준으로
+  만들고, 활성화 키(PLUGIN_ENABLED_{id})·설정 키·로드 검증은 항상 클래스 id로 조회한다.
+- 설치 시점 id 충돌 감지(가이드 §1) — 다른 폴더가 같은 클래스 id를 쓰거나, 같은
+  폴더를 다른 저장소가 점유하고 있으면 설치를 거부한다.
+- 폴더 교체를 스테이징 → 백업 → 교체 → 로드 검증 → (실패 시) 백업 복원 흐름으로 통일.
+- 정적 검증을 가이드 §2-5(프로세스 실행 차단: subprocess, os.system/popen/exec*/spawn*,
+  ALLOW_PLUGIN_SUBPROCESS 예외)에 맞추고, 가이드상 필수가 아닌 항목은 경고로 낮춤.
+- 분류를 dashboard_widget(플러그인 데스크)/home_widget(홈 화면)/상세 확장 계약으로 구분.
+- 캐시를 코어 제공 플러그인 캐시(self.cache_get/cache_set, Redis)로 워커 간 공유하고,
+  디스크 캐시는 plugins/data/plugin_board/ 아래로 옮겨 자기 업데이트에도 유지.
 
-가이드 문서(플러그인 개발 가이드 §3, §5)의 계약을 따른다:
+가이드 문서(플러그인 개발 가이드 §3, §6)의 계약을 따른다:
 - 필수: search(), apply()
-- 선택: category_tab, get_dashboard_data(), update_manifest
+- 선택: category_tab, get_dashboard_data(), update_manifest,
+        get_context_menu_items()/run_context_menu_action() (범용 RPC 용도)
 """
 
 import ast
@@ -52,18 +67,16 @@ from plugins.metadata.base import BaseMetadataProvider
 def _is_admin_session():
     """현재 요청의 Flask 세션이 관리자(role == 'admin')인지 확인한다
     (api/auth.py의 admin_required 데코레이터와 동일한 판별 기준).
-    플러그인 메서드도 같은 Flask 요청 컨텍스트 안에서 실행되므로 session을
-    직접 읽을 수 있다. 세션을 못 읽는 예외적인 상황(요청 컨텍스트 밖에서 호출
-    되는 등)에는 기존 동작을 깨지 않도록 안전하게 True(관리자로 간주)로
-    폴백한다 — role 기반 세션이 없는 구버전 코어에서도 버튼이 계속 보이도록."""
+
+    [PATCH-4] fail-closed — role을 확인할 수 없거나(세션에 role이 없음, 요청
+    컨텍스트 밖, 예외 발생) 값이 admin이 아니면 항상 False다. 이 플러그인의
+    액션은 임의 코드 설치와 같은 위험한 동작이라, 판단이 불확실할 때 관리자로
+    간주하면 안 된다(가이드의 admin_only·ADD_PLUGIN 게이트와 같은 방향)."""
     try:
         from flask import session
-        role = session.get("role")
-        if role is None:
-            return True  # role 정보 자체가 없는 환경(구버전 등) — 기존처럼 표시
-        return role == "admin"
+        return session.get("role") == "admin"
     except Exception:
-        return True
+        return False
 
 
 # plugin_board 자기 자신도 GitHub Topics 검색으로 발견될 수 있지만("미검수" 표시가
@@ -104,10 +117,14 @@ TYPE_OVERRIDES = {
     "yume-script/plugin_board": "tab",
 }
 
+# [PATCH-4] 가이드 §5/§5-1: dashboard_widget은 [플러그인] 공통 데스크용이고, 실제
+# 홈 화면 위젯은 home_widget이다. 둘을 같은 "홈화면 위젯"으로 묶지 않는다.
 TYPE_LABELS = {
     "search": "검색형 메타데이터",
     "tab": "카테고리 탭 UI",
-    "widget": "홈화면 위젯",
+    "home": "홈 화면 위젯",
+    "desk": "플러그인 데스크 위젯",
+    "detail": "도서 상세 확장",
     "other": "기타",
 }
 
@@ -127,20 +144,79 @@ _DOWNLOAD_TIMEOUT = 30
 # TTL이 남아있는 동안은 다시 조회하지 않도록 한다. 저장/로드가 실패해도
 # 기능에는 영향이 없도록 전부 조용히 무시한다(순수 성능 최적화용 캐시일 뿐).
 # ----------------------------------------------------------------------
-_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache.json")
+# [PATCH-4] 캐시 파일을 플러그인 폴더(plugins/metadata/plugin_board/) 밖의
+# plugins/data/plugin_board/cache.json으로 옮겼다. 플러그인 폴더는 자기 업데이트 때
+# 통째로 교체되므로, 그 안에 두면 업데이트할 때마다 캐시가 날아갔다.
+_PLUGIN_SELF_DIR = os.path.dirname(os.path.abspath(__file__))
+_PLUGIN_DATA_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(_PLUGIN_SELF_DIR))), "data", "plugin_board"
+)
+_CACHE_FILE = os.path.join(_PLUGIN_DATA_DIR, "cache.json")
+_LEGACY_CACHE_FILE = os.path.join(_PLUGIN_SELF_DIR, ".cache.json")
+
+# 코어 제공 플러그인 캐시(Redis)에 저장할 키. gunicorn 워커가 여러 개면 모듈 전역
+# dict는 워커마다 따로 놀기 때문에, 이 공유 캐시로 워커 간 결과를 맞춘다.
+# Redis가 없는 배포에서는 코어가 자동으로 캐시 미스로 동작하므로 디스크 캐시만 쓰인다.
+_SHARED_CACHE_KEY = "state_v1"
+_SHARED_CACHE_TTL = 86400
+
+
+def _cache_snapshot():
+    return {
+        "desc": {k: [ts, v] for k, (ts, v) in _DESC_CACHE.items()},
+        "version": {k: [ts, v] for k, (ts, v) in _VERSION_CACHE.items()},
+        "topic": {k: [ts, v] for k, (ts, v) in _TOPIC_CACHE.items()},
+    }
+
+
+def _merge_cache_snapshot(data):
+    """스냅샷을 메모리 캐시에 병합한다. 같은 키면 타임스탬프가 더 최근인 쪽을 유지한다."""
+    if not isinstance(data, dict):
+        return
+    for section, target in (("desc", _DESC_CACHE), ("version", _VERSION_CACHE), ("topic", _TOPIC_CACHE)):
+        for k, pair in (data.get(section) or {}).items():
+            if not (isinstance(pair, list) and len(pair) == 2):
+                continue
+            try:
+                ts = float(pair[0])
+            except (TypeError, ValueError):
+                continue
+            current = target.get(k)
+            if current is None or current[0] < ts:
+                target[k] = (ts, pair[1])
 
 
 def _save_disk_cache():
     try:
-        data = {
-            "desc": {k: [ts, v] for k, (ts, v) in _DESC_CACHE.items()},
-            "version": {k: [ts, v] for k, (ts, v) in _VERSION_CACHE.items()},
-            "topic": {k: [ts, v] for k, (ts, v) in _TOPIC_CACHE.items()},
-        }
-        tmp_path = _CACHE_FILE + ".tmp"
+        os.makedirs(_PLUGIN_DATA_DIR, exist_ok=True)
+        # 워커마다 다른 임시 파일명을 써서 동시 저장 시 서로의 임시 파일을 덮지 않게 한다
+        tmp_path = "%s.%d.tmp" % (_CACHE_FILE, os.getpid())
         with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f)
+            json.dump(_cache_snapshot(), f)
         os.replace(tmp_path, _CACHE_FILE)
+    except Exception:
+        pass
+
+
+def _load_shared_cache(provider):
+    try:
+        raw = provider.cache_get(_SHARED_CACHE_KEY)
+        if raw:
+            _merge_cache_snapshot(json.loads(raw))
+    except Exception:
+        pass
+
+
+def _save_shared_cache(provider):
+    try:
+        provider.cache_set(_SHARED_CACHE_KEY, json.dumps(_cache_snapshot()), ttl=_SHARED_CACHE_TTL)
+    except Exception:
+        pass
+
+
+def _clear_shared_cache(provider):
+    try:
+        provider.cache_delete(_SHARED_CACHE_KEY)
     except Exception:
         pass
 
@@ -156,38 +232,40 @@ def _reset_disk_cache():
     _VERSION_CACHE.clear()
     _DESC_CACHE.clear()
     try:
-        if os.path.isfile(_CACHE_FILE):
-            os.remove(_CACHE_FILE)
+        for path in (_CACHE_FILE, _LEGACY_CACHE_FILE):
+            if os.path.isfile(path):
+                os.remove(path)
     except Exception as exc:
         return False, "캐시 파일 삭제에 실패했습니다: %s" % exc
-    return True, "캐시 파일(.cache.json)을 삭제하고 캐시를 초기화했습니다. 목록을 새로 불러옵니다."
+    return True, "캐시 파일(cache.json)과 공유 캐시를 삭제하고 초기화했습니다. 목록을 새로 불러옵니다."
 
 
 def _load_disk_cache():
-    try:
-        if not os.path.isfile(_CACHE_FILE):
+    # 새 위치를 우선 읽고, 없으면 구버전 위치(.cache.json)에서 한 번 이관한다
+    for path in (_CACHE_FILE, _LEGACY_CACHE_FILE):
+        try:
+            if not os.path.isfile(path):
+                continue
+            with open(path, "r", encoding="utf-8") as f:
+                _merge_cache_snapshot(json.load(f))
             return
-        with open(_CACHE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        for k, pair in (data.get("desc") or {}).items():
-            if isinstance(pair, list) and len(pair) == 2:
-                _DESC_CACHE[k] = (float(pair[0]), pair[1])
-
-        for k, pair in (data.get("version") or {}).items():
-            if isinstance(pair, list) and len(pair) == 2:
-                _VERSION_CACHE[k] = (float(pair[0]), pair[1])
-
-        for k, pair in (data.get("topic") or {}).items():
-            if isinstance(pair, list) and len(pair) == 2:
-                _TOPIC_CACHE[k] = (float(pair[0]), pair[1])
-    except Exception:
-        pass  # 손상된 캐시 파일은 조용히 무시하고 콜드 스타트로 진행
+        except Exception:
+            continue  # 손상된 캐시 파일은 조용히 무시하고 콜드 스타트로 진행
 
 
 _load_disk_cache()  # 모듈이 처음 임포트될 때(서버 시작 시) 1회 복원
 
+# 설치 폴더명(파일시스템 경로)으로 허용하는 형식. 폴더 조작은 전부 이 규칙을 거친다.
 _PLUGIN_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+# 클래스 id로 허용하는 형식 — 가이드 §1의 `<네임스페이스>.<이름>`(예: leeyj.spotify_mood)
+# 표기를 위해 점(.)을 추가로 허용한다. 폴더명과 달리 경로로 쓰이지 않으며, 설정 키
+# (PLUGIN_ENABLED_{id}/PLUGIN_CONFIG_{id}) 조회에만 쓰인다.
+_CLASS_ID_RE = re.compile(r"^[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9_-])?$")
+
+
+def _is_valid_class_id(value):
+    value = str(value or "").strip()
+    return bool(_CLASS_ID_RE.match(value)) and ".." not in value
 _VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
 
 # plugins/metadata 아래에 있어도 실제 플러그인이 아닌 폴더는 카드로 만들지 않는다.
@@ -634,6 +712,11 @@ def _save_github_registry_entries(entries):
         lines = ["%s\t%s" % (pid, url) for pid, url in entries]
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + ("\n" if lines else ""))
+        try:
+            # URL에 자격증명이 담길 수 있으므로 소유자만 읽을 수 있게 제한한다
+            os.chmod(path, 0o600)
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -789,29 +872,61 @@ def _find_module_file(plugin_dir, plugin_id):
     return None
 
 
+def _find_provider_module(plugin_dir):
+    """폴더명과 같은 이름의 모듈 파일이 없을 때(예: 폴더 spotify-mood, 파일
+    leeyj_spotify_mood.py) BaseMetadataProvider를 상속한 클래스가 있는 .py를 찾는다."""
+    try:
+        fnames = sorted(os.listdir(plugin_dir))
+    except Exception:
+        return None
+    for fname in fnames:
+        if not fname.endswith(".py") or fname in ("__init__.py", "base.py"):
+            continue
+        fpath = os.path.join(plugin_dir, fname)
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                src = f.read()
+        except Exception:
+            continue
+        if "BaseMetadataProvider" in src and re.search(r"^class\s", src, re.M):
+            return fpath
+    return None
+
+
 def _read_local_class_attrs(plugin_id):
     """설치된 플러그인의 메인 .py에서 name/id/is_searchable/category_tab 등
     주요 클래스 속성을 AST로만(코드 실행 없이) 읽어온다. GitHub Topics
     검색으로 아직 발견되지 않았거나 검색 결과가 부실한 플러그인의 표시
     이름·분류를 최대한 정확히 추정하는 데 사용한다.
 
-    "홈화면 위젯"(BookOasis 코어의 /api/media/dashboard/widgets/<id>/data)은
-    category_tab/is_searchable와 달리 별도의 선언용 클래스 속성이 없다 —
-    get_dashboard_data(self, db_type, limit=10) 메서드를 구현했는지만으로
-    판단되는 구조라서, 클래스 바디에서 그 이름의 메서드 정의(FunctionDef/
-    AsyncFunctionDef)가 있는지도 함께 검사해 has_dashboard_data_method로
-    담아둔다(plugin_board 자신도 이 메서드가 있지만, category_tab이 먼저
-    체크되므로 "탭" 분류가 우선한다 — 분류 우선순위는 호출부 참고)."""
-    path = _find_module_file(os.path.join(_plugins_metadata_dir(), plugin_id), plugin_id)
+    [PATCH-4] 가이드 1.0.8~1.1.1의 선언형 계약(home_widget, detail_sidebar_widget,
+    smart_recommend_widget, detail_view, admin_only)도 함께 읽는다. 위젯 여부는
+    이제 이 선언들로만 판단한다 — get_dashboard_data()는 plugin_board처럼 데이터
+    엔드포인트로만 쓰는 플러그인도 구현하므로 위젯 여부의 신호가 아니다.
+    파일 mtime 기준으로 결과를 캐시해 카드마다 반복 파싱하지 않는다.
+    인자는 설치 폴더명이다."""
+    plugin_dir = os.path.join(_plugins_metadata_dir(), plugin_id)
+    path = _find_module_file(plugin_dir, plugin_id) or _find_provider_module(plugin_dir)
     if not path:
         return {}
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return {}
+    cached = _LOCAL_ATTRS_CACHE.get(path)
+    if cached and cached[0] == mtime:
+        return dict(cached[1])
     try:
         with open(path, "r", encoding="utf-8") as f:
             tree = ast.parse(f.read(), filename=path)
     except Exception:
         return {}
 
-    wanted = {"name", "id", "is_searchable", "category_tab", "dashboard_widget", "config_schema"}
+    wanted = {
+        "name", "id", "is_searchable", "category_tab", "dashboard_widget", "config_schema",
+        "home_widget", "detail_sidebar_widget", "smart_recommend_widget", "detail_view",
+        "admin_only",
+    }
     attrs = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
@@ -823,11 +938,97 @@ def _read_local_class_attrs(plugin_id):
                                 attrs[target.id] = ast.literal_eval(stmt.value)
                             except Exception:
                                 pass
-                elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name == "get_dashboard_data":
-                    attrs["has_dashboard_data_method"] = True
             if attrs:
                 break  # 관례상 파일당 provider 클래스는 하나
+    _LOCAL_ATTRS_CACHE[path] = (mtime, dict(attrs))
     return attrs
+
+
+_LOCAL_ATTRS_CACHE = {}  # {module_path: (mtime, attrs)}
+
+
+def _classify_attrs(attrs):
+    """클래스 속성(AST로 읽은 값)으로 카드 분류를 정한다. 여러 계약을 동시에
+    선언한 플러그인은 아래 우선순위의 첫 항목으로 분류한다."""
+    if attrs.get("is_searchable"):
+        return "search"
+    if attrs.get("category_tab"):
+        return "tab"
+    if attrs.get("home_widget"):
+        return "home"
+    if attrs.get("dashboard_widget"):
+        return "desk"
+    if any(attrs.get(k) for k in ("detail_view", "detail_sidebar_widget", "smart_recommend_widget")):
+        return "detail"
+    return "other"
+
+
+def _describe_local(folder, default_type="other"):
+    """설치된 폴더에서 카드 표시용 정보를 한 번에 뽑는다. 예전에는 같은 분류 코드가
+    카드 빌더 5곳에 복사돼 있었다."""
+    attrs = _read_local_class_attrs(folder)
+    plugin_type = _classify_attrs(attrs)
+    if plugin_type == "other":
+        plugin_type = default_type
+    return {
+        "type": plugin_type,
+        "tab_order": _extract_tab_order(attrs.get("category_tab")),
+        "has_config": bool(attrs.get("config_schema")) or _has_settings_ui(folder),
+        "title": attrs.get("name") or folder,
+        "class_id": _class_id_for_folder(folder),
+        "admin_only": bool(attrs.get("admin_only")),
+    }
+
+
+def _class_id_for_folder(folder):
+    """설치 폴더의 클래스 id를 반환한다(못 읽으면 폴더명). 코어는 활성화/설정 키를
+    클래스 id로 만들기 때문에, 폴더명과 다를 수 있는 경우를 여기서 흡수한다."""
+    try:
+        cid = _read_local_class_attrs(folder).get("id")
+    except Exception:
+        cid = None
+    if isinstance(cid, str) and _is_valid_class_id(cid):
+        return cid.strip()
+    return folder
+
+
+def _name_variants(name):
+    name = str(name or "").strip()
+    out = []
+    for v in (name, name.replace("-", "_"), name.replace("_", "-")):
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+def _resolve_installed_folder(name):
+    """저장소 이름(또는 클래스 id)으로 실제 설치 폴더를 찾는다. 저장소는 하이픈,
+    폴더/클래스 id는 언더스코어인 경우가 흔해 두 표기를 함께 시도하고, 그래도
+    없으면 클래스 id가 일치하는 폴더를 찾는다. 없으면 None."""
+    for v in _name_variants(name):
+        if _PLUGIN_ID_RE.match(v) and _is_installed(v):
+            return v
+    if _is_valid_class_id(name):
+        return _find_folder_by_class_id(name)
+    return None
+
+
+def _find_folder_by_class_id(class_id, exclude=None):
+    """plugins/metadata 아래에서 클래스 id가 class_id인 폴더를 찾는다(exclude 폴더 제외)."""
+    base_dir = _plugins_metadata_dir()
+    try:
+        entries = sorted(os.listdir(base_dir))
+    except Exception:
+        return None
+    for entry in entries:
+        if entry == exclude or entry.startswith((".", "__")):
+            continue
+        if not _PLUGIN_ID_RE.match(entry) or not os.path.isdir(os.path.join(base_dir, entry)):
+            continue
+        cid = _read_local_class_attrs(entry).get("id")
+        if isinstance(cid, str) and cid.strip() == class_id:
+            return entry
+    return None
 
 
 def _extract_tab_order(category_tab):
@@ -879,18 +1080,7 @@ def _scan_uncurated_installed(curated_ids, is_enabled_fn):
             continue
 
         version = _local_version(entry)
-        attrs = _read_local_class_attrs(entry)
-        title = attrs.get("name") or entry
-
-        if attrs.get("is_searchable"):
-            plugin_type = "search"
-        elif attrs.get("category_tab"):
-            plugin_type = "tab"
-        elif attrs.get("dashboard_widget") or attrs.get("has_dashboard_data_method"):
-            plugin_type = "widget"
-        else:
-            plugin_type = "other"
-        tab_order = _extract_tab_order(attrs.get("category_tab"))
+        local = _describe_local(entry)
 
         # 원격 저장소 정보가 없는(로컬 전용) 플러그인이라 GitHub/Gitea의 마지막
         # 푸시 시각을 알 수 없다. 대신 설치 폴더의 마지막 수정 시각을 "최종
@@ -905,10 +1095,11 @@ def _scan_uncurated_installed(curated_ids, is_enabled_fn):
 
         items.append({
             "id": entry,
+            "class_id": local["class_id"],
             "owner": "",
-            "title": title,
-            "type": plugin_type,
-            "type_label": TYPE_LABELS.get(plugin_type, TYPE_LABELS["other"]),
+            "title": local["title"],
+            "type": local["type"],
+            "type_label": TYPE_LABELS.get(local["type"], TYPE_LABELS["other"]),
             "desc": "",
             "tags": [],
             "features": [],
@@ -918,10 +1109,11 @@ def _scan_uncurated_installed(curated_ids, is_enabled_fn):
             "installed": True,
             "installed_version": version,
             "has_update": False,
-            "has_config": bool(attrs.get("config_schema")) or _has_settings_ui(entry),
+            "has_config": local["has_config"],
             "enabled": is_enabled_fn(entry),
+            "admin_only": local["admin_only"],
             "local_only": True,
-            "tab_order": tab_order,
+            "tab_order": local["tab_order"],
             "pushed_at": local_pushed_at,
         })
 
@@ -1199,29 +1391,31 @@ def _build_gitea_discovered_item(host, repo_json, remote_version, is_enabled_fn,
         return None
 
     key = owner_login + "/" + repo_name
-    installed = _is_installed(repo_name)
-    installed_version = _local_version(repo_name) if installed else None
+    # [PATCH-4] 저장소 이름과 설치 폴더명이 다를 수 있다(하이픈↔언더스코어, 클래스 id
+    # 기준 폴더 등). 실제 설치 폴더를 찾아 그 폴더를 카드 id로 쓴다.
+    folder = _resolve_installed_folder(repo_name)
+    if folder and folder in excluded_ids:
+        return None
+    installed = folder is not None
+    local_id = folder or repo_name
+    installed_version = _local_version(folder) if installed else None
     plugin_type = TYPE_OVERRIDES.get(key, "other")
     has_config = False
     title = repo_name
     tab_order = None
-
+    class_id = repo_name
+    admin_only = False
     if installed:
-        local_attrs = _read_local_class_attrs(repo_name)
-        if local_attrs.get("is_searchable"):
-            plugin_type = "search"
-        elif local_attrs.get("category_tab"):
-            plugin_type = "tab"
-            tab_order = _extract_tab_order(local_attrs.get("category_tab"))
-        elif local_attrs.get("dashboard_widget") or local_attrs.get("has_dashboard_data_method"):
-            plugin_type = "widget"
-        has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(repo_name)
-        title = local_attrs.get("name") or repo_name
+        local = _describe_local(folder, default_type=plugin_type)
+        plugin_type, tab_order, has_config = local["type"], local["tab_order"], local["has_config"]
+        title, class_id, admin_only = local["title"], local["class_id"], local["admin_only"]
 
     version_label = ("v" + remote_version) if remote_version else "—"
 
     return {
-        "id": repo_name,
+        "id": local_id,
+        "class_id": class_id,
+        "admin_only": admin_only,
         "owner": owner_login,
         "title": title,
         "type": plugin_type,
@@ -1238,7 +1432,7 @@ def _build_gitea_discovered_item(host, repo_json, remote_version, is_enabled_fn,
         "installed_version": installed_version,
         "has_update": installed and _remote_is_newer(installed_version, remote_version),
         "has_config": has_config,
-        "enabled": is_enabled_fn(repo_name) if installed else None,
+        "enabled": is_enabled_fn(local_id) if installed else None,
         "discovered": True,
         "tab_order": tab_order,
         "gitea": True,
@@ -1277,30 +1471,32 @@ def _build_discovered_item(repo_json, version_info, is_enabled_fn, excluded_ids)
         return None
 
     key = owner_login + "/" + repo_name
-    installed = _is_installed(repo_name)
-    installed_version = _local_version(repo_name) if installed else None
-
+    # [PATCH-4] 저장소 이름과 설치 폴더명이 다를 수 있다(하이픈↔언더스코어, 클래스 id
+    # 기준 폴더 등). 실제 설치 폴더를 찾아 그 폴더를 카드 id로 쓴다.
+    folder = _resolve_installed_folder(repo_name)
+    if folder and folder in excluded_ids:
+        return None
+    installed = folder is not None
+    local_id = folder or repo_name
+    installed_version = _local_version(folder) if installed else None
     plugin_type = TYPE_OVERRIDES.get(key, "other")
     has_config = False
     title = repo_name
     tab_order = None
+    class_id = repo_name
+    admin_only = False
     if installed:
-        local_attrs = _read_local_class_attrs(repo_name)
-        if local_attrs.get("is_searchable"):
-            plugin_type = "search"
-        elif local_attrs.get("category_tab"):
-            plugin_type = "tab"
-            tab_order = _extract_tab_order(local_attrs.get("category_tab"))
-        elif local_attrs.get("dashboard_widget") or local_attrs.get("has_dashboard_data_method"):
-            plugin_type = "widget"
-        has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(repo_name)
-        title = local_attrs.get("name") or repo_name
+        local = _describe_local(folder, default_type=plugin_type)
+        plugin_type, tab_order, has_config = local["type"], local["tab_order"], local["has_config"]
+        title, class_id, admin_only = local["title"], local["class_id"], local["admin_only"]
 
     remote_version = version_info["remote_version"] if version_info else None
     version_label = version_info["version_label"] if version_info else "—"
 
     return {
-        "id": repo_name,
+        "id": local_id,
+        "class_id": class_id,
+        "admin_only": admin_only,
         "owner": owner_login,
         "title": title,
         "type": plugin_type,
@@ -1317,7 +1513,7 @@ def _build_discovered_item(repo_json, version_info, is_enabled_fn, excluded_ids)
         "installed_version": installed_version,
         "has_update": installed and _remote_is_newer(installed_version, remote_version),
         "has_config": has_config,
-        "enabled": is_enabled_fn(repo_name) if installed else None,
+        "enabled": is_enabled_fn(local_id) if installed else None,
         "discovered": True,
         "tab_order": tab_order,
     }
@@ -1359,24 +1555,20 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None, plugin_id_
     local_id = plugin_id_override or repo
     key = owner + "/" + repo
     plugin_type = TYPE_OVERRIDES.get(key, "other")
+    if not plugin_id_override:
+        local_id = _resolve_installed_folder(repo) or repo
     installed = _is_installed(local_id)
     installed_version = _local_version(local_id) if installed else None
     has_config = False
     title = local_id
     tab_order = None
-
+    class_id = local_id
+    admin_only = False
     if installed:
         # 이미 설치되어 있다면 실제 소스에서 분류·설정 여부·표시 이름을 더 정확히 추정
-        local_attrs = _read_local_class_attrs(local_id)
-        if local_attrs.get("is_searchable"):
-            plugin_type = "search"
-        elif local_attrs.get("category_tab"):
-            plugin_type = "tab"
-            tab_order = _extract_tab_order(local_attrs.get("category_tab"))
-        elif local_attrs.get("dashboard_widget") or local_attrs.get("has_dashboard_data_method"):
-            plugin_type = "widget"
-        has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(local_id)
-        title = local_attrs.get("name") or local_id
+        local = _describe_local(local_id, default_type=plugin_type)
+        plugin_type, tab_order, has_config = local["type"], local["tab_order"], local["has_config"]
+        title, class_id, admin_only = local["title"], local["class_id"], local["admin_only"]
 
     # 병렬로 미리 가져온 원격 정보가 있으면 그걸 쓰고, 없으면(단건 호출 등) URL에
     # 담긴 자격증명을 우선 적용해(없으면 GITHUB_TOKEN 설정으로 폴백) 직접 조회
@@ -1388,6 +1580,8 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None, plugin_id_
 
     item = {
         "id": local_id,
+        "class_id": class_id,
+        "admin_only": admin_only,
         "owner": owner,
         "title": title,
         "type": plugin_type,
@@ -1418,23 +1612,20 @@ def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg, scheme=
     local_id = plugin_id_override or repo
     key = owner + "/" + repo
     plugin_type = TYPE_OVERRIDES.get(key, "other")
+    if not plugin_id_override:
+        local_id = _resolve_installed_folder(repo) or repo
     installed = _is_installed(local_id)
     installed_version = _local_version(local_id) if installed else None
     has_config = False
     title = local_id
     tab_order = None
-
+    class_id = local_id
+    admin_only = False
     if installed:
-        local_attrs = _read_local_class_attrs(local_id)
-        if local_attrs.get("is_searchable"):
-            plugin_type = "search"
-        elif local_attrs.get("category_tab"):
-            plugin_type = "tab"
-            tab_order = _extract_tab_order(local_attrs.get("category_tab"))
-        elif local_attrs.get("dashboard_widget") or local_attrs.get("has_dashboard_data_method"):
-            plugin_type = "widget"
-        has_config = bool(local_attrs.get("config_schema")) or _has_settings_ui(local_id)
-        title = local_attrs.get("name") or local_id
+        # 이미 설치되어 있다면 실제 소스에서 분류·설정 여부·표시 이름을 더 정확히 추정
+        local = _describe_local(local_id, default_type=plugin_type)
+        plugin_type, tab_order, has_config = local["type"], local["tab_order"], local["has_config"]
+        title, class_id, admin_only = local["title"], local["class_id"], local["admin_only"]
 
     desc_info = _gitea_fetch_description_info(host, owner, repo, gitea_cfg, scheme)
     version_info = _gitea_fetch_version_info(
@@ -1444,6 +1635,8 @@ def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg, scheme=
 
     return {
         "id": local_id,
+        "class_id": class_id,
+        "admin_only": admin_only,
         "owner": owner,
         "title": title,
         "type": plugin_type,
@@ -1612,6 +1805,14 @@ def _extract_7z_safe(archive_path, extract_dir):
 
         zf.extractall(path=extract_dir)
 
+    # py7zr은 심볼릭 링크를 실제 링크로 복원할 수 있다 — tar와 같은 기준으로 거부한다
+    for root_dir, dirs, files in os.walk(extract_dir):
+        for entry in dirs + files:
+            if os.path.islink(os.path.join(root_dir, entry)):
+                raise ValueError(
+                    "보안 경고: 압축 파일 안에 심볼릭 링크가 포함되어 있어 거부합니다: %s" % entry
+                )
+
 
 def _extract_archive_safe(archive_path, extract_dir, filename):
     """파일명 확장자로 압축 형식을 판별해 알맞은 안전 해제 함수로 위임한다."""
@@ -1778,6 +1979,15 @@ def _parse_raw_base_url(raw_base_url):
     return None
 
 
+_OS_PROCESS_FUNCS = {"system", "popen", "fork", "forkpty"}
+
+
+def _is_os_process_call(attr):
+    """os 모듈 함수 중 외부 프로세스를 띄우는 것인지(가이드 §2-5 기준)."""
+    attr = str(attr or "")
+    return attr in _OS_PROCESS_FUNCS or attr.startswith(("exec", "spawn", "posix_spawn"))
+
+
 def _allow_plugin_subprocess():
     """서버 환경변수 ALLOW_PLUGIN_SUBPROCESS가 true/1/yes/on(대소문자 무관)이면
     플러그인 설치 시 subprocess import를 허용한다. 기본값은 차단이다 — 이 값을
@@ -1863,9 +2073,18 @@ def _validate_plugin_source(plugin_dir, detected_id):
             if isinstance(node, ast.Call):
                 fn = node.func
                 if isinstance(fn, ast.Name) and fn.id in ("eval", "exec"):
-                    forbidden_hits.append("%s: %s() 호출 발견" % (fname, fn.id))
-                elif isinstance(fn, ast.Attribute) and fn.attr in ("system", "popen"):
-                    forbidden_hits.append("%s: os.%s() 호출 발견" % (fname, fn.attr))
+                    forbidden_hits.append("%s: %s() 호출 발견(plugin_board 자체 정책)" % (fname, fn.id))
+                elif (isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name)
+                      and fn.value.id == "os" and _is_os_process_call(fn.attr)):
+                    # [PATCH-4] 가이드 §2-5: os.system/popen/exec*/spawn*는 subprocess와
+                    # 같은 "프로세스 실행"으로 취급한다(ALLOW_PLUGIN_SUBPROCESS로만 허용).
+                    # 예전에는 모듈을 확인하지 않아 platform.system() 같은 무해한 호출도
+                    # 금지 패턴으로 오탐했고, 반대로 os.exec*/os.spawn*은 놓쳤다.
+                    subprocess_hits.append("%s: os.%s() 호출 발견" % (fname, fn.attr))
+            elif isinstance(node, ast.ImportFrom) and node.module == "os":
+                for a in node.names:
+                    if _is_os_process_call(a.name):
+                        subprocess_hits.append("%s: from os import %s 발견" % (fname, a.name))
             elif isinstance(node, ast.Import):
                 for a in node.names:
                     if a.name == "subprocess" or a.name.startswith("subprocess."):
@@ -1884,7 +2103,7 @@ def _validate_plugin_source(plugin_dir, detected_id):
             elif isinstance(node, ast.keyword) and node.arg == "shell":
                 try:
                     if ast.literal_eval(node.value) is True:
-                        forbidden_hits.append("%s: shell=True 사용" % fname)
+                        forbidden_hits.append("%s: shell=True 사용(plugin_board 자체 정책)" % fname)
                 except Exception:
                     pass
 
@@ -1919,7 +2138,9 @@ def _validate_plugin_source(plugin_dir, detected_id):
                         elif t.id == "config_schema":
                             if isinstance(val, (ast.List, ast.Tuple)):
                                 cls_fields.add("config_schema")
-                        elif t.id in ("category_tab", "update_manifest", "dashboard_widget"):
+                        elif t.id in ("category_tab", "update_manifest", "dashboard_widget",
+                                      "home_widget", "detail_view", "detail_sidebar_widget",
+                                      "smart_recommend_widget"):
                             if isinstance(val, ast.Dict):
                                 cls_fields.add(t.id)
                 elif isinstance(stmt, ast.FunctionDef):
@@ -1948,7 +2169,10 @@ def _validate_plugin_source(plugin_dir, detected_id):
     else:
         checks.append({"name": "소스", "ok": True, "detail": "%d개 .py 파일, BaseMetadataProvider 클래스 발견" % len(py_files)})
 
-    if class_id is not None:
+    if class_id is not None and not _is_valid_class_id(class_id):
+        checks.append({"name": "클래스 id", "ok": False,
+                        "detail": "클래스 id='%s' 형식이 올바르지 않습니다(영문/숫자/._- 만 허용)" % class_id})
+    elif class_id is not None:
         class_id_str = str(class_id).strip()
         detected_id_str = str(detected_id).strip()
         if class_id_str == detected_id_str:
@@ -1969,29 +2193,34 @@ def _validate_plugin_source(plugin_dir, detected_id):
                 ),
             })
         else:
-            checks.append({"name": "클래스 id", "ok": False,
-                            "detail": "코드 내 id='%s' ≠ 감지된 id='%s' — 설치 후 목록에 표시되지 않을 수 있습니다"
-                                      % (class_id, detected_id)})
+            # [PATCH-4] 폴더명과 클래스 id를 분리해서 다루므로(활성화·설정 키는 항상
+            # 클래스 id로 조회) 불일치 자체는 더 이상 설치 실패 사유가 아니다.
+            # 네임스페이스 id(leeyj.spotify_mood)처럼 폴더명으로 쓸 수 없는 id가 대표적이다.
+            checks.append({"name": "클래스 id", "ok": True, "warn": True,
+                            "detail": "경고: 코드 내 id='%s'를 설치 폴더 '%s'에 설치합니다 — 설정·활성화 "
+                                      "상태는 클래스 id 기준으로 관리됩니다." % (class_id, detected_id)})
     elif provider_found:
         checks.append({"name": "클래스 id", "ok": False, "detail": "플러그인 클래스에 id 속성이 없습니다"})
     else:
         checks.append({"name": "클래스 id", "ok": False, "detail": "클래스를 찾을 수 없어 검사 불가"})
 
     if provider_found:
+        # [PATCH-4] 가이드 §3의 필수 계약은 search/apply뿐이다. name/is_searchable/
+        # config_schema는 권장 필드라 없으면 경고만 남긴다(베이스 클래스 기본값 사용).
         missing_fields = [f for f in ("name", "is_searchable", "config_schema") if f not in cls_attrs]
-        checks.append({"name": "필수 필드", "ok": not missing_fields,
-                        "detail": ("클래스에 없음: " + ", ".join(missing_fields)) if missing_fields
-                                  else "name/is_searchable/config_schema 확인"})
+        checks.append({"name": "권장 필드", "ok": True, "warn": bool(missing_fields),
+                        "detail": ("경고: 클래스에 직접 선언되지 않음(기본값 사용): " + ", ".join(missing_fields))
+                                  if missing_fields else "name/is_searchable/config_schema 확인"})
         missing_methods = [m for m, ok in (("search", has_search), ("apply", has_apply)) if not ok]
         checks.append({"name": "필수 메서드", "ok": not missing_methods,
                         "detail": ("구현 안 됨: " + ", ".join(missing_methods)) if missing_methods
                                   else "search/apply 확인"})
     else:
-        checks.append({"name": "필수 필드", "ok": False, "detail": "클래스 없음"})
+        checks.append({"name": "권장 필드", "ok": False, "detail": "클래스 없음"})
         checks.append({"name": "필수 메서드", "ok": False, "detail": "클래스 없음"})
 
     checks.append({"name": "금지 패턴", "ok": not forbidden_hits,
-                    "detail": "; ".join(forbidden_hits[:3]) if forbidden_hits else "eval/exec/os.system 없음"})
+                    "detail": "; ".join(forbidden_hits[:3]) if forbidden_hits else "eval/exec/shell=True 없음"})
 
     if subprocess_hits:
         if _allow_plugin_subprocess():
@@ -1999,7 +2228,7 @@ def _validate_plugin_source(plugin_dir, detected_id):
             # 통과시킨다 — 기본값은 여전히 차단이며, 통과하더라도 설치 결과
             # 메시지에 경고로 남겨 관리자가 알아챌 수 있게 한다.
             checks.append({
-                "name": "subprocess 사용", "ok": True, "warn": True,
+                "name": "프로세스 실행", "ok": True, "warn": True,
                 "detail": (
                     "경고: subprocess를 사용합니다(%s) — 서버 환경변수 "
                     "ALLOW_PLUGIN_SUBPROCESS=true로 허용되어 있어 설치를 통과시켰습니다. "
@@ -2009,14 +2238,14 @@ def _validate_plugin_source(plugin_dir, detected_id):
             })
         else:
             checks.append({
-                "name": "subprocess 사용", "ok": False,
+                "name": "프로세스 실행", "ok": False,
                 "detail": (
                     "%s — 서버 환경변수 ALLOW_PLUGIN_SUBPROCESS=true를 설정하면 설치를 "
                     "허용할 수 있습니다(기본값은 차단)." % "; ".join(subprocess_hits[:3])
                 ),
             })
     else:
-        checks.append({"name": "subprocess 사용", "ok": True, "detail": "subprocess import 없음"})
+        checks.append({"name": "프로세스 실행", "ok": True, "detail": "subprocess/os.system·popen·exec*·spawn* 없음"})
 
     # 다른 플러그인 모듈(plugins.metadata.<다른 id>)을 직접 import하는 경우 —
     # 그 다른 플러그인이 이 서버에 설치돼 있지 않으면 설치 자체는 성공해도
@@ -2054,13 +2283,20 @@ def _validate_plugin_source(plugin_dir, detected_id):
                     "detail": ("플러그인 폴더 내 심볼릭 링크 금지: " + ", ".join(symlinks[:3])) if symlinks else "없음"})
 
     if "category_tab" in cls_attrs:
-        ui_files = {f: os.path.isfile(os.path.join(plugin_dir, f)) for f in ("index.html", "script.js", "style.css")}
-        missing_ui = [f for f, ok in ui_files.items() if not ok]
-        checks.append({"name": "UI 번들", "ok": not missing_ui,
+        missing_ui = [f for f in ("index.html", "script.js") if not os.path.isfile(os.path.join(plugin_dir, f))]
+        no_css = not os.path.isfile(os.path.join(plugin_dir, "style.css"))
+        checks.append({"name": "UI 번들", "ok": not missing_ui, "warn": (not missing_ui) and no_css,
                         "detail": ("category_tab 선언 시 필수: " + ", ".join(missing_ui)) if missing_ui
-                                  else "index/script/style 확인"})
+                                  else ("경고: style.css 없음" if no_css else "index/script/style 확인")})
     else:
         checks.append({"name": "UI 번들", "ok": True, "detail": "미선언"})
+
+    if "detail_view" in cls_attrs:
+        missing_dv = [f for f in ("detail/index.html", "detail/script.js")
+                      if not os.path.isfile(os.path.join(plugin_dir, *f.split("/")))]
+        checks.append({"name": "상세 화면 번들", "ok": not missing_dv,
+                        "detail": ("detail_view 선언 시 필수: " + ", ".join(missing_dv)) if missing_dv
+                                  else "detail/index.html·script.js 확인"})
 
     all_ok = all(c.get("ok") for c in checks)
     return all_ok, checks
@@ -2070,9 +2306,9 @@ def _install_from_archive(archive_data_b64, filename, db_type):
     """업로드된 압축 파일(base64, zip/tar 계열/7z)로 플러그인을 설치한다.
     1) base64 디코드 → 파일명 확장자로 형식 판별 → 임시 폴더에 안전하게 압축
        해제(경로 이탈/개수/용량 검증 — 형식별로 _extract_archive_safe에 위임)
-    2) 플러그인 루트·ID 지능 탐색 + ID 형식·예약어 검증
+    2) 플러그인 루트 탐색 + [PATCH-4] 설치 폴더/클래스 id 결정과 id 충돌 검사
     3) 정적 소스 검증(코드 실행 없음) — 실패 시 설치 중단(기존 폴더 미변경)
-    4) 검증 통과 후에만 기존 폴더 교체
+    4) 검증 통과 후에만 스테이징 → 백업 → 교체(로드 실패 시 백업 복원)
     5) update_manifest.raw_base_url이 유효하면(GitHub 루트 또는 Gitea, monorepo
        서브디렉토리 아님) github.txt 레지스트리에 백필 등록 — 설치 방식과 무관하게
        이후에도 계속 업데이트를 추적할 수 있도록 한다. 없으면 로컬 플러그인으로 남는다.
@@ -2111,76 +2347,35 @@ def _install_from_archive(archive_data_b64, filename, db_type):
             return False, "압축 해제에 실패했습니다: %s" % exc
 
         plugin_root = _find_plugin_root_dir(extract_dir)
-        plugin_id = _detect_plugin_id_from_dir(plugin_root, fallback_name=filename)
-        if not plugin_id:
-            return False, "플러그인 ID를 식별하지 못했습니다. (BaseMetadataProvider 클래스 또는 VERSION 파일 필요)"
+        folder_hint = _detect_plugin_id_from_dir(plugin_root, fallback_name=filename)
 
-        if not _PLUGIN_ID_RE.match(plugin_id):
-            return False, "유효하지 않은 플러그인 ID입니다 (영문/숫자/언더바/하이픈만 허용): %s" % plugin_id
-        if plugin_id in ("base.py", "base", "__pycache__", "plugin_manager", "plugin_board"):
-            return False, "시스템 예약어 또는 핵심 플러그인은 덮어쓸 수 없습니다: %s" % plugin_id
-
-        source_ok, source_checks = _validate_plugin_source(plugin_root, plugin_id)
-        if not source_ok:
-            failed_items = ["- %s: %s" % (c["name"], c["detail"]) for c in source_checks if not c.get("ok")]
-            return False, (
-                "플러그인 검증 실패 — 설치를 중단했습니다 (기존 폴더는 변경되지 않음):\n"
-                + "\n".join(failed_items)
-            )
-
+        # update_manifest.raw_base_url이 GitHub 루트(또는 Gitea)를 가리키면 그 저장소를
+        # 이 압축 파일의 출처로 본다 — id 충돌 판단(다른 저장소가 같은 폴더를 점유했는지)과
+        # 설치 후 업데이트 추적(github.txt 등록)에 함께 쓴다. monorepo 서브디렉토리는 제외.
+        source_url = None
         try:
-            dest_dir = _safe_join(_plugins_metadata_dir(), plugin_id)
-        except ValueError as exc:
-            return False, str(exc)
-
-        if os.path.isdir(dest_dir):
-            shutil.rmtree(dest_dir)
-        shutil.copytree(
-            plugin_root, dest_dir,
-            ignore=shutil.ignore_patterns(".git", ".github", "__pycache__", "*.pyc", "__MACOSX", ".DS_Store"),
-        )
-
-        for cache in (_DESC_CACHE, _VERSION_CACHE):
-            for key in [k for k in cache if k.endswith("/" + plugin_id)]:
-                cache.pop(key, None)
-
-        _toggle_plugin_enabled(plugin_id, "1", db_type)
-        _try_hot_reload(plugin_id)
-
-        if not _verify_plugin_loaded(plugin_id):
-            shutil.rmtree(dest_dir, ignore_errors=True)
-            return False, (
-                "검증 실패: '%s' 플러그인이 설치 후 로드되지 않았습니다. "
-                "(클래스 id와 폴더명이 일치하는지 확인 필요) — 설치 폴더를 삭제했습니다." % plugin_id
-            )
-
-        # update_manifest가 있고 raw_base_url이 GitHub 루트(또는 Gitea)를 가리키면,
-        # 설치 방식(zip)과 무관하게 github.txt 레지스트리에 등록해 이후에도 계속
-        # 업데이트를 추적한다. monorepo 서브디렉토리는 릴리즈 기준이 안 맞아 제외.
-        # 2차 로드 검증을 통과한 뒤에만 기록한다 — 검증 실패로 롤백된 설치가
-        # 레지스트리에 남아 있는(존재하지 않는 플러그인을 가리키는) 상태를 방지한다.
-        try:
-            files_clean, manifest = _extract_update_manifest_files(dest_dir)
+            files_clean, manifest = _extract_update_manifest_files(plugin_root)
             raw_base_url = str((manifest or {}).get("raw_base_url") or "").strip().rstrip("/")
             if files_clean and raw_base_url:
                 parsed = _parse_raw_base_url(raw_base_url)
                 if parsed and not parsed[4]:  # subpath가 없을 때만
                     host, owner, repo, _branch, _sub = parsed
-                    _remember_repo_install("https://%s/%s/%s" % (host, owner, repo))
+                    source_url = "https://%s/%s/%s" % (host, owner, repo)
         except Exception:
-            pass
-        _save_disk_cache()
+            source_url = None
 
-        passed = [c["name"] for c in source_checks if c.get("ok") and not c.get("warn")]
-        warns = [c["detail"] for c in source_checks if c.get("warn")]
-        new_version = _local_version(plugin_id) or "?"
-        result_msg = (
-            "압축 파일(%s)을 통해 '%s' 플러그인이 성공적으로 설치 및 활성화되었습니다! "
-            "(버전 v%s, 검증 통과: %s)" % (archive_kind, plugin_id, new_version, ", ".join(passed))
+        ok, msg, folder = _install_from_source_dir(
+            plugin_root, folder_hint, None, source_url, db_type,
+            "압축 파일 %s" % archive_kind,
+            ignore=shutil.ignore_patterns(".git", ".github", "__pycache__", "*.pyc", "__MACOSX", ".DS_Store"),
         )
-        if warns:
-            result_msg += " 경고: " + "; ".join(warns)
-        return True, result_msg
+        if not ok:
+            return False, msg
+
+        # 2차 로드 검증까지 통과한 뒤에만 기록한다 — 롤백된 설치가 레지스트리에 남지 않도록.
+        if source_url:
+            _remember_repo_install(source_url, plugin_id=folder)
+        return True, msg
     except (zipfile.BadZipFile, tarfile.ReadError):
         return False, "올바른 압축 파일 형식이 아닙니다."
     except Exception as exc:
@@ -2245,7 +2440,8 @@ def _detect_plugin_id_from_dir(plugin_dir, fallback_name=None):
         return folder_name
 
     if fallback_name:
-        clean = re.sub(r"\.zip$", "", str(fallback_name), flags=re.IGNORECASE)
+        clean = re.sub(r"\.(zip|7z|tar|tgz|tbz2|txz|tar\.gz|tar\.bz2|tar\.xz)$", "",
+                       str(fallback_name), flags=re.IGNORECASE)
         clean = re.sub(r"[^a-zA-Z0-9_-]", "_", clean).strip("_")
         if clean:
             return clean
@@ -2253,15 +2449,20 @@ def _detect_plugin_id_from_dir(plugin_dir, fallback_name=None):
     return ""
 
 
-def _verify_plugin_loaded(plugin_id):
-    """2차 검증 — 코어가 실제로 이 플러그인을 로드했는지 확인한다.
-    확인 자체가 불가능한 경우도 안전하게 '로드 실패'로 간주한다(fail-closed)."""
+def _verify_plugin_loaded(class_id):
+    """2차 검증 — 코어가 실제로 이 플러그인(클래스 id 기준)을 로드했는지 확인한다.
+    반환: True(로드됨) / False(로드 안 됨) / None(코어 내부 API를 쓸 수 없어 판단 불가).
+    [PATCH-4] 예전에는 판단 불가도 False로 취급해, hot reload가 없는 코어에서는
+    정상 설치까지 롤백(삭제)되는 문제가 있었다."""
     try:
         from services.metadata_factory import MetadataFactory
         providers = MetadataFactory.get_available_providers()
-        return any(str(p.get("id")) == plugin_id for p in providers)
     except Exception:
-        return False
+        return None
+    try:
+        return any(str(p.get("id")) == str(class_id) for p in providers)
+    except Exception:
+        return None
 
 
 def _candidate_branches(default_branch):
@@ -2272,29 +2473,43 @@ def _candidate_branches(default_branch):
     return branches
 
 
-def _try_hot_reload(plugin_id):
+def _try_hot_reload(*plugin_ids):
     """가능하면 코어의 hot reload를 호출해 서버 재시작 없이 즉시 반영을 시도한다.
-    실패해도 설치 자체는 이미 완료된 상태이므로 조용히 무시한다."""
+    코어가 인자를 클래스 id로 받는지 폴더명으로 받는지 문서화돼 있지 않아, 둘이
+    다르면 둘 다 시도한다. 한 번이라도 호출에 성공하면 True, 코어에 해당 기능이
+    없거나 전부 실패하면 False. (문서화되지 않은 코어 내부 API라 실패해도 설치
+    자체는 유지한다.)"""
     try:
         from services.metadata_factory import MetadataFactory
-        if hasattr(MetadataFactory, "hot_reload_plugin"):
-            MetadataFactory.hot_reload_plugin(plugin_id)
-            return True
     except Exception:
-        pass
-    return False
+        return False
+    if not hasattr(MetadataFactory, "hot_reload_plugin"):
+        return False
+    ok = False
+    seen = set()
+    for pid in plugin_ids:
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        try:
+            MetadataFactory.hot_reload_plugin(pid)
+            ok = True
+        except Exception:
+            pass
+    return ok
 
 
-def _toggle_plugin_enabled(plugin_id, enabled_val, db_type):
+def _toggle_plugin_enabled(plugin_id, enabled_val, db_type, reload=True):
     """madnite1/plugin_manager와 동일하게 코어의 PluginService를 그대로 사용해
-    활성화/비활성화 상태를 변경한다. plugin_board는 이 로직을 직접 구현하지 않고
-    코어 서비스에 위임한다."""
+    활성화/비활성화 상태를 변경한다. plugin_id는 설치 폴더명이며, 코어에는
+    [PATCH-4] 클래스 id로 변환해서 넘긴다(코어의 PLUGIN_ENABLED_{id} 키는 클래스 id 기준)."""
     try:
         _validate_plugin_id(plugin_id)
     except ValueError as exc:
         return False, str(exc)
 
-    if plugin_id == "plugin_board":
+    class_id = _class_id_for_folder(plugin_id) if _is_installed(plugin_id) else plugin_id
+    if plugin_id == "plugin_board" or class_id == "plugin_board":
         return False, "plugin_board 자기 자신은 이 화면에서 비활성화할 수 없습니다."
 
     try:
@@ -2303,34 +2518,49 @@ def _toggle_plugin_enabled(plugin_id, enabled_val, db_type):
         return False, "코어 PluginService를 사용할 수 없습니다 (%s)" % exc
 
     try:
-        ok, err = PluginService.toggle_plugin_enabled(db_type, plugin_id, str(enabled_val))
+        ok, err = PluginService.toggle_plugin_enabled(db_type, class_id, str(enabled_val))
         if not ok:
             return False, err or "상태 변경에 실패했습니다."
     except Exception as exc:
         return False, "상태 변경 중 오류가 발생했습니다: %s" % exc
 
-    _try_hot_reload(plugin_id)
+    if reload:
+        _try_hot_reload(class_id, plugin_id)
     status_text = "활성화" if str(enabled_val) == "1" else "비활성화"
     return True, "'%s' 상태가 '%s'로 변경되었습니다." % (plugin_id, status_text)
 
 
 def _delete_plugin(plugin_id):
     """plugins/metadata/{plugin_id} 폴더와, 있다면 plugins/data/{plugin_id}
-    폴더(플러그인이 남긴 데이터)까지 함께 삭제한다. 두 경로 모두 각자의 루트
-    (plugins/metadata, plugins/data) 경계 안에 있는지 검증한 뒤에만 삭제한다
-    (_validate_plugin_id + _safe_join 재사용)."""
+    폴더(플러그인이 남긴 데이터)까지 함께 삭제한다. 폴더명과 클래스 id가 다르면
+    plugins/data/{클래스 id}도 함께 정리한다. 모든 경로는 각자의 루트
+    (plugins/metadata, plugins/data) 경계 안에 있는지 검증한 뒤에만 삭제한다."""
     if plugin_id == "plugin_board":
         return False, "plugin_board 자기 자신은 이 화면에서 삭제할 수 없습니다."
 
     try:
         _validate_plugin_id(plugin_id)
         target_dir = _safe_join(_plugins_metadata_dir(), plugin_id)
-        data_dir = _safe_join(os.path.join(_plugins_root_dir(), "data"), plugin_id)
     except ValueError as exc:
         return False, str(exc)
 
     if not os.path.isdir(target_dir):
         return False, "존재하지 않는 플러그인입니다: %s" % plugin_id
+
+    class_id = _class_id_for_folder(plugin_id)
+    if class_id == "plugin_board":
+        return False, "plugin_board 자기 자신은 이 화면에서 삭제할 수 없습니다."
+
+    data_root = os.path.join(_plugins_root_dir(), "data")
+    data_dirs = []
+    for name in (plugin_id, class_id):
+        if name and _PLUGIN_ID_RE.match(name) and name != "plugin_board":
+            try:
+                d = _safe_join(data_root, name)
+            except ValueError:
+                continue
+            if d not in data_dirs:
+                data_dirs.append(d)
 
     try:
         shutil.rmtree(target_dir)
@@ -2340,53 +2570,255 @@ def _delete_plugin(plugin_id):
     # 메타데이터 폴더 삭제가 이미 성공한 뒤이므로, 데이터 폴더 삭제가 실패해도
     # (예: 권한 문제) 전체 삭제 자체를 실패로 처리하지 않고 메시지에만 알린다.
     data_dir_warning = ""
-    if os.path.isdir(data_dir):
-        try:
-            shutil.rmtree(data_dir)
-        except Exception as exc:
-            data_dir_warning = " (경고: 데이터 폴더 plugins/data/%s 삭제 실패: %s)" % (plugin_id, exc)
+    for d in data_dirs:
+        if os.path.isdir(d):
+            try:
+                shutil.rmtree(d)
+            except Exception as exc:
+                data_dir_warning += " (경고: 데이터 폴더 %s 삭제 실패: %s)" % (os.path.basename(d), exc)
 
     _DESC_CACHE.clear()  # 삭제된 플러그인이 GitHub 캐시에 남아 잘못된 정보를 주지 않도록
     _VERSION_CACHE.clear()
     _save_disk_cache()
-    _try_hot_reload(plugin_id)
+    _try_hot_reload(class_id, plugin_id)
 
     # 삭제된 plugin_id의 github.txt 등록도 함께 제거한다 — 파일은 이미 지워졌는데
-    # 등록만 남아있으면, 이후 카드가 "설치됨"도 "미설치"도 아닌 애매한 상태로
-    # 보이거나(installed=False인데 user_registered=True) 죽은 주소로 계속
-    # 업데이트를 시도하게 된다. _unregister_repo는 등록이 없어도 조용히
-    # (ok=False로) 끝나므로 별도 처리 없이 결과만 무시한다.
+    # 등록만 남아있으면 죽은 주소로 계속 업데이트를 시도하게 된다.
     _unregister_repo(plugin_id)
 
     return True, "'%s' 플러그인이 삭제되었습니다.%s" % (plugin_id, data_dir_warning)
 
 
+# ========================================================================
+# [PATCH-4] 설치 계획(폴더/클래스 id 결정 + 충돌 감지)과 원자적 폴더 교체.
+# Git(GitHub/Gitea) 설치와 압축 파일 설치가 모두 이 두 함수를 공유한다.
+# ========================================================================
+_RESERVED_FOLDERS = ("base", "__pycache__", "plugin_manager")
 
-def _install_or_update(owner, repo, token=None):
-    """저장소 zip을 받아 plugins/metadata/{repo}/를 통째로 교체한다.
-    update_manifest.files 화이트리스트로 파일을 골라내지 않고, 검증에 성공한
-    새 소스로 기존 설치 폴더를 완전히 대체한다(전체 재다운로드 방식).
 
-    [PATCH-3] Git URL/GitHub Topics로 들어오는 저장소는 운영자가 사전 검수한
-    목록이 아니므로, 압축 파일 업로드 설치(_install_from_archive)와 동일하게
-    _validate_plugin_source()로 정적 검증(금지 패턴 · 클래스 구조 · 필수 필드/
-    메서드 등)을 통과한 경우에만 폴더를 교체한다. 검증에 실패하면 기존 설치를
-    전혀 건드리지 않고 실패 사유를 그대로 반환한다."""
+def _read_class_id(plugin_dir):
+    """설치 대상 소스에서 provider 클래스의 id를 AST로만(코드 실행 없이) 읽는다."""
+    try:
+        fnames = sorted(os.listdir(plugin_dir))
+    except Exception:
+        return None
+    for fname in fnames:
+        if not fname.endswith(".py") or fname in ("__init__.py", "base.py"):
+            continue
+        fpath = os.path.join(plugin_dir, fname)
+        if not os.path.isfile(fpath):
+            continue
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                tree = ast.parse(f.read(), filename=fpath)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            for stmt in node.body:
+                target_names = []
+                if isinstance(stmt, ast.Assign):
+                    target_names = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
+                elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                    target_names = [stmt.target.id]
+                if "id" not in target_names or stmt.value is None:
+                    continue
+                try:
+                    value = ast.literal_eval(stmt.value)
+                except Exception:
+                    continue
+                if isinstance(value, str) and _is_valid_class_id(value):
+                    return value.strip()
+    return None
+
+
+def _registry_url_for(folder):
+    return next((u for pid, u in _load_github_registry_entries() if pid == folder), None)
+
+
+def _same_repo_owner(url_a, url_b):
+    """두 저장소 주소가 같은 호스트·owner를 가리키는지. 판단할 수 없으면 True(막지 않음)."""
+    ha, oa, _ra = _parse_repo_url(url_a)
+    hb, ob, _rb = _parse_repo_url(url_b)
+    if not (ha and oa and hb and ob):
+        return True
+    return (ha.lower(), oa.lower()) == (hb.lower(), ob.lower())
+
+
+def _plan_install(src_root, repo_hint, existing_folder=None, source_url=None):
+    """설치할 폴더명과 클래스 id를 정하고 가이드 §1의 id 충돌을 검사한다.
+    반환: (folder, class_id, is_new, error_message)
+
+    - 업데이트(existing_folder 지정): 기존 폴더를 그대로 쓴다(폴더명 변경 없음).
+    - 이미 설치된 같은 플러그인(저장소 이름 변형 또는 같은 클래스 id)이 있으면 그 폴더.
+    - 신규 설치: 클래스 id가 폴더명으로 쓸 수 있는 형식이면 클래스 id, 아니면
+      (예: leeyj.spotify_mood) 저장소 이름을 폴더명으로 쓴다.
+    - 다른 폴더가 같은 클래스 id를 쓰거나, 같은 폴더를 다른 저장소(호스트/owner)가
+      점유하고 있으면 설치를 거부한다."""
+    class_id = _read_class_id(src_root)
+    if not class_id:
+        return None, None, False, (
+            "플러그인 클래스의 id를 읽지 못했습니다 — BaseMetadataProvider 상속 클래스에 "
+            "id = \"...\" 형태의 문자열 id가 있어야 합니다."
+        )
+
+    folder = None
+    if existing_folder and _PLUGIN_ID_RE.match(existing_folder) and _is_installed(existing_folder):
+        folder = existing_folder
+    else:
+        if repo_hint:
+            folder = _resolve_installed_folder(repo_hint)
+        if not folder:
+            folder = _find_folder_by_class_id(class_id)
+        if not folder:
+            if _PLUGIN_ID_RE.match(class_id):
+                folder = class_id
+            else:
+                folder = re.sub(r"[^a-zA-Z0-9_-]", "_", repo_hint or class_id).strip("_")
+
+    if not folder or not _PLUGIN_ID_RE.match(folder):
+        return None, None, False, "설치 폴더명을 정하지 못했습니다(영문/숫자/_- 만 허용): %r" % folder
+    if folder in _RESERVED_FOLDERS or class_id in _RESERVED_FOLDERS:
+        return None, None, False, "시스템 예약어 또는 핵심 플러그인은 덮어쓸 수 없습니다: %s" % folder
+
+    # plugin_board 자신은 공식 저장소에서 온 소스로만 교체한다(동명 포크·압축 파일로
+    # 관리 도구 자체를 덮어쓰는 것을 막는다).
+    if folder == "plugin_board" or class_id == "plugin_board":
+        if not source_url or not _same_repo_owner(source_url, SELF_REPO_URL):
+            return None, None, False, "plugin_board는 공식 저장소(%s)에서만 설치·업데이트할 수 있습니다." % SELF_REPO_URL
+
+    other = _find_folder_by_class_id(class_id, exclude=folder)
+    if other:
+        return None, None, False, (
+            "id 충돌: 같은 id('%s')의 플러그인이 이미 '%s' 폴더에 설치되어 있습니다. "
+            "기존 플러그인을 먼저 삭제하거나, 서로 다른 id를 쓰는지 확인해주세요." % (class_id, other)
+        )
+
+    is_new = not _is_installed(folder)
+    if not is_new:
+        existing_cid = _class_id_for_folder(folder)
+        if existing_cid.replace("-", "_") != class_id.replace("-", "_"):
+            return None, None, False, (
+                "id 충돌: '%s' 폴더에는 다른 플러그인(id='%s')이 설치되어 있어 id='%s'로 "
+                "덮어쓸 수 없습니다." % (folder, existing_cid, class_id)
+            )
+        if source_url and not existing_folder:
+            registered = _registry_url_for(folder)
+            if registered and not _same_repo_owner(registered, source_url):
+                clean_registered, _u, _p = _extract_url_credentials(registered)
+                return None, None, False, (
+                    "id 충돌: '%s'는 다른 저장소(%s)에서 설치된 플러그인입니다. 같은 이름의 다른 "
+                    "저장소로 덮어쓰지 않도록 설치를 중단했습니다. 저장소를 옮긴 것이라면 "
+                    "'Git 주소 변경'을 먼저 사용해주세요." % (folder, clean_registered)
+                )
+    return folder, class_id, is_new, None
+
+
+def _staging_dir():
+    return os.path.join(_plugins_root_dir(), "data", "plugin_board", "_staging")
+
+
+def _install_dir_atomically(src_root, folder, class_id, db_type, is_new, ignore=None):
+    """검증을 통과한 소스로 plugins/metadata/{folder}를 교체한다.
+    스테이징에 먼저 복사 → 기존 폴더를 백업으로 이동 → 새 폴더를 이동 → (신규면)
+    활성화 → hot reload → 로드 검증. 로드 검증이 명확히 실패하면 새 폴더를 지우고
+    백업을 되돌린다. 스테이징은 plugins/data 아래(= plugins/metadata와 같은 볼륨일
+    가능성이 높은 위치)에 둬서 이동이 가급적 rename으로 끝나게 한다.
+    반환: (성공 여부, 추가 안내 문구 또는 실패 사유)"""
+    target = _safe_join(_plugins_metadata_dir(), folder)
+    os.makedirs(_staging_dir(), exist_ok=True)
+    work = tempfile.mkdtemp(prefix="swap_", dir=_staging_dir())
+    staged = os.path.join(work, "new")
+    backup = os.path.join(work, "backup")
+    had_backup = False
+    try:
+        shutil.copytree(src_root, staged, ignore=ignore)
+        if os.path.isdir(target):
+            shutil.move(target, backup)
+            had_backup = True
+        try:
+            shutil.move(staged, target)
+        except Exception:
+            if had_backup and not os.path.exists(target):
+                shutil.move(backup, target)
+            raise
+
+        if is_new:
+            _toggle_plugin_enabled(folder, "1", db_type, reload=False)
+        reloaded = _try_hot_reload(class_id, folder)
+        loaded = _verify_plugin_loaded(class_id)
+
+        if reloaded and loaded is False:
+            shutil.rmtree(target, ignore_errors=True)
+            if had_backup:
+                shutil.move(backup, target)
+            _try_hot_reload(class_id, folder)
+            return False, (
+                "'%s'(id=%s) 플러그인이 교체 후 로드되지 않아 %s. 서버 로그에서 "
+                "로드 오류를 확인해주세요." % (
+                    folder, class_id, "이전 버전으로 되돌렸습니다" if had_backup else "설치를 취소했습니다"
+                )
+            )
+        if not reloaded or loaded is None:
+            return True, " (코어의 즉시 반영 여부를 확인할 수 없어 서버 재시작 후 적용될 수 있습니다)"
+        return True, ""
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _install_from_source_dir(src_root, repo_hint, existing_folder, source_url, db_type, origin_label,
+                             ignore=None):
+    """압축이 풀린 소스 폴더 하나를 계획 → 정적 검증 → 원자적 교체까지 처리한다.
+    반환: (성공 여부, 메시지, 설치 폴더명)"""
+    folder, class_id, is_new, err = _plan_install(src_root, repo_hint, existing_folder, source_url)
+    if err:
+        return False, err, None
+
+    source_ok, source_checks = _validate_plugin_source(src_root, folder)
+    if not source_ok:
+        failed_items = ["- %s: %s" % (c["name"], c["detail"]) for c in source_checks if not c.get("ok")]
+        return False, (
+            "플러그인 검증 실패 — 설치를 중단했습니다(기존 설치는 변경되지 않음):\n"
+            + "\n".join(failed_items)
+        ), None
+
+    ok, note = _install_dir_atomically(src_root, folder, class_id, db_type, is_new, ignore=ignore)
+    if not ok:
+        return False, note, None
+
+    for cache in (_DESC_CACHE, _VERSION_CACHE):
+        for key in [k for k in cache if k.endswith("/" + folder) or (repo_hint and k.endswith("/" + repo_hint))]:
+            cache.pop(key, None)
+    _save_disk_cache()
+
+    new_version = _local_version(folder) or "?"
+    passed = [c["name"] for c in source_checks if c.get("ok") and not c.get("warn")]
+    warns = [re.sub(r"^경고:\s*", "", c["detail"]) for c in source_checks if c.get("warn")]
+    result_msg = "'%s'(id=%s) %s 완료 (%s, 버전 v%s, 검증 통과: %s)%s" % (
+        folder, class_id, "신규 설치 및 활성화" if is_new else "업데이트", origin_label,
+        new_version, ", ".join(passed), note,
+    )
+    if warns:
+        result_msg += " 경고: " + "; ".join(warns)
+    return True, result_msg, folder
+
+
+def _install_or_update(owner, repo, token=None, db_type="general", existing_folder=None):
+    """저장소 zip을 받아 검증 후 설치 폴더를 통째로 교체한다(전체 재다운로드 방식).
+    [PATCH-3] 정적 검증 통과가 필수, [PATCH-4] 폴더 결정·id 충돌 감지·원자적 교체는
+    _install_from_source_dir에 위임한다. 반환: (성공 여부, 메시지, 설치 폴더명)"""
     _validate_plugin_id(repo)
 
     # default_branch는 카드 목록을 불러올 때(_fetch_description_info, 24시간 캐시)
-    # 이미 조회해둔 값을 그대로 재사용한다. 여기서 별도로 api.github.com을 다시
-    # 부르면 신규설치/업데이트 버튼을 누를 때마다 코어 API 호출이 하나씩 더
-    # 늘어나는데, GITHUB_TOKEN을 설정하지 않은 사용자(무인증 시간당 60회)에게는
-    # 이 중복 호출이 rate limit을 훨씬 빨리 소진시키는 주요 원인이었다.
+    # 이미 조회해둔 값을 그대로 재사용한다(무인증 rate limit 절약).
     info = _fetch_description_info(owner, repo, token)
     default_branch = info.get("default_branch")
+    source_url = "https://github.com/%s/%s" % (owner, repo)
 
     last_error = None
     for branch in _candidate_branches(default_branch):
-        zip_url = "https://codeload.github.com/%s/%s/zip/refs/heads/%s" % (
-            owner, repo, branch,
-        )
+        zip_url = "https://codeload.github.com/%s/%s/zip/refs/heads/%s" % (owner, repo, branch)
         tmp_dir = tempfile.mkdtemp(prefix="plugin_board_")
         try:
             zip_path = os.path.join(tmp_dir, "src.zip")
@@ -2397,64 +2829,19 @@ def _install_or_update(owner, repo, token=None):
             _extract_zip_safe(zip_path, extract_dir)
             src_root = _find_extracted_root(extract_dir)
 
-            # 최소한의 신원 확인: 저장소 이름(또는 하이픈↔언더스코어를 바꾼 표기)과
-            # 같은 메인 모듈 파일이 있어야 BookOasis 플러그인 저장소로 간주한다.
-            # GitHub 저장소명은 하이픈을 흔히 쓰지만 파이썬 파일명은 하이픈을 못 써서
-            # 언더스코어로 짓는 경우가 많다(예: bookoasis-tk 저장소 → bookoasis_tk.py).
-            module_py = _find_module_file(src_root, repo)
-            if not module_py:
-                # 다운로드·압축 해제까지는 성공했으므로, 이후 브랜치를 더 시도해도
-                # 같은 이유로 실패할 뿐이다. 다른 브랜치의 무관한 오류(예: 존재하지
-                # 않는 브랜치의 404)가 이 더 정확한 원인을 덮어쓰지 않도록 여기서
-                # 바로 반환한다.
+            # 최소한의 신원 확인: 저장소 이름(하이픈↔언더스코어 변형 포함) 또는 클래스
+            # id와 같은 메인 모듈 파일이 있어야 BookOasis 플러그인 저장소로 간주한다.
+            if not _find_module_file(src_root, repo) and not _find_module_file(src_root, _read_class_id(src_root) or repo):
                 return False, (
                     "'%s.py'(또는 '%s.py') 파일을 찾지 못했습니다 — BookOasis 플러그인 "
-                    "저장소가 맞는지, 메인 모듈 파일명이 저장소 이름과 같은지(하이픈은 "
-                    "언더스코어로 바꿔서도 확인함) 확인해주세요." % (repo, repo.replace("-", "_"))
-                )
+                    "저장소가 맞는지, 메인 모듈 파일명이 저장소 이름과 같은지 확인해주세요."
+                    % (repo, repo.replace("-", "_"))
+                ), None
 
-            # [PATCH-3] 압축 파일 업로드 설치(_install_from_archive)와 동일한 정적
-            # 검증을 거친다. 이 저장소는 운영자가 사전 검수한 목록에 있는 게 아니라
-            # GitHub Topics 검색 또는 사용자가 직접 입력한 URL로 들어온 것이므로,
-            # 폴더를 교체하기 전에 반드시 통과해야 한다. 검증에 실패하면 기존 설치를
-            # 전혀 건드리지 않고 실패 사유를 그대로 반환한다.
-            source_ok, source_checks = _validate_plugin_source(src_root, repo)
-            if not source_ok:
-                failed_items = [
-                    "- %s: %s" % (c["name"], c["detail"])
-                    for c in source_checks if not c.get("ok")
-                ]
-                return False, (
-                    "플러그인 검증 실패 — 설치를 중단했습니다(기존 설치는 변경되지 않음):\n"
-                    + "\n".join(failed_items)
-                )
-
-            base_dir = _plugins_metadata_dir()
-            target_dir = _safe_join(base_dir, repo)
-
-            # 검증(모듈 파일 존재 확인 + 정적 소스 검증)을 통과한 뒤에야 기존 설치를
-            # 지운다 — 검증에 실패하면 이 지점에 도달하지 않으므로 기존 설치는 그대로
-            # 보존된다.
-            if os.path.isdir(target_dir):
-                shutil.rmtree(target_dir)
-            shutil.copytree(src_root, target_dir)
-
-            key = owner + "/" + repo
-            _DESC_CACHE.pop(key, None)  # 설치 직후 카드가 최신 상태를 반영하도록 캐시 무효화
-            _VERSION_CACHE.pop(key, None)
-            _save_disk_cache()
-            _try_hot_reload(repo)
-
-            new_version = _local_version(repo) or "?"
-            passed = [c["name"] for c in source_checks if c.get("ok") and not c.get("warn")]
-            warns = [c["detail"] for c in source_checks if c.get("warn")]
-            result_msg = (
-                "'%s' 설치/업데이트 완료 (브랜치: %s, 버전: v%s, 저장소 전체 교체, "
-                "검증 통과: %s)" % (repo, branch, new_version, ", ".join(passed))
+            return _install_from_source_dir(
+                src_root, repo, existing_folder, source_url, db_type,
+                "GitHub %s/%s, 브랜치 %s" % (owner, repo, branch),
             )
-            if warns:
-                result_msg += " 경고: " + "; ".join(warns)
-            return True, result_msg
         except urllib.error.HTTPError as exc:
             last_error = _github_api_error_message(exc, bool(token))
         except Exception as exc:
@@ -2462,20 +2849,19 @@ def _install_or_update(owner, repo, token=None):
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    return False, "설치/업데이트 실패: %s" % (last_error or "알 수 없는 오류")
+    return False, "설치/업데이트 실패: %s" % (last_error or "알 수 없는 오류"), None
 
 
-def _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme="https"):
+def _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme="https", db_type="general",
+                             existing_folder=None):
     """Gitea 저장소를 설치/업데이트한다. GitHub용 _install_or_update와 동일한
-    전체 재다운로드 방식(검증 후 폴더 교체)을 쓰되, 다운로드/조회 경로만
-    Gitea API로 바꾼 버전이다.
-
-    [PATCH-3] GitHub용 _install_or_update와 동일하게 _validate_plugin_source()
-    정적 검증을 통과한 경우에만 폴더를 교체한다."""
+    전체 재다운로드 방식이며 다운로드/조회 경로만 Gitea API를 쓴다.
+    반환: (성공 여부, 메시지, 설치 폴더명)"""
     _validate_plugin_id(repo)
 
     desc_info = _gitea_fetch_description_info(host, owner, repo, gitea_cfg, scheme)
     default_branch = desc_info.get("default_branch")
+    source_url = "%s://%s/%s/%s" % (scheme, host, owner, repo)
 
     last_error = None
     for branch in _candidate_branches(default_branch):
@@ -2490,51 +2876,17 @@ def _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme="https"):
             _extract_zip_safe(zip_path, extract_dir)
             src_root = _find_extracted_root(extract_dir)
 
-            module_py = _find_module_file(src_root, repo)
-            if not module_py:
+            if not _find_module_file(src_root, repo) and not _find_module_file(src_root, _read_class_id(src_root) or repo):
                 return False, (
                     "'%s.py'(또는 '%s.py') 파일을 찾지 못했습니다 — BookOasis 플러그인 "
-                    "저장소가 맞는지, 메인 모듈 파일명이 저장소 이름과 같은지(하이픈은 "
-                    "언더스코어로 바꿔서도 확인함) 확인해주세요." % (repo, repo.replace("-", "_"))
-                )
+                    "저장소가 맞는지, 메인 모듈 파일명이 저장소 이름과 같은지 확인해주세요."
+                    % (repo, repo.replace("-", "_"))
+                ), None
 
-            # [PATCH-3] GitHub 경로와 동일하게, 폴더를 교체하기 전에 정적 검증을
-            # 통과해야 한다. Gitea 서버 역시 운영자가 사전 검수한 목록이 아니라
-            # URL을 직접 입력해 설치하는 경로이므로 검증 없이 신뢰해서는 안 된다.
-            source_ok, source_checks = _validate_plugin_source(src_root, repo)
-            if not source_ok:
-                failed_items = [
-                    "- %s: %s" % (c["name"], c["detail"])
-                    for c in source_checks if not c.get("ok")
-                ]
-                return False, (
-                    "플러그인 검증 실패 — 설치를 중단했습니다(기존 설치는 변경되지 않음):\n"
-                    + "\n".join(failed_items)
-                )
-
-            base_dir = _plugins_metadata_dir()
-            target_dir = _safe_join(base_dir, repo)
-
-            if os.path.isdir(target_dir):
-                shutil.rmtree(target_dir)
-            shutil.copytree(src_root, target_dir)
-
-            key = "gitea:%s/%s/%s" % (host, owner, repo)
-            _DESC_CACHE.pop(key, None)
-            _VERSION_CACHE.pop(key, None)
-            _save_disk_cache()
-            _try_hot_reload(repo)
-
-            new_version = _local_version(repo) or "?"
-            passed = [c["name"] for c in source_checks if c.get("ok") and not c.get("warn")]
-            warns = [c["detail"] for c in source_checks if c.get("warn")]
-            result_msg = (
-                "'%s' 설치/업데이트 완료 (Gitea %s, 브랜치: %s, 버전: v%s, 저장소 전체 교체, "
-                "검증 통과: %s)" % (repo, host, branch, new_version, ", ".join(passed))
+            return _install_from_source_dir(
+                src_root, repo, existing_folder, source_url, db_type,
+                "Gitea %s, 브랜치 %s" % (host, branch),
             )
-            if warns:
-                result_msg += " 경고: " + "; ".join(warns)
-            return True, result_msg
         except urllib.error.HTTPError as exc:
             hint = " " + _gitea_auth_error_hint(gitea_cfg) if exc.code in (401, 403) else ""
             last_error = "HTTP %s%s" % (exc.code, hint)
@@ -2543,20 +2895,16 @@ def _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme="https"):
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    return False, "설치/업데이트 실패: %s" % (last_error or "알 수 없는 오류")
+    return False, "설치/업데이트 실패: %s" % (last_error or "알 수 없는 오류"), None
 
 
-def _install_or_update_from_url(url, token, gitea_tokens=None):
+def _install_or_update_from_url(url, token, gitea_tokens=None, db_type="general", existing_folder=None):
     """URL의 호스트를 보고 GitHub/Gitea 중 맞는 설치 엔진으로 위임한다.
     URL에 https://아이디:비밀번호@host/... (또는 https://토큰@host/...) 형식으로
     자격증명이 직접 포함돼 있으면 그 값으로 인증한다. 없으면 gitea_tokens(설정에
     등록해둔 {호스트: 토큰})에서 이 호스트에 맞는 토큰을 찾아 폴백으로 쓴다.
-    서버별 전역 설정을 강제하지 않으므로 몇 개의 Gitea 서버든, GitHub 계정이든
-    URL 하나로 자유롭게 설치할 수 있다. 설치에 성공하면 **자격증명이 담긴 URL
-    그대로**(정제하지 않고) github.txt에 기록해, 이후 대시보드에서 업데이트를
-    확인할 때도 같은 자격증명을 계속 재사용한다(URL 자체에 자격증명이 없고
-    GITEA_TOKENS로만 인증했다면, 등록되는 URL도 자격증명 없는 그대로다 —
-    다음 조회 때도 동일하게 GITEA_TOKENS로 폴백되므로 문제 없다)."""
+    설치에 성공하면 자격증명이 담긴 URL 그대로 github.txt에 **실제 설치 폴더명**을
+    키로 기록한다(파일 권한 600). existing_folder는 업데이트 대상 폴더다."""
     clean_url, url_username, url_password = _extract_url_credentials(url)
     host, owner, repo = _parse_repo_url(clean_url)
     if not host or not owner or not repo:
@@ -2564,16 +2912,18 @@ def _install_or_update_from_url(url, token, gitea_tokens=None):
 
     if _is_github_host(host):
         effective_token = url_password or url_username or token
-        ok, msg = _install_or_update(owner, repo, effective_token)
+        ok, msg, folder = _install_or_update(
+            owner, repo, effective_token, db_type=db_type, existing_folder=existing_folder
+        )
     else:
         gitea_cfg = _effective_gitea_cfg(url, gitea_tokens)
         scheme = _url_scheme(clean_url)  # http로 준 주소는 http로 그대로 설치(523 방지)
-        ok, msg = _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme)
+        ok, msg, folder = _install_or_update_gitea(
+            host, owner, repo, gitea_cfg, scheme, db_type=db_type, existing_folder=existing_folder
+        )
 
-    if ok:
-        # 다음 업데이트 확인 때도 같은 인증 정보를 쓸 수 있도록, 자격증명이
-        # 담긴 원본 URL 그대로 레지스트리에 기록한다(설치에 쓴 실제 URL 기준).
-        _remember_repo_install(url)
+    if ok and folder:
+        _remember_repo_install(url, plugin_id=folder)
     return ok, msg
 
 
@@ -2677,6 +3027,29 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         return {"success": True, "items": []}
 
     # ------------------------------------------------------------------
+    # [PATCH-4] 범용 플러그인 RPC — API 문서의 "도서 컨텍스트 메뉴 플러그인 액션 API"는
+    # plugin_id + action_id + context를 그대로 run_context_menu_action()에 넘겨주므로,
+    # 설정/관리 화면의 백엔드 호출 채널로 쓰는 것이 문서화된 표준 패턴이다
+    # (예전의 /api/media/books/0/apply-metadata 우회 호출을 대체).
+    # 실제 도서 우클릭 메뉴에는 아무 항목도 노출하지 않는다.
+    # 이 라우트는 @login_required라 관리자 확인은 _dispatch_apply가 직접 한다.
+    # ------------------------------------------------------------------
+    def get_context_menu_items(self, db_type, context):
+        return []
+
+    def run_context_menu_action(self, db_type, action_id, context):
+        item_data = dict(context) if isinstance(context, dict) else {}
+        item_data["action"] = action_id
+        try:
+            ok, payload = self._dispatch_apply(db_type, 0, item_data)
+        except Exception as exc:
+            return {"success": False, "error": "예상치 못한 오류가 발생했습니다: %s" % exc}
+        if ok:
+            # get_config는 dict를 돌려준다 — 프런트는 예전과 같이 message 필드로 받는다
+            return {"success": True, "message": payload}
+        return {"success": False, "error": payload}
+
+    # ------------------------------------------------------------------
     # 카드의 버튼들이 호출하는 액션 엔드포인트.
     # item_data = {
     #   "action": "install_git" | "update" | "toggle" | "delete",
@@ -2684,9 +3057,9 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
     # }
     # ------------------------------------------------------------------
     def apply(self, db_type, book_id, item_data):
-        """모든 액션의 진입점. 실제 처리는 _dispatch_apply에 위임하고, 여기서는
-        예상치 못한 예외가 그대로 새어나가 코어/프록시 단에서 정체불명의 500으로
-        보이지 않도록 마지막 안전망 역할만 한다."""
+        """하위 호환용 진입점(구버전 script.js 또는 컨텍스트 메뉴 RPC가 없는 코어).
+        새 프런트는 run_context_menu_action()을 쓴다. 실제 처리는 _dispatch_apply에
+        위임하고, 예상치 못한 예외가 500으로 새어나가지 않도록 안전망 역할만 한다."""
         try:
             return self._dispatch_apply(db_type, book_id, item_data)
         except Exception as exc:
@@ -2699,12 +3072,11 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         action = str(item_data.get("action", "")).strip().lower()
         plugin_id = str(item_data.get("plugin_id", "")).strip()
 
-        # 설치/업데이트/삭제/활성화·비활성화/설정 조회는 관리자만 할 수 있게 한다.
-        # 화면(설정 버튼)에서는 이미 숨겨두지만, API를 직접 호출하는 우회까지
-        # 막기 위해 백엔드에서도 동일하게 확인한다(api/auth.py의 admin_required와
-        # 같은 기준). refresh_list는 카드 목록만 새로고침하는 무해한 동작이라
-        # 제외한다.
-        if action in ("install_git", "update", "toggle", "delete", "get_config", "install_zip", "update_url", "unregister", "reset_cache") and not _is_admin_session():
+        # [PATCH-4] 모든 액션은 관리자 전용이다. 새 RPC 경로는 @login_required라서
+        # 라우트가 관리자 여부를 걸러주지 않으므로 여기서 반드시 확인한다(fail-closed).
+        # refresh_list도 포함한다 — 캐시를 비우면 GitHub API 재조회가 일어나므로,
+        # 비관리자가 반복 호출해 서버의 rate limit을 소진시키지 못하게 한다.
+        if not _is_admin_session():
             return False, "관리자만 사용할 수 있는 기능입니다."
 
         if action == "install_zip":
@@ -2724,12 +3096,16 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             # 경우에 대비한 더 확실한(authoritative) 조회 경로다.
             if not plugin_id:
                 return False, "plugin_id가 필요합니다."
+            # 설정 키는 클래스 id 기준이다 — 폴더명이 넘어오면 클래스 id로 바꾼다
+            config_id = plugin_id
+            if _PLUGIN_ID_RE.match(plugin_id) and _is_installed(plugin_id):
+                config_id = _class_id_for_folder(plugin_id)
             try:
                 gateway = self.get_db_gateway(db_type)
             except Exception as exc:
                 return False, "DB 게이트웨이를 가져오지 못했습니다: %s" % exc
             try:
-                raw = gateway.get_setting("PLUGIN_CONFIG_%s" % plugin_id, default=None)
+                raw = gateway.get_setting("PLUGIN_CONFIG_%s" % config_id, default=None)
             except Exception as exc:
                 return False, "설정 조회 중 오류가 발생했습니다: %s" % exc
 
@@ -2759,6 +3135,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             _TOPIC_CACHE.clear()
             _VERSION_CACHE.clear()
             _DESC_CACHE.clear()
+            _clear_shared_cache(self)
             _save_disk_cache()
             return True, "플러그인 목록과 버전 정보를 새로 불러옵니다."
 
@@ -2767,6 +3144,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             # 남는 등) 쓰는 더 강한 초기화 — 메모리 캐시만 비우는 refresh_list와
             # 달리 .cache.json 파일 자체를 지운다. 관리자 전용(위 admin 체크에
             # 이미 포함되어 있음).
+            _clear_shared_cache(self)
             return _reset_disk_cache()
 
         if action == "toggle":
@@ -2816,6 +3194,9 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 )
                 if match:
                     git_url = match
+                elif plugin_id == "plugin_board":
+                    # plugin_board 자신은 레지스트리에 없어도 공식 저장소로 업데이트한다
+                    git_url = SELF_REPO_URL
 
             if not git_url:
                 return False, (
@@ -2823,7 +3204,13 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                     "'Git 주소 변경'으로 새 주소를 먼저 등록한 뒤 다시 시도해주세요."
                 )
 
-            return _install_or_update_from_url(git_url, token, gitea_tokens=gitea_tokens)
+            # 업데이트는 카드의 plugin_id(=설치 폴더)를 그대로 교체 대상으로 지정한다.
+            # 신규 설치는 폴더를 _plan_install이 클래스 id 기준으로 정한다.
+            existing_folder = plugin_id if (action == "update" and plugin_id) else None
+            return _install_or_update_from_url(
+                git_url, token, gitea_tokens=gitea_tokens, db_type=db_type,
+                existing_folder=existing_folder,
+            )
 
         return False, "지원하지 않는 액션입니다: %s" % action
 
@@ -2840,6 +3227,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         gitea_tokens = _parse_gitea_tokens_cfg(cfg.get("GITEA_TOKENS"))
         auto_update_enabled = bool(cfg.get("AUTO_UPDATE_ENABLED"))
         is_admin = _is_admin_session()
+        _load_shared_cache(self)  # 다른 워커가 채운 캐시를 먼저 병합(Redis 미구성 시 무동작)
 
         try:
             gateway = self.get_db_gateway(db_type)
@@ -2847,10 +3235,12 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             gateway = None
 
         def is_enabled_fn(plugin_id):
+            # plugin_id는 설치 폴더명 — 코어의 활성화 키는 클래스 id 기준이다
             if gateway is None:
                 return True
             try:
-                raw = gateway.get_setting("PLUGIN_ENABLED_%s" % plugin_id, default="1")
+                class_id = _class_id_for_folder(plugin_id) if _is_installed(plugin_id) else plugin_id
+                raw = gateway.get_setting("PLUGIN_ENABLED_%s" % class_id, default="1")
                 if isinstance(raw, dict):
                     raw = raw.get("value", "1")
                 return str(raw) == "1"
@@ -3115,6 +3505,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             curated_ids | discovered_ids | seen_registry_ids, is_enabled_fn
         )
         _save_disk_cache()  # 이번 요청에서 새로 채워진 캐시를 재시작에도 살아남도록 저장
+        _save_shared_cache(self)  # 다른 워커와 공유
 
         all_items = [self_item] + discovered_items + registry_items + local_items
         if catalog_topic:
@@ -3132,7 +3523,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         return {
             "success": True,
             "items": all_items,
-            "auto_update_enabled": auto_update_enabled,
+            "auto_update_enabled": auto_update_enabled and is_admin,
             "is_admin": is_admin,
             "topic_search_at": topic_search_at,  # 초 단위 epoch, 검색 이력이 전혀 없으면 None
             "plugin_board_version": self_item.get("installed_version"),  # 헤더 제목 옆 버전 표기용

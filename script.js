@@ -10,7 +10,7 @@
   const ownerFilterWrapEl = document.getElementById("pb-owner-filter-wrap");
 
   let allItems = [];
-  let isAdmin = true; // 서버 응답을 받기 전 기본값 — 응답에서 갱신됨
+  let isAdmin = false; // 서버 응답을 받기 전 기본값(fail-closed) — 응답에서 갱신됨
   let activeFilter = "all";
   let activeOwner = "all"; // 제작자별 필터 — activeFilter(분류/설치여부)와 별개 축, AND로 결합
   let catalogTopic = ""; // 서버 응답의 catalog_topic — 비어있으면 "카탈로그" 탭을 숨긴다
@@ -137,7 +137,7 @@
     } else if (item.type === "tab") {
       markup = TYPE_ICON_TAB;
       modifier = "pb-card-icon-tab";
-    } else if (item.type === "widget") {
+    } else if (item.type === "home" || item.type === "desk" || item.type === "widget") {
       markup = TYPE_ICON_WIDGET;
       modifier = "pb-card-icon-widget";
     }
@@ -147,24 +147,44 @@
   }
 
   // ------------------------------------------------------------------
-  // 신규설치/업데이트/활성화·비활성화/삭제 액션 — 전부 plugin_board 자신의
-  // apply()를 호출한다 (source: "plugin_board"). 외부 플러그인 불필요.
+  // 신규설치/업데이트/활성화·비활성화/삭제 액션.
+  // [PATCH-4] API 문서가 범용 플러그인 RPC로 인정한 컨텍스트 메뉴 액션 경로
+  // (plugin_id + action_id + context → run_context_menu_action)를 쓴다. 이 경로가
+  // 없는 구버전 코어(404/405)에서만 예전 apply-metadata 우회 호출로 폴백한다.
   // ------------------------------------------------------------------
+  const RPC_URL = "/api/media/context-menu/book/plugins/action";
+  const LEGACY_RPC_URL = "/api/media/books/0/apply-metadata";
+  let useLegacyRpc = false;
+
+  function rpcRequest(dbType, actionData, signal) {
+    if (useLegacyRpc) {
+      return fetch(LEGACY_RPC_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: dbType, source: PLUGIN_ID, item_data: actionData }),
+        signal,
+      });
+    }
+    const { action, ...context } = actionData;
+    return fetch(RPC_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: dbType, plugin_id: PLUGIN_ID, action_id: action, context }),
+      signal,
+    });
+  }
+
   async function callPluginBoardAction(dbType, actionData, timeoutMs = 60000) {
     let res;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      res = await fetch("/api/media/books/0/apply-metadata", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: dbType,
-          source: PLUGIN_ID,
-          item_data: actionData,
-        }),
-        signal: controller.signal,
-      });
+      res = await rpcRequest(dbType, actionData, controller.signal);
+      if (!useLegacyRpc && (res.status === 404 || res.status === 405)) {
+        console.warn(`${LOG_PREFIX} 컨텍스트 메뉴 RPC 경로가 없어 구버전 경로로 폴백합니다.`);
+        useLegacyRpc = true;
+        res = await rpcRequest(dbType, actionData, controller.signal);
+      }
     } catch (networkErr) {
       if (networkErr && networkErr.name === "AbortError") {
         // 브라우저가 응답을 아예 못 받고 있는 상태 — openresty의 기본 500 페이지처럼
@@ -263,7 +283,11 @@
     if (item.installed && !item.has_update) {
       const badge = document.createElement("span");
       badge.className = "pb-installed-badge";
-      badge.innerHTML = `${CHECK_ICON}설치됨${item.installed_version ? " · v" + item.installed_version : ""}`;
+      // 버전 문자열은 외부 저장소의 VERSION 파일 값이라 텍스트 노드로만 넣는다(XSS 방지)
+      badge.innerHTML = CHECK_ICON;
+      badge.appendChild(
+        document.createTextNode(`설치됨${item.installed_version ? " · v" + item.installed_version : ""}`)
+      );
       return badge;
     }
 
@@ -526,7 +550,9 @@
     wrap.className = "pb-field";
 
     const labelEl = document.createElement("label");
-    labelEl.innerHTML = `${label} ${requiredMark}`;
+    // 라벨은 다른 플러그인의 config_schema 값이라 텍스트로 넣고, 필수 표시만 마크업으로 붙인다
+    labelEl.textContent = `${label} `;
+    if (required) labelEl.insertAdjacentHTML("beforeend", requiredMark);
     wrap.appendChild(labelEl);
 
     if (key === "GITEA_TOKENS") {
@@ -714,7 +740,10 @@
       if (!data || data.success === false || !data.plugins) {
         throw new Error((data && data.error) || "플러그인 설정 정보를 가져오지 못했습니다.");
       }
-      const p = data.plugins.find((x) => x.id === item.id);
+      // 코어는 클래스 id로 플러그인을 식별한다 — 설치 폴더명(item.id)과 다를 수 있다
+      const classId = item.class_id || item.id;
+      const p =
+        data.plugins.find((x) => x.id === classId) || data.plugins.find((x) => x.id === item.id);
       if (!p) throw new Error("선택한 플러그인 정보를 찾을 수 없습니다.");
 
       const schema = p.config_schema || [];
@@ -760,7 +789,7 @@
       saveBtn.hidden = false;
       const form = document.createElement("form");
       form.id = "pb-settings-form";
-      form.dataset.pluginId = item.id;
+      form.dataset.pluginId = p.id; // save-config는 클래스 id 기준
       schema.forEach((field) => form.appendChild(renderSchemaField(field, config[field.key])));
       bodyEl.appendChild(form);
     } catch (err) {
@@ -788,7 +817,7 @@
       }
       const pluginId = form.dataset.pluginId;
       const config = {};
-      form.querySelectorAll("input, select").forEach((input) => {
+      form.querySelectorAll("input, select, textarea").forEach((input) => {
         if (!input.name) return;
         config[input.name] = input.type === "checkbox" ? !!input.checked : String(input.value ?? "").trim();
       });
@@ -1103,6 +1132,14 @@
         discTag.textContent = "토픽 발견 (미설치)";
       }
       tagsWrap.appendChild(discTag);
+    }
+
+    if (item.admin_only) {
+      const adminTag = document.createElement("span");
+      adminTag.className = "pb-tag pb-tag-local";
+      adminTag.title = "admin_only로 선언된 플러그인 — 관리자에게만 표시됩니다.";
+      adminTag.textContent = "관리자 전용";
+      tagsWrap.appendChild(adminTag);
     }
 
     if (item.user_registered) {
@@ -1425,7 +1462,7 @@
       }
 
       allItems = Array.isArray(json.items) ? json.items : [];
-      isAdmin = json.is_admin !== false; // 명시적으로 false일 때만 비관리자로 간주
+      isAdmin = json.is_admin === true; // 명시적으로 true일 때만 관리자로 간주(fail-closed)
       catalogTopic = typeof json.catalog_topic === "string" ? json.catalog_topic : "";
 
       const gitPanel = document.getElementById("pb-git-panel");
@@ -1434,6 +1471,8 @@
       if (zipPanel) zipPanel.hidden = !isAdmin;
       const resetCacheBtn = document.getElementById("pb-reset-cache-btn");
       if (resetCacheBtn) resetCacheBtn.hidden = !isAdmin; // 캐시 초기화도 관리자 전용
+      const refreshBtn = document.getElementById("pb-refresh-list-btn");
+      if (refreshBtn) refreshBtn.hidden = !isAdmin; // 캐시 비우기(=GitHub 재조회)도 관리자 전용
       statusEl.hidden = true;
       gridEl.hidden = false;
       buildFiltersAndTally();
@@ -1447,7 +1486,7 @@
           (errorCount ? ` (GitHub 조회 실패 ${errorCount}건)` : "")
       );
 
-      if (json.auto_update_enabled) {
+      if (json.auto_update_enabled && isAdmin) {
         runAutoUpdates();
       }
     } catch (err) {
@@ -1694,7 +1733,7 @@
 
   // ------------------------------------------------------------------
   // "캐시 초기화" 버튼 — 목록 새로고침(메모리 캐시만 비움)보다 더 강한 초기화.
-  // .cache.json 파일 자체를 삭제한다. 목록에 이상한/중복된 항목이 계속 남아
+  // 캐시 파일(plugins/data/plugin_board/cache.json)과 공유 캐시를 삭제한다. 목록에 이상한/중복된 항목이 계속 남아
   // 있는 등 캐시 문제로 의심될 때, 재시작 없이 바로 완전히 새로 불러오는 용도.
   // ------------------------------------------------------------------
   function wireResetCacheButton() {
@@ -1704,7 +1743,7 @@
     btn.addEventListener("click", async () => {
       if (
         !window.confirm(
-          "캐시 파일(.cache.json)을 삭제하고 완전히 새로 불러올까요?\n" +
+          "캐시 파일과 공유 캐시를 삭제하고 완전히 새로 불러올까요?\n" +
             "설치된 플러그인에는 영향이 없으며, GitHub 정보만 다시 조회합니다."
         )
       ) {
