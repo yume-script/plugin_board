@@ -1914,11 +1914,18 @@
   // 마지막으로 GitHub Topics를 실제로 검색한 시각을 헤더에 표시한다. 캐시가
   // 살아있어 재검색을 안 한 경우에도 이전 검색 시각이 그대로 남아있으므로,
   // "지금 이 카드 목록이 몇 분 전 정보인지"를 사용자가 가늠할 수 있게 한다.
-  function showTopicSearchTime(epochSeconds) {
+  function showTopicSearchTime(epochSeconds, topics) {
     const el = document.getElementById("pb-topic-search-time");
     if (!el) return;
+    // [PATCH-8] 설정한 추가 발견/카탈로그 토픽이 실제로 검색에 들어갔는지 화면에서 확인할 수 있게 한다
+    const topicsText = Array.isArray(topics) && topics.length ? ` · 검색 토픽: ${topics.join(", ")}` : "";
     if (!epochSeconds) {
-      el.hidden = true;
+      if (topicsText) {
+        el.textContent = `🔍${topicsText}`;
+        el.hidden = false;
+      } else {
+        el.hidden = true;
+      }
       return;
     }
     const date = new Date(epochSeconds * 1000);
@@ -1935,7 +1942,7 @@
 
     const hh = String(date.getHours()).padStart(2, "0");
     const mm = String(date.getMinutes()).padStart(2, "0");
-    el.textContent = `🔍 토픽 검색: ${relative} (${hh}:${mm} 기준, 최대 1시간마다 자동 갱신)`;
+    el.textContent = `🔍 토픽 검색: ${relative} (${hh}:${mm} 기준, 최대 1시간마다 자동 갱신)${topicsText}`;
     el.hidden = false;
   }
 
@@ -1968,7 +1975,7 @@
       gridEl.hidden = false;
       buildFiltersAndTally();
       render();
-      showTopicSearchTime(json.topic_search_at);
+      showTopicSearchTime(json.topic_search_at, json.searched_topics);
       showTitleVersion(json.plugin_board_version);
 
       const errorCount = allItems.filter((it) => it.error).length;

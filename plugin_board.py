@@ -59,6 +59,12 @@ _install_or_update_gitea)는 원래 "저장소 이름과 같은 .py 파일이 �
   서버별 "소유자" 목록(설정) + 이 서버에서 설치한 적 있는 소유자의 저장소를 모두 조회해
   VERSION 파일("plugin version")이 있는 저장소를 플러그인으로 인식한다(비공개 포함).
 - 발견 카드 개수 상한을 GitHub 토픽 결과(30개)에만 적용하고, Gitea는 서버당 100개로 분리.
+[PATCH-8] 토픽 검색 결과 누락 수정:
+- 기본 토픽만으로 30개 상한을 넘으면서, 추가 발견 토픽·카탈로그 토픽 결과가 병렬 도착 순서에
+  따라 잘려 나가던 문제. VERSION 파일 필터를 통과한 저장소는 노이즈가 아니므로 상한을 200개로
+  올리고, 결과 순서를 설정 순서(카탈로그 → 추가 발견 → 기본 토픽)로 고정했다.
+- GitHub Search API를 per_page=100, 토픽당 최대 3페이지까지 조회(50개 넘는 토픽 대비).
+- 응답에 실제로 검색한 토픽 목록(searched_topics)을 실어 화면에 표시한다.
 
 가이드 문서(플러그인 개발 가이드 §3, §6)의 계약을 따른다:
 - 필수: search(), apply()
@@ -123,7 +129,10 @@ DISCOVERY_TOPICS = ["bookoasis-plugin"]
 #   1) VERSION 파일을 실제로 찾은(=BookOasis 플러그인일 가능성이 높은) 저장소만
 #      카드로 인정 — 이미 설치되어 있는 저장소는 예외적으로 항상 허용
 #   2) 그래도 남는 개수를 아래 상한으로 한 번 더 자른다
-_MAX_DISCOVERED_ITEMS = 30
+# [PATCH-8] 예전 상한(30)은 기본 토픽 결과만으로도 넘쳐, 설정한 추가/카탈로그 토픽 결과가
+# 잘려 나갔다. 카드는 VERSION 파일이 확인된 저장소만 되므로 상한은 안전장치로만 둔다.
+_MAX_DISCOVERED_ITEMS = 200
+_GITHUB_SEARCH_PAGES = 3  # 토픽당 최대 3페이지(100개씩)
 # [PATCH-7] Gitea 서버는 VERSION 파일이 있는 저장소만 카드가 되므로(소유자 스캔 포함) 노이즈가
 # 적다. GitHub 토픽 상한(30)에 섞여 잘리지 않도록 서버별로 따로 센다.
 _MAX_GITEA_ITEMS_PER_HOST = 100
@@ -1432,22 +1441,33 @@ def _fetch_repos_by_topic(topics, token):
 
     def _fetch_one(topic):
         query = urllib.parse.quote("topic:%s" % topic, safe="")
-        url = "https://api.github.com/search/repositories?q=%s&per_page=50" % query
-        data = _http_get_json(url, token)
-        return data.get("items", []) or []
+        items = []
+        for page in range(1, _GITHUB_SEARCH_PAGES + 1):
+            url = "https://api.github.com/search/repositories?q=%s&per_page=100&page=%d" % (query, page)
+            data = _http_get_json(url, token)
+            batch = data.get("items", []) or []
+            items.extend(batch)
+            if len(batch) < 100 or len(items) >= int(data.get("total_count") or 0):
+                break
+        return items
 
-    seen = {}
+    per_topic = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(topics))) as executor:
         future_map = {executor.submit(_fetch_one, topic): topic for topic in topics}
         for future in concurrent.futures.as_completed(future_map):
             try:
-                items = future.result()
+                per_topic[future_map[future]] = future.result()
             except Exception:
                 continue  # 토픽 하나가 실패해도 나머지 토픽 검색 결과는 계속 반영한다
-            for repo_json in items:
-                full_name = repo_json.get("full_name")
-                if full_name and full_name not in seen:
-                    seen[full_name] = repo_json
+
+    # [PATCH-8] 병렬 도착 순서가 아니라 호출부가 준 토픽 순서대로 합친다 — 결과 순서가
+    # 요청마다 흔들리지 않고, 설정한 토픽(카탈로그/추가 발견)이 앞에 온다.
+    seen = {}
+    for topic in topics:
+        for repo_json in per_topic.get(topic) or []:
+            full_name = repo_json.get("full_name")
+            if full_name and full_name not in seen:
+                seen[full_name] = repo_json
 
     results = list(seen.values())
     _TOPIC_CACHE[cache_key] = (now, results)
@@ -3885,7 +3905,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             cfg = self.get_plugin_config(db_type, default={})
             extra_topics = [t.strip() for t in str(cfg.get("EXTRA_DISCOVERY_TOPICS") or "").split(",") if t.strip()]
             catalog_topic = str(cfg.get("CATALOG_TOPIC") or "").strip()
-            topics = list(dict.fromkeys(DISCOVERY_TOPICS + extra_topics + ([catalog_topic] if catalog_topic else [])))
+            topics = list(dict.fromkeys(([catalog_topic] if catalog_topic else []) + extra_topics + DISCOVERY_TOPICS))
             return True, _test_gitea_server(item_data, _parse_gitea_tokens_cfg(cfg.get("GITEA_TOKENS")), topics)
 
         if action in ("install_git", "update", "install_zip"):
@@ -4112,7 +4132,8 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         catalog_topic = str(cfg.get("CATALOG_TOPIC") or "").strip()
         # 카탈로그 토픽은 검색 대상에도 포함시켜야, 기본 발견 토픽
         # (bookoasis-plugin)이 없이 카탈로그 토픽만 달아둔 저장소도 발견된다.
-        all_topics = list(dict.fromkeys(DISCOVERY_TOPICS + extra_topics + ([catalog_topic] if catalog_topic else [])))
+        # [PATCH-8] 설정한 토픽을 앞에 둔다(카탈로그 → 추가 발견 → 기본). 결과 병합 순서도 이를 따른다.
+        all_topics = list(dict.fromkeys(([catalog_topic] if catalog_topic else []) + extra_topics + DISCOVERY_TOPICS))
 
         # Gitea 토픽 검색 대상 서버 = GITEA_TOKENS에 등록된 서버 + 이미 Git
         # URL로 설치/등록해둔 저장소(github.txt)의 호스트. 후자는 GITEA_TOKENS에
@@ -4217,7 +4238,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 if not item["installed"] and item["version_label"] == "—":
                     continue
                 if len(discovered_items) >= _MAX_DISCOVERED_ITEMS:
-                    break  # GitHub 토픽 결과만의 상한(흔한 토픽으로 무관한 저장소가 쏟아지는 것 방지)
+                    break  # 안전장치 상한 — VERSION 필터를 통과한 저장소만 세므로 정상 목록은 잘리지 않는다
                 seen_discovered_ids.add(item["id"])
                 discovered_items.append(item)
         else:
@@ -4443,4 +4464,5 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             "topic_search_at": topic_search_at,  # 초 단위 epoch, 검색 이력이 전혀 없으면 None
             "plugin_board_version": self_item.get("installed_version"),  # 헤더 제목 옆 버전 표기용
             "catalog_topic": catalog_topic,  # 빈 문자열이면 프런트에서 "카탈로그" 탭을 숨긴다
+            "searched_topics": all_topics,  # [PATCH-8] 실제로 검색한 토픽(설정 반영 확인용)
         }
