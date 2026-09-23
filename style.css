@@ -1280,3 +1280,189 @@
 .pb-root [hidden] {
   display: none !important;
 }
+
+/* ------------------------------------------------------------------
+   [PATCH-5] 이력 모달 (변경 내용 / 이 서버 기록)
+   ------------------------------------------------------------------ */
+/* 선(stroke) 아이콘은 버튼의 fill: currentColor 규칙에서 제외 */
+.pb-refresh-icon svg[fill="none"],
+.pb-link svg[fill="none"] {
+  fill: none;
+}
+
+.pb-modal-wide {
+  max-width: 760px;
+}
+
+.pb-hist-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 22px 0;
+  border-bottom: 1px solid var(--app-border-light, var(--app-border));
+}
+.pb-hist-tab {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--app-text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.pb-hist-tab:hover {
+  color: var(--app-text-primary);
+}
+.pb-hist-tab.active {
+  color: var(--app-accent);
+  border-bottom-color: var(--app-accent);
+}
+
+.pb-hist-info {
+  margin: 0;
+  font-size: 12px;
+  color: var(--app-text-muted);
+}
+.pb-hist-range {
+  color: var(--app-text-secondary, var(--app-text-primary));
+}
+.pb-hist-repo-link {
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--app-accent);
+  text-decoration: none;
+}
+.pb-hist-repo-link:hover {
+  text-decoration: underline;
+}
+
+.pb-changelog-entry {
+  border: 1px solid var(--app-border-light, var(--app-border));
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--app-bg-main, transparent);
+}
+.pb-changelog-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  color: var(--app-text-primary);
+  font-size: 13.5px;
+}
+.pb-changelog-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--app-text-secondary, var(--app-text-primary));
+}
+.pb-changelog-raw {
+  max-height: 50vh;
+  overflow: auto;
+  border: 1px solid var(--app-border-light, var(--app-border));
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.pb-hist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pb-hist-entry {
+  border: 1px solid var(--app-border-light, var(--app-border));
+  border-left: 3px solid color-mix(in srgb, #4f9d76 70%, var(--app-text-primary));
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.pb-hist-result-failed {
+  border-left-color: color-mix(in srgb, #c0554f 80%, var(--app-text-primary));
+}
+.pb-hist-result-rolled_back {
+  border-left-color: color-mix(in srgb, #b9862f 85%, var(--app-text-primary));
+}
+.pb-hist-entry-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--app-text-primary);
+}
+.pb-hist-time {
+  font-size: 11.5px;
+  color: var(--app-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.pb-hist-plugin {
+  font-weight: 700;
+}
+.pb-hist-action {
+  font-weight: 600;
+}
+.pb-hist-badge {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.pb-hist-badge-success {
+  color: color-mix(in srgb, #4f9d76 88%, var(--app-text-primary));
+  background: color-mix(in srgb, #4f9d76 14%, transparent);
+  border-color: color-mix(in srgb, #4f9d76 40%, transparent);
+}
+.pb-hist-badge-failed {
+  color: color-mix(in srgb, #c0554f 88%, var(--app-text-primary));
+  background: color-mix(in srgb, #c0554f 14%, transparent);
+  border-color: color-mix(in srgb, #c0554f 40%, transparent);
+}
+.pb-hist-badge-rolled_back {
+  color: color-mix(in srgb, #b9862f 90%, var(--app-text-primary));
+  background: color-mix(in srgb, #b9862f 14%, transparent);
+  border-color: color-mix(in srgb, #b9862f 45%, transparent);
+}
+.pb-hist-badge-auto {
+  color: var(--app-accent);
+  background: color-mix(in srgb, var(--app-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--app-accent) 35%, transparent);
+}
+.pb-hist-meta {
+  font-size: 11.5px;
+  color: var(--app-text-muted);
+  word-break: break-all;
+}
+.pb-hist-message {
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--app-text-secondary, var(--app-text-primary));
+}
+.pb-hist-files summary {
+  font-size: 11.5px;
+  color: var(--app-text-muted);
+  cursor: pointer;
+}
+.pb-hist-files ul {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  font-size: 11.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+  overflow-x: auto;
+}
+.pb-hist-file-add {
+  color: color-mix(in srgb, #4f9d76 88%, var(--app-text-primary));
+}
+.pb-hist-file-del {
+  color: color-mix(in srgb, #c0554f 88%, var(--app-text-primary));
+}
+.pb-hist-file-mod {
+  color: var(--app-text-secondary, var(--app-text-primary));
+}

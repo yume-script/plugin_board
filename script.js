@@ -114,6 +114,10 @@
   const UNLINK_ICON =
     '<svg viewBox="0 0 16 16"><path d="M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14Zm0 1A8 8 0 1 1 8 0a8 8 0 0 1 0 16Z"/><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708Z"/></svg>';
 
+  // lucide "history" — 이력 버튼
+  const HISTORY_ICON =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>';
+
   // 카드 종류별 아이콘 — 직접 그리지 않고 Lucide 아이콘(ISC 라이선스, 자유 재사용
   // 가능)의 실제 path를 그대로 사용한다. 필채우기가 아니라 선(stroke) 기반이라
   // 다른 아이콘들과 속성이 다르다.
@@ -849,6 +853,260 @@
   }
 
   // ------------------------------------------------------------------
+  // [PATCH-5] 이력 모달 — "변경 내용"(저장소 HISTORY.md/CHANGELOG.md 또는 Releases)과
+  // "이 서버 기록"(plugins/data/plugin_board/history.jsonl) 두 탭. item이 null이면
+  // 헤더의 "설치 이력" 버튼으로 연 전체 기록 보기(삭제된 플러그인 포함)다.
+  // 모든 외부 텍스트(changelog 본문, 메시지)는 textContent로만 넣는다.
+  // ------------------------------------------------------------------
+  const HISTORY_ACTION_LABELS = {
+    install: "신규 설치",
+    update: "업데이트",
+    delete: "삭제",
+    enable: "활성화",
+    disable: "비활성화",
+    url_changed: "Git 주소 변경",
+    unregister: "추적 해제",
+  };
+  const HISTORY_RESULT_LABELS = {
+    success: "성공",
+    failed: "실패",
+    rolled_back: "롤백됨",
+  };
+
+  function ensureHistoryModal() {
+    let modal = document.getElementById("pb-history-modal");
+    if (modal) return modal;
+    modal = document.createElement("div");
+    modal.id = "pb-history-modal";
+    modal.className = "pb-modal-overlay";
+    modal.innerHTML = `
+      <div class="pb-modal pb-modal-wide">
+        <div class="pb-modal-head">
+          <h3 id="pb-history-modal-title">이력</h3>
+          <button type="button" class="pb-modal-close" id="pb-history-modal-close">&times;</button>
+        </div>
+        <div class="pb-hist-tabs" id="pb-history-tabs"></div>
+        <div class="pb-modal-body" id="pb-history-modal-body"></div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    const close = () => modal.classList.remove("pb-modal-show");
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) close();
+    });
+    modal.querySelector("#pb-history-modal-close").addEventListener("click", close);
+    return modal;
+  }
+
+  function historyStatus(bodyEl, text, isError) {
+    bodyEl.innerHTML = "";
+    const p = document.createElement("p");
+    p.className = "pb-status" + (isError ? " pb-error" : "");
+    p.style.padding = "24px 0";
+    p.textContent = text;
+    bodyEl.appendChild(p);
+  }
+
+  function formatHistoryTime(epochSeconds) {
+    const d = new Date(Number(epochSeconds) * 1000);
+    if (Number.isNaN(d.getTime())) return "";
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = text;
+    return node;
+  }
+
+  function buildFilesSummary(files) {
+    const counts = (files && files.counts) || {};
+    const total = (counts.added || 0) + (counts.removed || 0) + (counts.modified || 0);
+    if (!total) return null;
+    const details = el("details", "pb-hist-files");
+    const summary = el(
+      "summary",
+      null,
+      `변경 파일: 추가 ${counts.added || 0} · 삭제 ${counts.removed || 0} · 수정 ${counts.modified || 0}`
+    );
+    details.appendChild(summary);
+    const list = el("ul");
+    (files.modified || []).forEach((m) => {
+      const lines = m.added === null || m.added === undefined ? "(바이너리/대용량)" : `+${m.added} −${m.removed}`;
+      list.appendChild(el("li", "pb-hist-file-mod", `수정  ${m.path}  ${lines}`));
+    });
+    (files.added || []).forEach((f) => list.appendChild(el("li", "pb-hist-file-add", `추가  ${f}`)));
+    (files.removed || []).forEach((f) => list.appendChild(el("li", "pb-hist-file-del", `삭제  ${f}`)));
+    if (list.childNodes.length) details.appendChild(list);
+    return details;
+  }
+
+  function renderHistoryEntries(bodyEl, entries, showPluginName) {
+    bodyEl.innerHTML = "";
+    if (!entries.length) {
+      historyStatus(bodyEl, "아직 기록이 없습니다. 이 버전부터 설치·업데이트·삭제 등이 기록됩니다.");
+      return;
+    }
+    const list = el("div", "pb-hist-list");
+    entries.forEach((e) => {
+      const row = el("div", "pb-hist-entry pb-hist-result-" + (e.result || "success"));
+      const head = el("div", "pb-hist-entry-head");
+      head.appendChild(el("span", "pb-hist-time", formatHistoryTime(e.ts)));
+      if (showPluginName) {
+        head.appendChild(el("span", "pb-hist-plugin", e.folder || e.class_id || "(알 수 없음)"));
+      }
+      head.appendChild(el("span", "pb-hist-action", HISTORY_ACTION_LABELS[e.action] || e.action || ""));
+      head.appendChild(
+        el("span", "pb-hist-badge pb-hist-badge-" + (e.result || "success"), HISTORY_RESULT_LABELS[e.result] || e.result || "")
+      );
+      if (e.mode === "auto") head.appendChild(el("span", "pb-hist-badge pb-hist-badge-auto", "자동"));
+      row.appendChild(head);
+
+      const metaParts = [];
+      if (e.from_version || e.to_version) {
+        metaParts.push(
+          e.from_version && e.to_version
+            ? `v${e.from_version} → v${e.to_version}`
+            : e.to_version
+            ? `v${e.to_version}`
+            : `v${e.from_version}`
+        );
+      }
+      if (e.origin) metaParts.push(e.origin);
+      if (e.user) metaParts.push(`by ${e.user}`);
+      if (e.class_id && e.class_id !== e.folder) metaParts.push(`id=${e.class_id}`);
+      if (metaParts.length) row.appendChild(el("div", "pb-hist-meta", metaParts.join("  ·  ")));
+      if (e.message) row.appendChild(el("div", "pb-hist-message", e.message));
+      const files = buildFilesSummary(e.files);
+      if (files) row.appendChild(files);
+      list.appendChild(row);
+    });
+    bodyEl.appendChild(list);
+  }
+
+  function renderChangelog(bodyEl, data, item) {
+    bodyEl.innerHTML = "";
+    const info = el("p", "pb-hist-info");
+    if (data.source === "file") {
+      info.textContent = `출처: 저장소의 ${data.file}`;
+    } else if (data.source === "releases") {
+      info.textContent = "출처: 저장소 릴리즈(Releases)";
+    } else {
+      info.textContent = data.error
+        ? `변경 내용을 불러오지 못했습니다: ${data.error}`
+        : "이 저장소에는 HISTORY.md / CHANGELOG.md / CHANGES.md 파일이나 릴리즈가 없습니다. " +
+          "제작자에게 변경 기록을 남겨달라고 요청해보세요.";
+    }
+    bodyEl.appendChild(info);
+
+    if (data.source !== "none") {
+      let rangeText = "";
+      if (!data.installed_version) {
+        rangeText = "이 서버에 설치되지 않은 플러그인입니다 — 최근 변경 내용을 보여줍니다.";
+      } else if (data.in_range) {
+        rangeText = `설치된 v${data.installed_version} 이후` +
+          (data.remote_version ? ` ~ v${data.remote_version}` : "") + "의 변경 내용입니다.";
+      } else {
+        rangeText = `설치된 v${data.installed_version} 이후의 새 항목이 없어 최근 기록을 참고로 보여줍니다.`;
+      }
+      bodyEl.appendChild(el("p", "pb-hist-info pb-hist-range", rangeText));
+    }
+
+    (data.entries || []).forEach((entry) => {
+      const sec = el("section", "pb-changelog-entry");
+      const head = el("div", "pb-changelog-head");
+      head.appendChild(el("strong", null, entry.title || `v${entry.version}`));
+      if (entry.date) head.appendChild(el("span", "pb-hist-time", String(entry.date).slice(0, 10)));
+      sec.appendChild(head);
+      if (entry.body) sec.appendChild(el("div", "pb-changelog-body", entry.body));
+      bodyEl.appendChild(sec);
+    });
+
+    if (data.raw) {
+      bodyEl.appendChild(
+        el("p", "pb-hist-info", "버전별 제목(## 1.2.3 형식)을 찾지 못해 파일 앞부분을 그대로 보여줍니다.")
+      );
+      bodyEl.appendChild(el("div", "pb-changelog-body pb-changelog-raw", data.raw));
+    }
+
+    if (data.repo_url || (item && item.url)) {
+      const link = el("a", "pb-hist-repo-link", "저장소에서 보기 ↗");
+      link.href = data.repo_url || item.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      bodyEl.appendChild(link);
+    }
+  }
+
+  async function loadHistoryTab(tab, item, bodyEl) {
+    const dbType = getDbType();
+    historyStatus(bodyEl, "불러오는 중…");
+    if (tab === "changelog") {
+      const versionLabel = String(item.version_label || "");
+      const result = await callPluginBoardAction(dbType, {
+        action: "get_changelog",
+        plugin_id: item.installed ? item.id : "",
+        git_url: item.url || "",
+        remote_version: /^v?\d/.test(versionLabel) ? versionLabel.replace(/^v/i, "") : "",
+      });
+      if (!result || !result.success || !result.message || typeof result.message !== "object") {
+        historyStatus(bodyEl, (result && result.error) || "변경 내용을 불러오지 못했습니다.", true);
+        return;
+      }
+      renderChangelog(bodyEl, result.message, item);
+      return;
+    }
+    const result = await callPluginBoardAction(dbType, {
+      action: "get_history",
+      plugin_id: item ? item.id : "",
+      class_id: item ? item.class_id || "" : "",
+      limit: item ? 200 : 500,
+    });
+    if (!result || !result.success || !result.message || typeof result.message !== "object") {
+      historyStatus(bodyEl, (result && result.error) || "이력을 불러오지 못했습니다.", true);
+      return;
+    }
+    renderHistoryEntries(bodyEl, result.message.entries || [], !item);
+  }
+
+  function openHistoryModal(item) {
+    const modal = ensureHistoryModal();
+    const titleEl = modal.querySelector("#pb-history-modal-title");
+    const tabsEl = modal.querySelector("#pb-history-tabs");
+    const bodyEl = modal.querySelector("#pb-history-modal-body");
+
+    titleEl.textContent = item ? `${item.title} (${item.id}) 이력` : "이 서버의 플러그인 설치 이력";
+    tabsEl.innerHTML = "";
+
+    const tabs = item
+      ? [
+          ["changelog", item.has_update ? "업데이트 변경 내용" : "변경 내용"],
+          ["server", "이 서버 기록"],
+        ]
+      : [["server", "전체 기록"]];
+    // 로컬 전용(저장소 주소 없음) 카드는 변경 내용을 가져올 곳이 없으므로 서버 기록부터 보여준다
+    const initial = item && item.installed && !item.has_update && !item.url ? "server" : tabs[0][0];
+
+    const select = (key) => {
+      tabsEl.querySelectorAll(".pb-hist-tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === key));
+      loadHistoryTab(key, item, bodyEl);
+    };
+    tabs.forEach(([key, label]) => {
+      const btn = el("button", "pb-hist-tab", label);
+      btn.type = "button";
+      btn.dataset.tab = key;
+      btn.addEventListener("click", () => select(key));
+      tabsEl.appendChild(btn);
+    });
+    tabsEl.hidden = tabs.length < 2;
+
+    modal.classList.add("pb-modal-show");
+    select(initial);
+  }
+
+  // ------------------------------------------------------------------
   // 관리 행 — 활성화/비활성화 스위치 + 환경설정(gear) + 삭제(trash).
   // 이미 설치된 카드에만 표시된다.
   // ------------------------------------------------------------------
@@ -1184,6 +1442,20 @@
     btnGroup.className = "pb-btn-group";
     btnGroup.appendChild(buildActionControl(item));
 
+    // [PATCH-5] 이력 버튼 — 이 서버 기록 + 저장소 변경 내용(관리자 전용)
+    if (isAdmin && !String(item.id || "").startsWith("gitea-search-error:")) {
+      const histBtn = document.createElement("button");
+      histBtn.type = "button";
+      histBtn.className = "pb-link pb-history-btn";
+      histBtn.innerHTML = HISTORY_ICON;
+      histBtn.appendChild(document.createTextNode("이력"));
+      histBtn.title = item.has_update
+        ? "업데이트로 바뀌는 내용과 이 서버의 설치 이력 보기"
+        : "변경 내용과 이 서버의 설치 이력 보기";
+      histBtn.addEventListener("click", () => openHistoryModal(item));
+      btnGroup.appendChild(histBtn);
+    }
+
     // GitHub/Gitea 저장소 주소를 모르는(local_only) 항목은 이 버튼을 표시하지 않음
     if (item.url) {
       const link = document.createElement("a");
@@ -1473,6 +1745,8 @@
       if (resetCacheBtn) resetCacheBtn.hidden = !isAdmin; // 캐시 초기화도 관리자 전용
       const refreshBtn = document.getElementById("pb-refresh-list-btn");
       if (refreshBtn) refreshBtn.hidden = !isAdmin; // 캐시 비우기(=GitHub 재조회)도 관리자 전용
+      const historyAllBtn = document.getElementById("pb-history-all-btn");
+      if (historyAllBtn) historyAllBtn.hidden = !isAdmin; // 설치 이력도 관리자 전용
       statusEl.hidden = true;
       gridEl.hidden = false;
       buildFiltersAndTally();
@@ -1531,6 +1805,7 @@
         const result = await callPluginBoardAction(dbType, {
           action: "update",
           plugin_id: item.id,
+          auto: true, // [PATCH-5] 이력에 "자동 업데이트"로 기록
           // git_url을 일부러 안 보낸다 — 화면 표시용 item.url은 자격증명이
           // 빠져 있어서, 그대로 보내면 github.txt 레지스트리에 저장된 자격증명
           // 포함 URL을 백엔드가 찾아 쓰지 못한다(git_url이 비어있을 때만 그
@@ -1775,6 +2050,8 @@
 
   wireRefreshListButton();
   wireResetCacheButton();
+  const globalHistoryBtn = document.getElementById("pb-history-all-btn");
+  if (globalHistoryBtn) globalHistoryBtn.addEventListener("click", () => openHistoryModal(null));
   wireGitInstallPanel();
   wireZipInstallPanel();
   load();

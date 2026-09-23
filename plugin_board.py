@@ -39,6 +39,12 @@ _install_or_update_gitea)는 원래 "저장소 이름과 같은 .py 파일이 �
 - 분류를 dashboard_widget(플러그인 데스크)/home_widget(홈 화면)/상세 확장 계약으로 구분.
 - 캐시를 코어 제공 플러그인 캐시(self.cache_get/cache_set, Redis)로 워커 간 공유하고,
   디스크 캐시는 plugins/data/plugin_board/ 아래로 옮겨 자기 업데이트에도 유지.
+[PATCH-5] 플러그인별 HISTORY:
+- 이 서버 기록: 설치·업데이트·롤백·실패·삭제·활성화 변경을 plugins/data/plugin_board/
+  history.jsonl에 남긴다(버전 전후, 출처, 수동/자동, 실행 관리자, 변경 파일 요약).
+- 변경 내용: 저장소의 HISTORY.md/CHANGELOG.md/CHANGES.md에서 설치 버전 이후 구간을
+  잘라 보여주고, 파일이 없으면 GitHub/Gitea Releases 본문으로 폴백한다.
+  카드 목록 조회 때는 호출하지 않고 사용자가 "이력"을 열 때만 가져온다(rate limit 절약).
 
 가이드 문서(플러그인 개발 가이드 §3, §6)의 계약을 따른다:
 - 필수: search(), apply()
@@ -49,11 +55,14 @@ _install_or_update_gitea)는 원래 "저장소 이름과 같은 .py 파일이 �
 import ast
 import base64
 import concurrent.futures
+import difflib
+import hashlib
 import json
 import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -826,7 +835,11 @@ def _has_settings_ui(plugin_id):
 
 
 def _local_version(plugin_id):
-    version_file = os.path.join(_plugins_metadata_dir(), plugin_id, "VERSION")
+    return _version_in_dir(os.path.join(_plugins_metadata_dir(), plugin_id))
+
+
+def _version_in_dir(plugin_dir):
+    version_file = os.path.join(plugin_dir, "VERSION")
     if not os.path.isfile(version_file):
         return None
     try:
@@ -2550,6 +2563,7 @@ def _delete_plugin(plugin_id):
     class_id = _class_id_for_folder(plugin_id)
     if class_id == "plugin_board":
         return False, "plugin_board 자기 자신은 이 화면에서 삭제할 수 없습니다."
+    deleted_version = _local_version(plugin_id)
 
     data_root = os.path.join(_plugins_root_dir(), "data")
     data_dirs = []
@@ -2585,8 +2599,309 @@ def _delete_plugin(plugin_id):
     # 삭제된 plugin_id의 github.txt 등록도 함께 제거한다 — 파일은 이미 지워졌는데
     # 등록만 남아있으면 죽은 주소로 계속 업데이트를 시도하게 된다.
     _unregister_repo(plugin_id)
+    _record_history("delete", plugin_id, class_id, from_version=deleted_version,
+                    message=data_dir_warning.strip() or None)
 
     return True, "'%s' 플러그인이 삭제되었습니다.%s" % (plugin_id, data_dir_warning)
+
+
+# ========================================================================
+# [PATCH-5] 이 서버의 설치/업데이트 이력(HISTORY)
+# ========================================================================
+_HISTORY_FILE = os.path.join(_PLUGIN_DATA_DIR, "history.jsonl")
+_HISTORY_MAX_LINES = 3000
+_HISTORY_TRIM_BYTES = 2 * 1024 * 1024
+_HISTORY_LOCK = threading.Lock()
+# 요청 단위 문맥(수동/자동 여부, 이번 요청에서 이미 기록했는지). 요청마다
+# _dispatch_apply가 초기화한다.
+_HISTORY_CTX = threading.local()
+_DIFF_MAX_FILE_BYTES = 512 * 1024
+_DIFF_MAX_LIST = 60
+_CREDENTIAL_IN_URL_RE = re.compile(r"(https?://)[^/@\s]+@", re.IGNORECASE)
+
+
+def _scrub_credentials(text):
+    """메시지에 섞여 들어온 URL 자격증명(https://user:pass@...)을 가린다."""
+    return _CREDENTIAL_IN_URL_RE.sub(r"\1***@", str(text or ""))
+
+
+def _history_actor():
+    try:
+        from flask import session
+        actor = session.get("username") or session.get("user_id")
+        return str(actor) if actor is not None else None
+    except Exception:
+        return None
+
+
+def _record_history(action, folder=None, class_id=None, result="success", from_version=None,
+                    to_version=None, origin=None, message=None, files=None):
+    """이력 한 건을 history.jsonl에 추가한다. 기록 실패는 본 동작을 막지 않는다."""
+    entry = {
+        "ts": int(time.time()),
+        "action": action,
+        "folder": folder,
+        "class_id": class_id,
+        "result": result,
+        "from_version": from_version,
+        "to_version": to_version,
+        "origin": _scrub_credentials(origin) if origin else None,
+        "mode": getattr(_HISTORY_CTX, "mode", "manual"),
+        "user": _history_actor(),
+        "message": _scrub_credentials(message)[:600] if message else None,
+        "files": files,
+    }
+    entry = {k: v for k, v in entry.items() if v is not None}
+    _HISTORY_CTX.recorded = True
+    try:
+        with _HISTORY_LOCK:
+            os.makedirs(_PLUGIN_DATA_DIR, exist_ok=True)
+            with open(_HISTORY_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            if os.path.getsize(_HISTORY_FILE) > _HISTORY_TRIM_BYTES:
+                with open(_HISTORY_FILE, "r", encoding="utf-8") as f:
+                    lines = f.readlines()[-_HISTORY_MAX_LINES:]
+                tmp_path = "%s.%d.tmp" % (_HISTORY_FILE, os.getpid())
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
+                os.replace(tmp_path, _HISTORY_FILE)
+    except Exception:
+        pass
+
+
+def _read_history(folder=None, class_id=None, limit=200):
+    """최신순으로 이력을 읽는다. folder/class_id를 주면 둘 중 하나라도 일치하는 항목만."""
+    if not os.path.isfile(_HISTORY_FILE):
+        return []
+    try:
+        with open(_HISTORY_FILE, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return []
+    out = []
+    for line in reversed(lines):
+        try:
+            entry = json.loads(line)
+        except Exception:
+            continue
+        if folder or class_id:
+            if not ((folder and entry.get("folder") == folder)
+                    or (class_id and entry.get("class_id") == class_id)):
+                continue
+        out.append(entry)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _walk_plugin_files(root):
+    files = {}
+    for dirpath, dirs, fnames in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git", ".github", "libs")]
+        for fname in fnames:
+            if fname.endswith(".pyc"):
+                continue
+            full = os.path.join(dirpath, fname)
+            files[os.path.relpath(full, root).replace(os.sep, "/")] = full
+    return files
+
+
+def _file_digest(path):
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _read_text_lines(path):
+    if os.path.getsize(path) > _DIFF_MAX_FILE_BYTES:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().splitlines()
+    except (UnicodeDecodeError, OSError):
+        return None
+
+
+def _diff_summary(old_dir, new_dir):
+    """교체 전(old)·후(new) 폴더를 비교해 추가/삭제/수정 파일과 줄 수 변화를 요약한다.
+    libs/(requirements.txt로 설치되는 패키지)와 캐시 파일은 비교 대상에서 뺀다."""
+    old = _walk_plugin_files(old_dir)
+    new = _walk_plugin_files(new_dir)
+    added = sorted(set(new) - set(old))
+    removed = sorted(set(old) - set(new))
+    modified = []
+    for rel in sorted(set(old) & set(new)):
+        a, b = old[rel], new[rel]
+        try:
+            if os.path.getsize(a) == os.path.getsize(b) and _file_digest(a) == _file_digest(b):
+                continue
+        except OSError:
+            continue
+        plus = minus = None
+        a_lines, b_lines = _read_text_lines(a), _read_text_lines(b)
+        if a_lines is not None and b_lines is not None:
+            plus = minus = 0
+            for line in difflib.unified_diff(a_lines, b_lines, lineterm="", n=0):
+                if line.startswith("+++") or line.startswith("---"):
+                    continue
+                if line.startswith("+"):
+                    plus += 1
+                elif line.startswith("-"):
+                    minus += 1
+        modified.append({"path": rel, "added": plus, "removed": minus})
+    return {
+        "counts": {"added": len(added), "removed": len(removed), "modified": len(modified)},
+        "added": added[:_DIFF_MAX_LIST],
+        "removed": removed[:_DIFF_MAX_LIST],
+        "modified": modified[:_DIFF_MAX_LIST],
+    }
+
+
+# ========================================================================
+# [PATCH-5] 저장소의 변경 내용(changelog) 조회
+# ========================================================================
+_CHANGELOG_FILES = ("HISTORY.md", "CHANGELOG.md", "CHANGES.md", "history.md", "changelog.md")
+_CHANGELOG_CACHE = {}  # {repo_key: (timestamp, result)}
+_CHANGELOG_CACHE_TTL = 3600
+_CHANGELOG_RAW_LIMIT = 20000
+_CHANGELOG_BODY_LIMIT = 8000
+_CHANGELOG_HEADING_RE = re.compile(r"^\s{0,3}(#{1,4})\s+(.*?)\s*#*\s*$")
+_VERSION_IN_TEXT_RE = re.compile(r"v?(\d+\.\d+\.\d+)")
+
+
+def _parse_changelog_sections(text):
+    """마크다운 제목에 버전(예: '## [2.48.0] - 2026-09-23', '# v1.2.3')이 있는 구간을
+    버전별 섹션으로 나눈다. 버전이 없는 하위 제목(### Added 등)은 본문에 포함하고,
+    같은 수준 이상의 버전 없는 제목(## Unreleased 등)을 만나면 섹션을 닫는다."""
+    sections = []
+    current = None
+    in_fence = False
+    for line in (text or "").splitlines():
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+        m = None if in_fence else _CHANGELOG_HEADING_RE.match(line)
+        if m:
+            level = len(m.group(1))
+            vm = _VERSION_IN_TEXT_RE.search(m.group(2))
+            if vm:
+                current = {"version": vm.group(1), "title": m.group(2).strip(), "level": level, "body": []}
+                sections.append(current)
+                continue
+            if current is not None and level <= current["level"]:
+                current = None
+                continue
+        if current is not None:
+            current["body"].append(line)
+    for sec in sections:
+        sec["body"] = "\n".join(sec["body"]).strip()[:_CHANGELOG_BODY_LIMIT]
+        sec.pop("level", None)
+    return sections
+
+
+def _select_changelog_range(entries, installed_version, remote_version):
+    """설치 버전 초과 ~ 원격 버전 이하 구간만 고른다. 미설치면 최근 10개,
+    이미 최신이라 구간이 비면 최근 5개를 참고용으로 돌려준다(in_range=False)."""
+    lo = _version_tuple(installed_version)
+    hi = _version_tuple(remote_version)
+    versioned = [e for e in entries if _version_tuple(e.get("version"))]
+    versioned.sort(key=lambda e: _version_tuple(e["version"]), reverse=True)
+    if lo is None:
+        return versioned[:10], False
+    picked = [
+        e for e in versioned
+        if _version_tuple(e["version"]) > lo and (hi is None or _version_tuple(e["version"]) <= hi)
+    ]
+    if picked:
+        return picked, True
+    return versioned[:5], False
+
+
+def _fetch_changelog(url, token, gitea_tokens):
+    """저장소에서 changelog 파일 → Releases 순서로 변경 내용을 가져온다(1시간 캐시).
+    반환: {source: file|releases|none, file, entries[], raw, repo_url, error}"""
+    clean_url, _u, _p = _extract_url_credentials(url)
+    host, owner, repo = _parse_repo_url(clean_url)
+    if not host or not owner or not repo:
+        return {"source": "none", "entries": [], "error": "저장소 주소를 해석하지 못했습니다."}
+    is_github = _is_github_host(host)
+    key = ("%s/%s" % (owner, repo)) if is_github else ("gitea:%s/%s/%s" % (host, owner, repo))
+    cached = _CHANGELOG_CACHE.get(key)
+    if cached and time.time() - cached[0] < _CHANGELOG_CACHE_TTL:
+        return cached[1]
+
+    result = {"source": "none", "entries": [], "repo_url": clean_url}
+    try:
+        if is_github:
+            eff_token = _effective_github_token(url, token)
+            branch = _fetch_description_info(owner, repo, eff_token).get("default_branch") or "main"
+
+            def get_file(fname):
+                return _http_get_text(
+                    "https://raw.githubusercontent.com/%s/%s/%s/%s" % (owner, repo, branch, fname), eff_token
+                )
+
+            def get_releases():
+                return _http_get_json(
+                    "https://api.github.com/repos/%s/%s/releases?per_page=20" % (owner, repo), eff_token
+                )
+        else:
+            gitea_cfg = _effective_gitea_cfg(url, gitea_tokens)
+            scheme = _url_scheme(clean_url)
+            branch = _gitea_fetch_description_info(host, owner, repo, gitea_cfg, scheme).get("default_branch") or "main"
+
+            def get_file(fname):
+                return _gitea_get_text(
+                    host, "/api/v1/repos/%s/%s/raw/%s/%s" % (owner, repo, branch, fname), gitea_cfg, scheme
+                )
+
+            def get_releases():
+                return _gitea_get_json(host, "/api/v1/repos/%s/%s/releases?limit=20" % (owner, repo), gitea_cfg, scheme)
+
+        for fname in _CHANGELOG_FILES:
+            try:
+                text = get_file(fname)
+            except Exception:
+                continue
+            if not text or not text.strip():
+                continue
+            result.update({"source": "file", "file": fname, "entries": _parse_changelog_sections(text)})
+            if not result["entries"]:
+                # 버전 제목 규칙을 따르지 않는 파일 — 앞부분을 그대로 보여준다
+                result["raw"] = text[:_CHANGELOG_RAW_LIMIT]
+            break
+
+        if result["source"] == "none":
+            try:
+                releases = get_releases() or []
+            except Exception:
+                releases = []
+            entries = []
+            for rel in releases if isinstance(releases, list) else []:
+                if rel.get("draft"):
+                    continue
+                tag = str(rel.get("tag_name") or "")
+                vm = _VERSION_IN_TEXT_RE.search(tag) or _VERSION_IN_TEXT_RE.search(str(rel.get("name") or ""))
+                if not vm:
+                    continue
+                entries.append({
+                    "version": vm.group(1),
+                    "title": str(rel.get("name") or tag),
+                    "body": str(rel.get("body") or "").strip()[:_CHANGELOG_BODY_LIMIT],
+                    "date": rel.get("published_at") or rel.get("created_at"),
+                    "url": rel.get("html_url"),
+                })
+            if entries:
+                result.update({"source": "releases", "entries": entries})
+    except urllib.error.HTTPError as exc:
+        result["error"] = _github_api_error_message(exc, bool(token)) if is_github else "HTTP %s" % exc.code
+    except Exception as exc:
+        result["error"] = str(exc)
+
+    if not result.get("error"):
+        _CHANGELOG_CACHE[key] = (time.time(), result)
+    return result
 
 
 # ========================================================================
@@ -2719,7 +3034,7 @@ def _staging_dir():
     return os.path.join(_plugins_root_dir(), "data", "plugin_board", "_staging")
 
 
-def _install_dir_atomically(src_root, folder, class_id, db_type, is_new, ignore=None):
+def _install_dir_atomically(src_root, folder, class_id, db_type, is_new, ignore=None, origin=None):
     """검증을 통과한 소스로 plugins/metadata/{folder}를 교체한다.
     스테이징에 먼저 복사 → 기존 폴더를 백업으로 이동 → 새 폴더를 이동 → (신규면)
     활성화 → hot reload → 로드 검증. 로드 검증이 명확히 실패하면 새 폴더를 지우고
@@ -2732,8 +3047,20 @@ def _install_dir_atomically(src_root, folder, class_id, db_type, is_new, ignore=
     staged = os.path.join(work, "new")
     backup = os.path.join(work, "backup")
     had_backup = False
+    action = "install" if is_new else "update"
     try:
         shutil.copytree(src_root, staged, ignore=ignore)
+        from_version = _local_version(folder) if os.path.isdir(target) else None
+        to_version = _version_in_dir(staged)
+        # [PATCH-5] 교체 직전에 기존 폴더와 새 소스를 비교해 변경 파일을 요약한다
+        files = None
+        try:
+            if os.path.isdir(target):
+                files = _diff_summary(target, staged)
+            else:
+                files = {"counts": {"added": len(_walk_plugin_files(staged)), "removed": 0, "modified": 0}}
+        except Exception:
+            files = None
         if os.path.isdir(target):
             shutil.move(target, backup)
             had_backup = True
@@ -2754,15 +3081,21 @@ def _install_dir_atomically(src_root, folder, class_id, db_type, is_new, ignore=
             if had_backup:
                 shutil.move(backup, target)
             _try_hot_reload(class_id, folder)
-            return False, (
+            fail_msg = (
                 "'%s'(id=%s) 플러그인이 교체 후 로드되지 않아 %s. 서버 로그에서 "
                 "로드 오류를 확인해주세요." % (
                     folder, class_id, "이전 버전으로 되돌렸습니다" if had_backup else "설치를 취소했습니다"
                 )
             )
+            _record_history(action, folder, class_id, result="rolled_back", from_version=from_version,
+                            to_version=to_version, origin=origin, message=fail_msg, files=files)
+            return False, fail_msg
+        note = ""
         if not reloaded or loaded is None:
-            return True, " (코어의 즉시 반영 여부를 확인할 수 없어 서버 재시작 후 적용될 수 있습니다)"
-        return True, ""
+            note = " (코어의 즉시 반영 여부를 확인할 수 없어 서버 재시작 후 적용될 수 있습니다)"
+        _record_history(action, folder, class_id, result="success", from_version=from_version,
+                        to_version=to_version, origin=origin, message=note.strip(" ()") or None, files=files)
+        return True, note
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -2771,19 +3104,28 @@ def _install_from_source_dir(src_root, repo_hint, existing_folder, source_url, d
                              ignore=None):
     """압축이 풀린 소스 폴더 하나를 계획 → 정적 검증 → 원자적 교체까지 처리한다.
     반환: (성공 여부, 메시지, 설치 폴더명)"""
+    action = "update" if existing_folder else "install"
+    to_version = _version_in_dir(src_root)
     folder, class_id, is_new, err = _plan_install(src_root, repo_hint, existing_folder, source_url)
     if err:
+        _record_history(action, existing_folder or repo_hint, _read_class_id(src_root), result="failed",
+                        to_version=to_version, origin=origin_label, message=err)
         return False, err, None
 
     source_ok, source_checks = _validate_plugin_source(src_root, folder)
     if not source_ok:
         failed_items = ["- %s: %s" % (c["name"], c["detail"]) for c in source_checks if not c.get("ok")]
-        return False, (
+        fail_msg = (
             "플러그인 검증 실패 — 설치를 중단했습니다(기존 설치는 변경되지 않음):\n"
             + "\n".join(failed_items)
-        ), None
+        )
+        _record_history("install" if is_new else "update", folder, class_id, result="failed",
+                        from_version=None if is_new else _local_version(folder), to_version=to_version,
+                        origin=origin_label, message=fail_msg)
+        return False, fail_msg, None
 
-    ok, note = _install_dir_atomically(src_root, folder, class_id, db_type, is_new, ignore=ignore)
+    ok, note = _install_dir_atomically(src_root, folder, class_id, db_type, is_new, ignore=ignore,
+                                       origin=origin_label)
     if not ok:
         return False, note, None
 
@@ -3016,6 +3358,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             "style.css",
             "script.js",
             "README.md",
+            "HISTORY.md",
         ],
         "version_file": "VERSION",
         "version_key": "plugin version",
@@ -3079,6 +3422,65 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         if not _is_admin_session():
             return False, "관리자만 사용할 수 있는 기능입니다."
 
+        # [PATCH-5] 이력 기록용 요청 문맥 — 자동 업데이트는 프런트가 auto=true로 보낸다
+        _HISTORY_CTX.mode = "auto" if str(item_data.get("auto", "")).lower() in ("1", "true") else "manual"
+        _HISTORY_CTX.recorded = False
+
+        if action == "get_history":
+            try:
+                limit = max(1, min(int(item_data.get("limit") or 200), 1000))
+            except (TypeError, ValueError):
+                limit = 200
+            class_id = str(item_data.get("class_id", "")).strip() or None
+            if plugin_id and not class_id and _PLUGIN_ID_RE.match(plugin_id) and _is_installed(plugin_id):
+                class_id = _class_id_for_folder(plugin_id)
+            return True, {"entries": _read_history(plugin_id or None, class_id, limit=limit)}
+
+        if action == "get_changelog":
+            cfg = self.get_plugin_config(db_type, default={})
+            token = cfg.get("GITHUB_TOKEN") or None
+            gitea_tokens = _parse_gitea_tokens_cfg(cfg.get("GITEA_TOKENS"))
+            url = None
+            if plugin_id:
+                url = _registry_url_for(plugin_id)
+                if not url and plugin_id == "plugin_board":
+                    url = SELF_REPO_URL
+            if not url:
+                url = str(item_data.get("git_url", "")).strip() or None
+            if not url:
+                return True, {"source": "none", "entries": [],
+                              "error": "이 플러그인의 원본 저장소 주소를 알 수 없습니다(로컬 전용 플러그인)."}
+            installed_version = _local_version(plugin_id) if plugin_id and _PLUGIN_ID_RE.match(plugin_id) \
+                and _is_installed(plugin_id) else None
+            remote_version = str(item_data.get("remote_version") or "").strip().lstrip("vV") or None
+            data = dict(_fetch_changelog(url, token, gitea_tokens))
+            entries, in_range = _select_changelog_range(data.get("entries") or [], installed_version, remote_version)
+            data.update({
+                "entries": entries,
+                "in_range": in_range,
+                "installed_version": installed_version,
+                "remote_version": remote_version,
+            })
+            return True, data
+
+        if action in ("install_git", "update", "install_zip"):
+            ok, msg = self._dispatch_install(db_type, action, plugin_id, item_data)
+            if not ok and not getattr(_HISTORY_CTX, "recorded", False):
+                # 다운로드·압축 해제처럼 설치 엔진에 들어가기 전에 실패한 경우도 남긴다
+                if action == "install_zip":
+                    target = str(item_data.get("filename", "")).strip() or None
+                elif action == "update":
+                    target = plugin_id or None
+                else:
+                    _h, _o, target = _parse_repo_url(str(item_data.get("git_url", "")))
+                _record_history("update" if action == "update" else "install", target,
+                                result="failed", origin=action, message=msg)
+            return ok, msg
+
+        return self._dispatch_other(db_type, action, plugin_id, item_data)
+
+    def _dispatch_install(self, db_type, action, plugin_id, item_data):
+        """설치 계열 액션(압축 파일 / Git URL)."""
         if action == "install_zip":
             # 액션 이름은 하위 호환을 위해 유지하지만, zip 외에 tar 계열(.tar/.tar.gz/
             # .tar.bz2/.tar.xz)과 7z(라이브러리가 있으면)도 파일명 확장자로 판별해 처리한다.
@@ -3088,6 +3490,10 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 return False, "zip_data가 필요합니다."
             return _install_from_archive(zip_data, filename, db_type)
 
+        return self._dispatch_git_install(db_type, action, plugin_id, item_data)
+
+    def _dispatch_other(self, db_type, action, plugin_id, item_data):
+        """조회·관리 계열 액션(설정 조회, 캐시, 토글, 삭제, 주소 관리)."""
         if action == "get_config":
             # /api/media/metadata/plugins/manage 응답의 config 필드만 믿지 않고,
             # 가이드 문서(§4)에 명시된 저장 위치(settings 테이블의
@@ -3135,6 +3541,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             _TOPIC_CACHE.clear()
             _VERSION_CACHE.clear()
             _DESC_CACHE.clear()
+            _CHANGELOG_CACHE.clear()
             _clear_shared_cache(self)
             _save_disk_cache()
             return True, "플러그인 목록과 버전 정보를 새로 불러옵니다."
@@ -3145,13 +3552,19 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             # 달리 .cache.json 파일 자체를 지운다. 관리자 전용(위 admin 체크에
             # 이미 포함되어 있음).
             _clear_shared_cache(self)
+            _CHANGELOG_CACHE.clear()
             return _reset_disk_cache()
 
         if action == "toggle":
             if not plugin_id:
                 return False, "plugin_id가 필요합니다."
             enabled_val = str(item_data.get("enabled", "1")).strip()
-            return _toggle_plugin_enabled(plugin_id, enabled_val, db_type)
+            ok, msg = _toggle_plugin_enabled(plugin_id, enabled_val, db_type)
+            if ok:
+                _record_history("enable" if enabled_val == "1" else "disable", plugin_id,
+                                _class_id_for_folder(plugin_id) if _is_installed(plugin_id) else None,
+                                from_version=_local_version(plugin_id))
+            return ok, msg
 
         if action == "delete":
             if not plugin_id:
@@ -3166,7 +3579,11 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             new_git_url = str(item_data.get("git_url", "")).strip()
             if not new_git_url:
                 return False, "새 git_url이 필요합니다."
-            return _update_registered_repo_url(plugin_id, new_git_url)
+            ok, msg = _update_registered_repo_url(plugin_id, new_git_url)
+            if ok:
+                clean_new, _u, _p = _extract_url_credentials(new_git_url)
+                _record_history("url_changed", plugin_id, message="새 주소: %s" % clean_new)
+            return ok, msg
 
         if action == "unregister":
             # [신규] 원본 저장소가 삭제되는 등으로 더 이상 추적할 수 없을 때, 설치된
@@ -3174,8 +3591,14 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             # 대상에서만 빠진다 — plugins/metadata의 실제 파일은 건드리지 않음).
             if not plugin_id:
                 return False, "plugin_id가 필요합니다."
-            return _unregister_repo(plugin_id)
+            ok, msg = _unregister_repo(plugin_id)
+            if ok:
+                _record_history("unregister", plugin_id)
+            return ok, msg
 
+        return False, "지원하지 않는 액션입니다: %s" % action
+
+    def _dispatch_git_install(self, db_type, action, plugin_id, item_data):
         if action in ("install_git", "update"):
             cfg = self.get_plugin_config(db_type, default={})
             token = cfg.get("GITHUB_TOKEN") or None
@@ -3211,7 +3634,6 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 git_url, token, gitea_tokens=gitea_tokens, db_type=db_type,
                 existing_folder=existing_folder,
             )
-
         return False, "지원하지 않는 액션입니다: %s" % action
 
     # ------------------------------------------------------------------
