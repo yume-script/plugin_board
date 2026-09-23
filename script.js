@@ -416,6 +416,11 @@
     return { scheme, host };
   }
 
+  function parseOwnersInput(value) {
+    const list = Array.isArray(value) ? value : String(value || "").split(",");
+    return [...new Set(list.map((o) => String(o).trim().replace(/^\/+|\/+$/g, "")).filter(Boolean))];
+  }
+
   function parseGiteaTokensValue(raw) {
     const text = String(raw || "").trim();
     if (!text) return [];
@@ -432,6 +437,7 @@
               username: e.username || "",
               password: e.password || "",
               token: e.token || "",
+              owners: parseOwnersInput(e.owners),
             };
           });
       } catch (err) {
@@ -454,9 +460,9 @@
       if (parts.length && /^\d+$/.test(parts[0])) host += ":" + parts.shift();
       if (!host) return;
       if (parts.length === 1 && parts[0]) {
-        entries.push({ host, scheme, username: "", password: "", token: parts[0] });
+        entries.push({ host, scheme, username: "", password: "", token: parts[0], owners: [] });
       } else if (parts.length === 2 && parts[0] && parts[1]) {
-        entries.push({ host, scheme, username: parts[0], password: parts[1], token: "" });
+        entries.push({ host, scheme, username: parts[0], password: parts[1], token: "", owners: [] });
       }
     });
     return entries;
@@ -470,6 +476,7 @@
         if (e.username) out.username = e.username;
         if (e.password) out.password = e.password;
         if (e.token) out.token = e.token;
+        if (e.owners && e.owners.length) out.owners = e.owners;
         return out;
       })
     );
@@ -517,6 +524,7 @@
         username: entry.username,
         password: entry.password,
         token: entry.token,
+        owners: (entry.owners || []).join(","),
       });
       if (result && result.success && result.message && typeof result.message === "object") {
         renderGiteaTestResult(resultEl, result.message);
@@ -574,6 +582,7 @@
         const authParts = [];
         if (entry.username) authParts.push(`계정 ${entry.username}${entry.password ? " / " + mask(entry.password) : " (비밀번호 없음)"}`);
         if (entry.token) authParts.push(`토큰 ${mask(entry.token)}`);
+        if (entry.owners && entry.owners.length) authParts.push(`소유자 ${entry.owners.join(", ")}`);
         const authEl = document.createElement("span");
         authEl.className = "pb-gitea-servers-auth";
         authEl.textContent = authParts.length ? authParts.join(" · ") : "인증 정보 없음(공개 저장소만)";
@@ -627,6 +636,7 @@
     const userInput = makeInput("text", "아이디");
     const passInput = makeInput("password", "비밀번호");
     const tokenInput = makeInput("password", "읽기 토큰 (repository 읽기 권한)");
+    const ownersInput = makeInput("text", "소유자 (쉼표 구분, 선택 — 예: javara999)");
 
     const submitBtn = document.createElement("button");
     submitBtn.type = "button";
@@ -647,7 +657,9 @@
     hint.textContent =
       "아이디/비밀번호를 저장하면 이 서버의 저장소를 https://서버/소유자/저장소 처럼 자격증명 없이 " +
       "입력해도 https://아이디:비밀번호@서버/... 로 자동 등록됩니다. 토픽 검색·버전 확인에는 읽기 " +
-      "토큰을 우선 사용합니다. 추가·수정 후 아래 '저장'을 눌러야 반영됩니다.";
+      "토큰을 우선 사용합니다. '소유자'에 적은 사용자·조직의 저장소는 토픽이 없어도 전부 살펴보고, " +
+      "VERSION 파일이 있는 저장소를 플러그인으로 표시합니다(이 서버에서 설치한 적 있는 소유자는 " +
+      "적지 않아도 자동 포함). 추가·수정 후 아래 '저장'을 눌러야 반영됩니다.";
 
     const readForm = () => {
       const { scheme, host } = normalizeGiteaServer(hostInput.value, "");
@@ -657,6 +669,7 @@
         username: userInput.value.trim(),
         password: passInput.value,
         token: tokenInput.value.trim(),
+        owners: parseOwnersInput(ownersInput.value),
       };
     };
 
@@ -666,6 +679,7 @@
       userInput.value = "";
       passInput.value = "";
       tokenInput.value = "";
+      ownersInput.value = "";
       submitBtn.textContent = "+ 추가";
       cancelBtn.hidden = true;
       formResultEl.hidden = true;
@@ -678,6 +692,7 @@
       userInput.value = e.username || "";
       passInput.value = e.password || "";
       tokenInput.value = e.token || "";
+      ownersInput.value = (e.owners || []).join(", ");
       submitBtn.textContent = "수정 완료";
       cancelBtn.hidden = false;
       formResultEl.hidden = true;
@@ -722,7 +737,7 @@
       }
       runGiteaTest(entry, formResultEl, testFormBtn);
     });
-    [hostInput, userInput, passInput, tokenInput].forEach((input) =>
+    [hostInput, userInput, passInput, tokenInput, ownersInput].forEach((input) =>
       input.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
           e.preventDefault();
@@ -734,7 +749,7 @@
     const btnRow = document.createElement("div");
     btnRow.className = "pb-gitea-servers-form-buttons";
     btnRow.append(testFormBtn, cancelBtn, submitBtn);
-    formEl.append(hostInput, userInput, passInput, tokenInput, btnRow);
+    formEl.append(hostInput, userInput, passInput, tokenInput, ownersInput, btnRow);
 
     syncHidden();
     renderList();

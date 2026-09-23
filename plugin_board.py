@@ -54,6 +54,11 @@ _install_or_update_gitea)는 원래 "저장소 이름과 같은 .py 파일이 �
 - 토픽 검색이 서버별 스킴(http/https)을 따르고, 캐시 키에 인증 정보를 포함한다.
 - 인증 없이 검색해 결과가 0개인 서버는 "비공개 저장소가 안 보일 수 있음" 안내 카드를 띄운다.
 - 서버별 연결 테스트(test_gitea): 접속·토큰·아이디/비밀번호·토픽 검색 결과를 단계별로 진단.
+[PATCH-7] Gitea 소유자 단위 발견:
+- 개인 Gitea 서버의 저장소는 토픽이 없는 경우가 많아, 토픽 검색만으로는 설치한 것만 보였다.
+  서버별 "소유자" 목록(설정) + 이 서버에서 설치한 적 있는 소유자의 저장소를 모두 조회해
+  VERSION 파일("plugin version")이 있는 저장소를 플러그인으로 인식한다(비공개 포함).
+- 발견 카드 개수 상한을 GitHub 토픽 결과(30개)에만 적용하고, Gitea는 서버당 100개로 분리.
 
 가이드 문서(플러그인 개발 가이드 §3, §6)의 계약을 따른다:
 - 필수: search(), apply()
@@ -119,6 +124,10 @@ DISCOVERY_TOPICS = ["bookoasis-plugin"]
 #      카드로 인정 — 이미 설치되어 있는 저장소는 예외적으로 항상 허용
 #   2) 그래도 남는 개수를 아래 상한으로 한 번 더 자른다
 _MAX_DISCOVERED_ITEMS = 30
+# [PATCH-7] Gitea 서버는 VERSION 파일이 있는 저장소만 카드가 되므로(소유자 스캔 포함) 노이즈가
+# 적다. GitHub 토픽 상한(30)에 섞여 잘리지 않도록 서버별로 따로 센다.
+_MAX_GITEA_ITEMS_PER_HOST = 100
+_GITEA_OWNER_SCAN_PAGES = 5  # 소유자당 최대 5페이지(50개씩) = 250개
 
 _TOPIC_CACHE = {}  # {"topic1,topic2": (timestamp, [repo_json, ...])}
 _TOPIC_CACHE_TTL_SECONDS = 3600  # 1시간마다 검색 결과를 다시 조회
@@ -499,6 +508,12 @@ def _parse_gitea_tokens_cfg(raw):
                 val = str(item.get(key) or "").strip()
                 if val:
                     entry[key] = val
+            owners = item.get("owners")
+            if isinstance(owners, str):
+                owners = owners.split(",")
+            owners = [str(o).strip().strip("/") for o in (owners or []) if str(o).strip().strip("/")]
+            if owners:
+                entry["owners"] = list(dict.fromkeys(owners))
             result[host] = entry
         return result
 
@@ -1516,6 +1531,91 @@ def _fetch_gitea_repos_by_topic(host, gitea_cfg, scheme, topics):
 
     _TOPIC_CACHE[cache_key] = (now, results)
     return results
+
+
+def _gitea_owner_id(host, owner, gitea_cfg, scheme):
+    """소유자(사용자 또는 조직) 이름으로 Gitea 내부 id를 얻는다."""
+    quoted = urllib.parse.quote(owner, safe="")
+    for path in ("/api/v1/users/%s" % quoted, "/api/v1/orgs/%s" % quoted):
+        try:
+            data = _gitea_get_json(host, path, gitea_cfg, scheme)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                continue
+            raise
+        if isinstance(data, dict) and data.get("id") is not None:
+            return data["id"]
+    return None
+
+
+def _gitea_list_owner_repos_uncached(host, owner, gitea_cfg, scheme):
+    """소유자의 저장소를 저장소 검색 API(uid + exclusive)로 모두 가져온다. 이 방식은
+    인증한 계정이 볼 수 있는 비공개 저장소(협업자 권한 포함)까지 돌려준다 —
+    /users/{owner}/repos는 본인 계정이 아니면 비공개 저장소를 빼고 돌려주기 때문이다."""
+    uid = _gitea_owner_id(host, owner, gitea_cfg, scheme)
+    if uid is None:
+        raise RuntimeError("소유자 '%s'를 찾을 수 없습니다" % owner)
+    repos = []
+    for page in range(1, _GITEA_OWNER_SCAN_PAGES + 1):
+        path = "/api/v1/repos/search?uid=%s&exclusive=true&limit=50&page=%d" % (uid, page)
+        data = (_gitea_get_json(host, path, gitea_cfg, scheme) or {}).get("data") or []
+        repos.extend(data)
+        if len(data) < 50:
+            break
+    return repos
+
+
+def _fetch_gitea_repos_by_owner(host, gitea_cfg, scheme, owners):
+    """[PATCH-7] 지정한 소유자들의 저장소를 모두 모은다(1시간 캐시, 인증 정보별로 분리).
+    소유자 하나가 실패해도 나머지 결과는 반영하고, 전부 실패하면 예외를 올린다."""
+    owners = [o for o in dict.fromkeys(owners or []) if o]
+    if not owners:
+        return []
+    cache_key = "gitea-owner:%s://%s:%s:%s" % (
+        scheme, host, _gitea_auth_fingerprint(gitea_cfg), ",".join(sorted(o.lower() for o in owners))
+    )
+    now = time.time()
+    cached = _TOPIC_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _TOPIC_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    seen = {}
+    errors = []
+    for owner in owners:
+        try:
+            for repo_json in _gitea_list_owner_repos_uncached(host, owner, gitea_cfg, scheme):
+                full_name = repo_json.get("full_name")
+                if full_name and full_name not in seen:
+                    seen[full_name] = repo_json
+        except Exception as exc:
+            errors.append("%s: %s" % (owner, exc))
+    results = list(seen.values())
+    if not results and errors and len(errors) == len(owners):
+        raise RuntimeError(errors[0])
+    _TOPIC_CACHE[cache_key] = (now, results)
+    return results
+
+
+def _fetch_gitea_repos_for_host(host, gitea_cfg, scheme, topics, owners):
+    """토픽 검색 결과와 소유자 스캔 결과를 합친다(full_name 기준 중복 제거).
+    한쪽만 실패하면 다른 쪽 결과를 그대로 쓰고, 둘 다 실패해야 예외를 올린다."""
+    merged = {}
+    errors = []
+    for fetch in (
+        lambda: _fetch_gitea_repos_by_topic(host, gitea_cfg, scheme, topics),
+        lambda: _fetch_gitea_repos_by_owner(host, gitea_cfg, scheme, owners),
+    ):
+        try:
+            for repo_json in fetch() or []:
+                full_name = repo_json.get("full_name") or (
+                    "%s/%s" % ((repo_json.get("owner") or {}).get("login", ""), repo_json.get("name", ""))
+                )
+                merged.setdefault(full_name, repo_json)
+        except Exception as exc:
+            errors.append(str(exc))
+    if not merged and errors and (len(errors) == 2 or not owners):
+        raise RuntimeError(errors[0])
+    return list(merged.values())
 
 
 def _build_gitea_discovered_item(host, repo_json, remote_version, is_enabled_fn, excluded_ids):
@@ -2871,6 +2971,46 @@ def _test_gitea_server(params, configured_tokens, topics):
         checks.append({"label": "토픽 검색", "status": "warn" if not anon else "ok",
                        "detail": "인증 없이 검색 — 공개 저장소 %d개. 비공개 저장소는 계정이나 토큰이 "
                                  "있어야 보입니다." % len(anon)})
+
+    # ⑤ [PATCH-7] 소유자 스캔 — 입력한 소유자 + 이 서버에서 설치한 적 있는 소유자
+    owners = params.get("owners")
+    if isinstance(owners, str):
+        owners = owners.split(",")
+    owners = [str(o).strip().strip("/") for o in (owners or saved.get("owners") or []) if str(o).strip()]
+    for _pid, _url in _load_github_registry_entries():
+        h, o, _r = _parse_repo_url(_url)
+        if h and h.lower() == host and o and o not in owners:
+            owners.append(o)
+    scan_cfg = auth_cfg
+    for owner in owners:
+        try:
+            repos = _gitea_list_owner_repos_uncached(host, owner, scan_cfg, scheme)
+        except Exception as exc:
+            checks.append({"label": "소유자 %s" % owner, "status": "fail", "detail": str(exc)})
+            continue
+        specs = [(r.get("name"), r.get("default_branch"), bool(r.get("private"))) for r in repos if r.get("name")]
+        plugins = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+            futs = {ex.submit(_gitea_fetch_version, host, owner, name, br, scan_cfg, scheme): (name, priv)
+                    for name, br, priv in specs[:120]}
+            for fut in concurrent.futures.as_completed(futs):
+                name, priv = futs[fut]
+                try:
+                    if fut.result():
+                        plugins.append((name, priv))
+                except Exception:
+                    pass
+        private_total = sum(1 for _n, _b, priv in specs if priv)
+        status = "ok" if plugins else "warn"
+        detail = "저장소 %d개(비공개 %d개) 중 VERSION 파일이 있는 플러그인 %d개" % (
+            len(specs), private_total, len(plugins))
+        if not scan_cfg:
+            detail += " — 인증 없이 조회해 비공개 저장소는 빠졌을 수 있습니다"
+        checks.append({"label": "소유자 %s" % owner, "status": status, "detail": detail})
+        for name, priv in sorted(plugins):
+            full = "%s/%s" % (owner, name)
+            if not any(r["name"] == full for r in report["repos"]):
+                report["repos"].append({"name": full, "private": priv})
     return report
 
 
@@ -3521,6 +3661,12 @@ def _install_or_update_from_url(url, token, gitea_tokens=None, db_type="general"
     clean_url, url_username, url_password = _extract_url_credentials(url)
     host, owner, repo = _parse_repo_url(clean_url)
     if not host or not owner or not repo:
+        if re.match(r"^https?://[^/]+/[^/]+/?$", clean_url or ""):
+            return False, (
+                "저장소가 아니라 소유자 주소입니다(%s). 이 소유자의 플러그인을 모두 목록에 표시하려면 "
+                "플러그인게시판 설정(⚙) → Gitea 서버의 '소유자'에 추가하세요. 설치는 저장소 주소"
+                "(https://서버/소유자/저장소)로 해주세요." % _scrub_credentials(clean_url)
+            )
         return False, "Git 저장소 주소를 해석하지 못했습니다: %s" % _scrub_credentials(url)
 
     if _is_github_host(host):
@@ -3985,7 +4131,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         # {host: {"cfg": 인증, "scheme": http|https, "from_registry": 설치 이력이 있는 서버인지}}
         gitea_hosts_to_search = {
             host: {"cfg": _gitea_cfg_from_tokens_entry(entry), "scheme": entry.get("scheme") or "https",
-                   "from_registry": False}
+                   "from_registry": False, "owners": list(entry.get("owners") or [])}
             for host, entry in gitea_tokens.items()
         }
         for _pid, _url in registry_entries_all:
@@ -3993,14 +4139,18 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             if not h or _is_github_host(h):
                 continue
             h = h.lower()
-            if h in gitea_hosts_to_search:
-                gitea_hosts_to_search[h]["from_registry"] = True
-            else:
+            if h not in gitea_hosts_to_search:
                 gitea_hosts_to_search[h] = {
                     "cfg": _effective_gitea_cfg(_url, gitea_tokens),
                     "scheme": _url_scheme(_url),
-                    "from_registry": True,
+                    "from_registry": False,
+                    "owners": [],
                 }
+            spec = gitea_hosts_to_search[h]
+            spec["from_registry"] = True
+            # [PATCH-7] 이 서버에서 설치한 적 있는 저장소의 소유자도 자동으로 스캔한다
+            if _o and _o not in spec["owners"]:
+                spec["owners"].append(_o)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2 + len(gitea_hosts_to_search)) as executor:
             self_future = executor.submit(
@@ -4009,7 +4159,8 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             topics_future = executor.submit(_fetch_repos_by_topic, all_topics, token)
             gitea_topic_futures = {
                 host: executor.submit(
-                    _fetch_gitea_repos_by_topic, host, spec["cfg"], spec["scheme"], all_topics
+                    _fetch_gitea_repos_for_host, host, spec["cfg"], spec["scheme"], all_topics,
+                    spec.get("owners") or [],
                 )
                 for host, spec in gitea_hosts_to_search.items()
             }
@@ -4065,6 +4216,8 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 # BookOasis 플러그인이 아닐 가능성이 높으므로 카드에서 제외한다.
                 if not item["installed"] and item["version_label"] == "—":
                     continue
+                if len(discovered_items) >= _MAX_DISCOVERED_ITEMS:
+                    break  # GitHub 토픽 결과만의 상한(흔한 토픽으로 무관한 저장소가 쏟아지는 것 방지)
                 seen_discovered_ids.add(item["id"])
                 discovered_items.append(item)
         else:
@@ -4078,6 +4231,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             spec_h = gitea_hosts_to_search.get(host) or {}
             gitea_cfg_h = spec_h.get("cfg") or _gitea_cfg_from_tokens_entry(gitea_tokens.get(host))
             scheme_h = spec_h.get("scheme") or "https"
+            host_item_count = 0
             version_specs_g = []
             for repo_json in repo_list:
                 owner_login = ((repo_json.get("owner") or {}).get("login")) or ""
@@ -4089,13 +4243,13 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             if version_specs_g:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(version_specs_g))) as vexec:
                     vfuture_map = {
-                        vexec.submit(_gitea_fetch_version, host, o, r, db, gitea_cfg_h, scheme_h): (o, r)
+                        vexec.submit(_gitea_fetch_version_info, host, o, r, db, gitea_cfg_h, scheme_h): (o, r)
                         for (o, r, db) in version_specs_g
                     }
                     for vfut in concurrent.futures.as_completed(vfuture_map):
                         owner_repo_key = vfuture_map[vfut]
                         try:
-                            version_map_g[owner_repo_key] = vfut.result()
+                            version_map_g[owner_repo_key] = (vfut.result() or {}).get("remote_version")
                         except Exception:
                             version_map_g[owner_repo_key] = None
 
@@ -4110,6 +4264,9 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                     continue
                 if not item["installed"] and item["version_label"] == "—":
                     continue
+                if host_item_count >= _MAX_GITEA_ITEMS_PER_HOST:
+                    break
+                host_item_count += 1
                 seen_discovered_ids.add(item["id"])
                 discovered_items.append(item)
 
@@ -4148,8 +4305,8 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                         "type": "other",
                         "type_label": TYPE_LABELS["other"],
                         "desc": (
-                            "이 Gitea 서버를 인증 없이 검색해 공개 저장소만 조회됐고, 토픽이 달린 "
-                            "저장소가 하나도 없었습니다. 비공개 저장소라면 플러그인게시판 설정(⚙)의 "
+                            "이 Gitea 서버를 인증 없이 조회해 공개 저장소만 확인됐고, 플러그인으로 "
+                            "보이는 저장소가 하나도 없었습니다. 비공개 저장소라면 플러그인게시판 설정(⚙)의 "
                             "'Gitea 서버'에 이 서버의 아이디/비밀번호 또는 읽기 토큰을 등록한 뒤 "
                             "'연결 테스트'로 확인하고 목록을 새로고침하세요."
                         ),
@@ -4162,8 +4319,6 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                         "discovered": True, "gitea": True,
                     })
 
-        if len(discovered_items) > _MAX_DISCOVERED_ITEMS:
-            discovered_items = discovered_items[:_MAX_DISCOVERED_ITEMS]
 
         discovered_ids = {it["id"] for it in discovered_items}
         # GitHub Topics 검색은 항상 저장소의 "현재(canonical)" 이름으로만 결과를
