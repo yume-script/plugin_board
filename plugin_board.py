@@ -45,6 +45,15 @@ _install_or_update_gitea)는 원래 "저장소 이름과 같은 .py 파일이 �
 - 변경 내용: 저장소의 HISTORY.md/CHANGELOG.md/CHANGES.md에서 설치 버전 이후 구간을
   잘라 보여주고, 파일이 없으면 GitHub/Gitea Releases 본문으로 폴백한다.
   카드 목록 조회 때는 호출하지 않고 사용자가 "이력"을 열 때만 가져온다(rate limit 절약).
+[PATCH-6] Gitea 서버 설정 개편:
+- GITEA_TOKENS를 서버별 {주소(스킴·포트 포함), 아이디, 비밀번호, 읽기 토큰} JSON 목록으로
+  저장한다(구버전 "호스트:토큰" 문자열도 계속 읽으며, host:port 형식도 올바르게 해석).
+- 자격증명 없는 Gitea 주소로 설치·주소 변경을 요청하면 저장된 계정으로 자동 인증하고,
+  레지스트리에는 https://아이디:비밀번호@호스트/... 형태로 등록한다(API 호출은 토큰 우선).
+  설정에서 비밀번호를 바꾸면 레지스트리의 자동 등록 주소도 함께 갱신한다.
+- 토픽 검색이 서버별 스킴(http/https)을 따르고, 캐시 키에 인증 정보를 포함한다.
+- 인증 없이 검색해 결과가 0개인 서버는 "비공개 저장소가 안 보일 수 있음" 안내 카드를 띄운다.
+- 서버별 연결 테스트(test_gitea): 접속·토큰·아이디/비밀번호·토픽 검색 결과를 단계별로 진단.
 
 가이드 문서(플러그인 개발 가이드 §3, §6)의 계약을 따른다:
 - 필수: search(), apply()
@@ -434,74 +443,182 @@ def _parse_owner_repo(url):
 # 2021년에 폐지했지만 Gitea는 여전히 지원하므로, 토큰이 없는 사용자를 위해
 # Basic Auth(사용자명+비밀번호)도 함께 지원한다.
 # ------------------------------------------------------------------
+def _normalize_gitea_server(raw_host, scheme=None):
+    """'https://git.example.com:3000/경로' 같은 입력에서 (스킴, 호스트[:포트])를 뽑는다.
+    호스트는 소문자로 정규화한다. 스킴이 없으면 인자 scheme, 그것도 없으면 https."""
+    text = str(raw_host or "").strip()
+    m = re.match(r"^([a-z][a-z0-9+.-]*)://", text, re.IGNORECASE)
+    if m:
+        scheme = scheme or m.group(1).lower()
+        text = text[m.end():]
+    text = text.split("/")[0].split("@")[-1].strip().lower()
+    scheme = (scheme or "https").lower()
+    if scheme not in ("http", "https"):
+        scheme = "https"
+    return scheme, text
+
+
 def _parse_gitea_tokens_cfg(raw):
-    """설정 화면에 입력한 문자열을 {호스트(소문자): {"token": ...} 또는
-    {"username": ..., "password": ...}} 딕셔너리로 파싱한다. 한 줄(콤마 구분
-    조각)에 콜론이 몇 개냐로 형식을 구분한다:
-    - "호스트:토큰" (콜론 1개) → 토큰 인증
-    - "호스트:아이디:비밀번호" (콜론 2개) → Basic Auth(아이디/비밀번호만 쓰는
-      Gitea 서버를 위함 — 토큰 발급이 없거나 번거로운 경우, URL에 자격증명을
-      박아넣지 않고도 설정만으로 완전히 관리할 수 있게 한다)
-    형식이 안 맞는 조각(콜론 없음, 3개 이상 등)은 조용히 건너뛴다(설정 파싱
-    실패로 전체 기능이 죽으면 안 되므로)."""
+    """GITEA_TOKENS 설정값을 {호스트(소문자, 포트 포함): {scheme, username, password,
+    token}} 딕셔너리로 파싱한다.
+
+    [PATCH-6] 새 형식은 JSON 목록이다:
+        [{"host": "gitea.example.com", "scheme": "https", "username": "...",
+          "password": "...", "token": "..."}]
+    아이디/비밀번호와 읽기 토큰을 한 서버에 함께 저장할 수 있고, 주소만 있는 항목도
+    허용한다(http 전용 서버를 토픽 검색 대상에 넣고 싶을 때 등).
+
+    구버전 콤마 문자열 형식("호스트:토큰", "호스트:아이디:비밀번호")도 계속 읽는다.
+    이때 호스트 바로 뒤 조각이 숫자면 포트로 해석한다("git.example.com:3000:토큰").
+    형식이 맞지 않는 항목은 조용히 건너뛴다(설정 파싱 실패로 전체 기능이 죽으면 안 됨)."""
     result = {}
     if not raw:
         return result
+
+    items = None
+    if isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        text = str(raw).strip()
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+                items = parsed if isinstance(parsed, list) else []
+            except ValueError:
+                items = []
+
+    if items is not None:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            scheme, host = _normalize_gitea_server(item.get("host"), item.get("scheme"))
+            if not host:
+                continue
+            entry = {"scheme": scheme}
+            for key in ("username", "password", "token"):
+                val = str(item.get(key) or "").strip()
+                if val:
+                    entry[key] = val
+            result[host] = entry
+        return result
+
     for chunk in str(raw).split(","):
         chunk = chunk.strip()
         if not chunk or ":" not in chunk:
             continue
-        parts = chunk.split(":")
+        scheme, rest_text = "https", chunk
+        m = re.match(r"^(https?)://", chunk, re.IGNORECASE)
+        if m:
+            scheme, rest_text = m.group(1).lower(), chunk[m.end():]
+        parts = rest_text.split(":")
         host = parts[0].strip().lower()
+        rest = [x.strip() for x in parts[1:]]
+        if rest and rest[0].isdigit():
+            host = "%s:%s" % (host, rest.pop(0))
         if not host:
             continue
-        if len(parts) == 2:
-            token = parts[1].strip()
-            if token:
-                result[host] = {"token": token}
-        elif len(parts) == 3:
-            username, password = parts[1].strip(), parts[2].strip()
-            if username and password:
-                result[host] = {"username": username, "password": password}
-        # 콜론이 3개 이상(len(parts) > 3)이면 형식이 불분명하니 건너뛴다 —
-        # 비밀번호 자체에 콜론이 들어가는 경우까지는 지원하지 않는다.
+        if len(rest) == 1 and rest[0]:
+            result[host] = {"scheme": scheme, "token": rest[0]}
+        elif len(rest) == 2 and rest[0] and rest[1]:
+            result[host] = {"scheme": scheme, "username": rest[0], "password": rest[1]}
+        # 그 외(비밀번호에 콜론이 들어간 경우 등)는 형식이 불분명해 건너뛴다 —
+        # 이런 값은 새 JSON 형식(설정 화면에서 저장)으로 다시 등록하면 된다.
     return result
 
 
 def _effective_gitea_cfg(url, configured_tokens=None):
-    """URL에 담긴 자격증명(https://아이디:비밀번호@host/... 또는 https://토큰@host/...)을
-    최우선으로 쓴다. URL에 자격증명이 없으면, 설정 화면에 등록해둔
-    GITEA_TOKENS(호스트별 토큰 또는 아이디/비밀번호)에서 이 URL의 호스트에
-    맞는 항목을 찾아 폴백으로 쓴다 — 매번 URL에 자격증명을 넣지 않아도
-    등록된 서버는 바로 설치/업데이트할 수 있게 하기 위함이다. 서버별 전역
-    설정을 두지 않던 기존 동작(URL 자체의 자격증명)은 그대로 우선순위
-    1위를 유지한다.
+    """이 URL로 Gitea에 접근할 때 쓸 인증 정보를 정한다.
 
-    "source" 필드는 실제로 어느 자격증명이 적용됐는지를 나타낸다
-    ("url_basic"/"url_token"/"config_token"/"config_basic"/"none") — 인증
-    실패(401/403) 시 "URL에 박힌 옛날 자격증명이 우선 적용돼 GITEA_TOKENS가
-    아예 시도되지도 않았다"는 흔한 혼란을 에러 메시지에서 바로 짚어줄 수
-    있도록 함이다."""
+    - URL에 아이디:비밀번호가 있고, 그 아이디가 설정(Gitea 서버)에 저장된 이 호스트의
+      아이디와 같으면 [PATCH-6] "자동 삽입된 자격증명"으로 보고 **설정값을 기준으로**
+      인증한다(읽기 토큰이 있으면 토큰 우선, 없으면 설정의 최신 비밀번호). 그래서 설정에서
+      비밀번호를 바꿔도 레지스트리에 박힌 옛 비밀번호 때문에 실패하지 않는다.
+    - 그 외에 URL에 자격증명이 있으면 그것을 최우선으로 쓴다(사용자가 직접 넣은 값).
+    - URL에 자격증명이 없으면 설정에 저장된 이 호스트의 항목으로 폴백한다.
+
+    "source" 필드는 실제로 어느 자격증명이 적용됐는지를 나타낸다 — 인증 실패 시
+    오류 메시지에서 원인을 바로 짚어주기 위함이다."""
     _, username, password = _extract_url_credentials(url)
+    host = (_parse_repo_url(url)[0] or "").lower()
+    entry = (configured_tokens or {}).get(host) if host else None
+
     if username and password:
+        if entry and entry.get("username") == username:
+            cfg = _gitea_cfg_from_tokens_entry(entry)
+            cfg["source"] = "config_auto"
+            return cfg
         return {"token": None, "username": username, "password": password, "source": "url_basic"}
     if username:  # https://TOKEN@host/owner/repo 형태(토큰만 있는 경우)
+        if entry and entry.get("token") == username:
+            cfg = _gitea_cfg_from_tokens_entry(entry)
+            cfg["source"] = "config_auto"
+            return cfg
         return {"token": username, "username": None, "password": None, "source": "url_token"}
-    if configured_tokens:
-        host = (_parse_repo_url(url)[0] or "").lower()
-        entry = configured_tokens.get(host)
-        if entry:
-            if entry.get("token"):
-                return {"token": entry["token"], "username": None, "password": None, "source": "config_token"}
-            if entry.get("username") and entry.get("password"):
-                return {
-                    "token": None, "username": entry["username"], "password": entry["password"],
-                    "source": "config_basic",
-                }
+    if entry:
+        return _gitea_cfg_from_tokens_entry(entry)
     return {"token": None, "username": None, "password": None, "source": "none"}
 
 
+def _inject_gitea_credentials(url, configured_tokens):
+    """[PATCH-6] 자격증명 없는 Gitea 주소에, 설정에 저장된 이 호스트의 계정을 넣은
+    주소를 만든다. 아이디/비밀번호가 있으면 https://아이디:비밀번호@호스트/...,
+    읽기 토큰만 있으면 https://토큰@호스트/... 형태. GitHub 주소, 이미 자격증명이 있는
+    주소, 설정에 없는 호스트는 그대로 돌려준다.
+    반환: (주소, 자동 삽입 여부)"""
+    clean_url, username, password = _extract_url_credentials(url)
+    if username or password:
+        return url, False
+    host, _owner, _repo = _parse_repo_url(clean_url)
+    if not host or _is_github_host(host):
+        return url, False
+    entry = (configured_tokens or {}).get(host.lower())
+    if not entry:
+        return url, False
+    if entry.get("username") and entry.get("password"):
+        userinfo = "%s:%s" % (urllib.parse.quote(entry["username"], safe=""),
+                              urllib.parse.quote(entry["password"], safe=""))
+    elif entry.get("token"):
+        userinfo = urllib.parse.quote(entry["token"], safe="")
+    else:
+        return url, False
+    parts = urllib.parse.urlsplit(clean_url)
+    injected = urllib.parse.urlunsplit(
+        (parts.scheme, "%s@%s" % (userinfo, parts.netloc), parts.path, parts.query, parts.fragment)
+    )
+    return injected, True
+
+
+def _sync_registry_credentials(configured_tokens):
+    """[PATCH-6] 설정(Gitea 서버)에 계정이 저장된 호스트의 레지스트리 주소를 최신
+    자격증명으로 맞춘다. 자격증명 없이 등록돼 있던 주소에는 계정을 넣고, 같은 아이디로
+    자동 등록된 주소는 비밀번호가 바뀌었으면 갱신한다. 사용자가 다른 아이디로 직접 넣은
+    주소는 건드리지 않는다. 바뀐 항목이 있을 때만 파일을 다시 쓴다."""
+    if not configured_tokens:
+        return 0
+    entries = _load_github_registry_entries()
+    changed = 0
+    new_entries = []
+    for pid, url in entries:
+        new_url = url
+        clean_url, username, password = _extract_url_credentials(url)
+        host = (_parse_repo_url(clean_url)[0] or "").lower()
+        entry = configured_tokens.get(host) if host and not _is_github_host(host) else None
+        if entry:
+            if not username and not password:
+                new_url, _ = _inject_gitea_credentials(clean_url, configured_tokens)
+            elif (username and password and entry.get("username") == username
+                  and entry.get("password") and entry.get("password") != password):
+                new_url, _ = _inject_gitea_credentials(clean_url, configured_tokens)
+        if new_url != url:
+            changed += 1
+        new_entries.append((pid, new_url))
+    if changed:
+        _save_github_registry_entries(new_entries)
+    return changed
+
+
 _GITEA_AUTH_SOURCE_LABEL = {
+    "config_auto": "설정(Gitea 서버)에 저장된 계정(주소에 자동 포함됨)",
     "url_basic": "등록된 주소에 포함된 아이디:비밀번호",
     "url_token": "등록된 주소에 포함된 토큰",
     "config_token": "설정(GITEA_TOKENS)에 등록한 토큰",
@@ -525,12 +642,12 @@ def _gitea_auth_error_hint(gitea_cfg):
             "Basic Auth 지원이 폐지됨). 카드의 '✏️ Git 주소 변경'으로 자격증명 없이 순수 "
             "주소만 다시 등록하면, 이후 GITEA_TOKENS에 등록한 항목이 대신 적용됩니다.)" % label
         )
-    if source in ("config_token", "config_basic"):
+    if source in ("config_token", "config_basic", "config_auto"):
         return (
             "(%s(으)로 인증을 시도했지만 실패했습니다. 정보가 만료됐거나 저장소에 대한 "
-            "읽기 권한이 없을 수 있습니다 — 설정에서 다시 확인해주세요.)" % label
+            "읽기 권한이 없을 수 있습니다 — 설정의 Gitea 서버 '연결 테스트'로 확인해주세요.)" % label
         )
-    return "(이 저장소는 인증 없이는 접근할 수 없습니다 — GITEA_TOKENS 설정에 토큰(또는 아이디:비밀번호)을 등록하거나, 주소에 자격증명을 포함해 다시 등록해주세요.)"
+    return "(이 저장소는 인증 없이는 접근할 수 없습니다 — 설정의 'Gitea 서버'에 이 서버의 아이디/비밀번호 또는 읽기 토큰을 등록하면 자동으로 적용됩니다.)"
 
 
 def _effective_github_token(url, fallback_token):
@@ -784,7 +901,7 @@ def _update_registered_repo_url(plugin_id, new_url):
 
     host, owner, repo = _parse_repo_url(new_url)
     if not host or not owner or not repo:
-        return False, "Git 저장소 주소를 해석하지 못했습니다: %s" % new_url
+        return False, "Git 저장소 주소를 해석하지 못했습니다: %s" % _scrub_credentials(new_url)
 
     # 주소가 바뀌면(자격증명만 바뀐 경우 포함) 예전 주소로 실패했던 결과가
     # 캐시에 최대 24시간 남아있을 수 있다 — 예를 들어 URL에 박힌 옛 자격증명
@@ -1323,20 +1440,28 @@ def _fetch_repos_by_topic(topics, token):
 
 
 def _gitea_cfg_from_tokens_entry(entry):
-    """GITEA_TOKENS에서 얻은 {"token": ...} 또는 {"username": ..., "password": ...}
-    항목을 _gitea_headers()가 바로 쓸 수 있는 gitea_cfg 형태로 변환한다.
-    URL 자체의 자격증명(_effective_gitea_cfg)과 달리, 여기는 처음부터 설정에
-    등록된 서버만 대상으로 하는 토픽 검색 전용이라 URL을 거치지 않는다."""
+    """설정(Gitea 서버) 항목을 _gitea_headers()가 바로 쓸 수 있는 gitea_cfg로 바꾼다.
+    토큰과 아이디/비밀번호가 함께 있으면 둘 다 담아두고, 헤더는 토큰을 우선 쓴다."""
     if not entry:
         return {"token": None, "username": None, "password": None, "source": "none"}
-    if entry.get("token"):
-        return {"token": entry["token"], "username": None, "password": None, "source": "config_token"}
-    if entry.get("username") and entry.get("password"):
-        return {
-            "token": None, "username": entry["username"], "password": entry["password"],
-            "source": "config_basic",
-        }
-    return {"token": None, "username": None, "password": None, "source": "none"}
+    token = entry.get("token") or None
+    username = entry.get("username") or None
+    password = entry.get("password") or None
+    if token:
+        source = "config_token"
+    elif username and password:
+        source = "config_basic"
+    else:
+        source = "none"
+    return {"token": token, "username": username, "password": password, "source": source}
+
+
+def _gitea_auth_fingerprint(gitea_cfg):
+    """캐시 키용 인증 식별자 — 인증 정보가 바뀌면(토큰 추가 등) 이전 검색 결과를
+    재사용하지 않도록 한다. 비밀값 자체는 키에 넣지 않고 해시만 쓴다."""
+    cfg = gitea_cfg or {}
+    raw = "%s|%s|%s" % (cfg.get("token") or "", cfg.get("username") or "", cfg.get("password") or "")
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10] if raw != "||" else "anon"
 
 
 def _fetch_gitea_repos_by_topic(host, gitea_cfg, scheme, topics):
@@ -1350,7 +1475,7 @@ def _fetch_gitea_repos_by_topic(host, gitea_cfg, scheme, topics):
     if not topics:
         return []
 
-    cache_key = "gitea:%s:%s" % (host, _topic_cache_key(topics))
+    cache_key = "gitea:%s://%s:%s:%s" % (scheme, host, _gitea_auth_fingerprint(gitea_cfg), _topic_cache_key(topics))
     now = time.time()
     cached = _TOPIC_CACHE.get(cache_key)
     if cached and (now - cached[0]) < _TOPIC_CACHE_TTL_SECONDS:
@@ -2315,7 +2440,7 @@ def _validate_plugin_source(plugin_dir, detected_id):
     return all_ok, checks
 
 
-def _install_from_archive(archive_data_b64, filename, db_type):
+def _install_from_archive(archive_data_b64, filename, db_type, gitea_tokens=None):
     """업로드된 압축 파일(base64, zip/tar 계열/7z)로 플러그인을 설치한다.
     1) base64 디코드 → 파일명 확장자로 형식 판별 → 임시 폴더에 안전하게 압축
        해제(경로 이탈/개수/용량 검증 — 형식별로 _extract_archive_safe에 위임)
@@ -2387,7 +2512,8 @@ def _install_from_archive(archive_data_b64, filename, db_type):
 
         # 2차 로드 검증까지 통과한 뒤에만 기록한다 — 롤백된 설치가 레지스트리에 남지 않도록.
         if source_url:
-            _remember_repo_install(source_url, plugin_id=folder)
+            registered_url, _injected = _inject_gitea_credentials(source_url, gitea_tokens)
+            _remember_repo_install(registered_url, plugin_id=folder)
         return True, msg
     except (zipfile.BadZipFile, tarfile.ReadError):
         return False, "올바른 압축 파일 형식이 아닙니다."
@@ -2603,6 +2729,149 @@ def _delete_plugin(plugin_id):
                     message=data_dir_warning.strip() or None)
 
     return True, "'%s' 플러그인이 삭제되었습니다.%s" % (plugin_id, data_dir_warning)
+
+
+# ========================================================================
+# [PATCH-6] Gitea 서버 연결 테스트
+# ========================================================================
+def _gitea_http_error_detail(exc, what):
+    code = getattr(exc, "code", None)
+    if code == 401:
+        return "%s 인증 실패(401)" % what
+    if code == 403:
+        return "%s 권한 부족(403)" % what
+    if code == 404:
+        return "%s 경로를 찾을 수 없음(404)" % what
+    return "%s 오류: %s" % (what, exc)
+
+
+def _test_gitea_server(params, configured_tokens, topics):
+    """설정 화면의 '연결 테스트'. 화면에 입력된(아직 저장 전일 수 있는) 값으로
+    ① 서버 접속 ② 읽기 토큰 ③ 아이디/비밀번호 ④ 토픽 검색(인증 전후 비교)을 차례로
+    확인해 단계별 결과를 돌려준다. 입력칸이 비어 있으면 저장된 값을 쓴다.
+    반환: {"host", "scheme", "checks": [{label, status: ok|warn|fail|skip, detail}], "repos": [...]}"""
+    scheme, host = _normalize_gitea_server(params.get("host"), params.get("scheme") or None)
+    saved = (configured_tokens or {}).get(host) or {}
+    if not params.get("scheme") and saved.get("scheme"):
+        scheme = saved["scheme"]
+    token = str(params.get("token") or "").strip() or saved.get("token")
+    username = str(params.get("username") or "").strip() or saved.get("username")
+    password = str(params.get("password") or "").strip() or saved.get("password")
+
+    checks = []
+    report = {"host": host, "scheme": scheme, "checks": checks, "repos": []}
+    if not host:
+        checks.append({"label": "서버 주소", "status": "fail", "detail": "주소를 입력해주세요."})
+        return report
+
+    # ① 접속
+    try:
+        ver = _gitea_get_json(host, "/api/v1/version", None, scheme)
+        checks.append({"label": "서버 접속", "status": "ok",
+                       "detail": "%s://%s — Gitea %s" % (scheme, host, (ver or {}).get("version", "?"))})
+    except Exception as exc:
+        hint = ""
+        if scheme == "https":
+            hint = " (http로만 서비스하는 서버라면 주소를 http://로 입력해보세요)"
+        checks.append({"label": "서버 접속", "status": "fail",
+                       "detail": "%s://%s 에 접속하지 못했습니다: %s%s" % (scheme, host, exc, hint)})
+        return report
+
+    # ② 읽기 토큰
+    token_ok = False
+    if token:
+        try:
+            me = _gitea_get_json(host, "/api/v1/user", {"token": token}, scheme)
+            token_ok = True
+            checks.append({"label": "읽기 토큰", "status": "ok",
+                           "detail": "유효함 — 계정 %s" % (me or {}).get("login", "?")})
+        except urllib.error.HTTPError as exc:
+            if exc.code == 403:
+                # 사용자 정보(read:user) 권한이 없을 뿐 토큰 자체는 유효할 수 있다 — 아래 검색으로 판단
+                token_ok = True
+                checks.append({"label": "읽기 토큰", "status": "warn",
+                               "detail": "토큰은 인식됐지만 사용자 정보 조회 권한이 없습니다(403). "
+                                         "저장소 읽기 권한이 있으면 아래 검색은 정상 동작합니다."})
+            else:
+                checks.append({"label": "읽기 토큰", "status": "fail",
+                               "detail": _gitea_http_error_detail(exc, "토큰") +
+                                         " — 토큰이 잘못됐거나 만료·폐기됐을 수 있습니다."})
+        except Exception as exc:
+            checks.append({"label": "읽기 토큰", "status": "fail", "detail": str(exc)})
+    else:
+        checks.append({"label": "읽기 토큰", "status": "skip", "detail": "입력되지 않음"})
+
+    # ③ 아이디/비밀번호
+    basic_ok = False
+    if username and password:
+        try:
+            me = _gitea_get_json(host, "/api/v1/user", {"username": username, "password": password}, scheme)
+            basic_ok = True
+            checks.append({"label": "아이디/비밀번호", "status": "ok",
+                           "detail": "로그인 성공 — 계정 %s" % (me or {}).get("login", username)})
+        except urllib.error.HTTPError as exc:
+            checks.append({"label": "아이디/비밀번호", "status": "fail",
+                           "detail": _gitea_http_error_detail(exc, "아이디/비밀번호") +
+                                     " — 비밀번호가 틀렸거나, 계정에 2단계 인증이 켜져 있거나, 서버가 "
+                                     "API의 비밀번호 인증을 막아둔 경우입니다. 이때는 읽기 토큰을 등록하세요."})
+        except Exception as exc:
+            checks.append({"label": "아이디/비밀번호", "status": "fail", "detail": str(exc)})
+    elif username or password:
+        checks.append({"label": "아이디/비밀번호", "status": "fail", "detail": "아이디와 비밀번호를 모두 입력해주세요."})
+    else:
+        checks.append({"label": "아이디/비밀번호", "status": "skip", "detail": "입력되지 않음"})
+
+    # ④ 토픽 검색 — 실제 검색은 토큰 우선(대시보드와 같은 규칙), 인증 없는 결과와 비교
+    def search(cfg):
+        found = {}
+        for topic in topics:
+            path = "/api/v1/repos/search?q=%s&topic=true&limit=50" % urllib.parse.quote(topic, safe="")
+            for repo_json in (_gitea_get_json(host, path, cfg, scheme) or {}).get("data") or []:
+                name = repo_json.get("full_name") or repo_json.get("name")
+                if name:
+                    found[name] = bool(repo_json.get("private"))
+        return found
+
+    auth_cfg = None
+    if token and token_ok:
+        auth_cfg = {"token": token}
+    elif username and password and basic_ok:
+        auth_cfg = {"username": username, "password": password}
+
+    try:
+        anon = search(None)
+    except Exception as exc:
+        anon = None
+        checks.append({"label": "토픽 검색(인증 없음)", "status": "warn", "detail": str(exc)})
+
+    topics_text = ", ".join(topics)
+    if auth_cfg:
+        try:
+            found = search(auth_cfg)
+            report["repos"] = [{"name": n, "private": p} for n, p in sorted(found.items())]
+            private_count = sum(1 for p in found.values() if p)
+            if found:
+                checks.append({"label": "토픽 검색", "status": "ok",
+                               "detail": "토픽(%s)이 달린 저장소 %d개 발견 — 비공개 %d개, 인증 없이는 %s개" % (
+                                   topics_text, len(found), private_count,
+                                   "?" if anon is None else len(anon))})
+            else:
+                checks.append({"label": "토픽 검색", "status": "warn",
+                               "detail": "인증은 됐지만 토픽(%s)이 달린 저장소가 없습니다. 저장소 설정 → "
+                                         "토픽에 해당 토픽을 추가했는지, 이 계정에 저장소 읽기 권한이 "
+                                         "있는지 확인해주세요." % topics_text})
+        except urllib.error.HTTPError as exc:
+            checks.append({"label": "토픽 검색", "status": "fail",
+                           "detail": _gitea_http_error_detail(exc, "저장소 검색") +
+                                     " — 토큰이라면 repository 읽기 권한으로 다시 발급해주세요."})
+        except Exception as exc:
+            checks.append({"label": "토픽 검색", "status": "fail", "detail": str(exc)})
+    elif anon is not None:
+        report["repos"] = [{"name": n, "private": p} for n, p in sorted(anon.items())]
+        checks.append({"label": "토픽 검색", "status": "warn" if not anon else "ok",
+                       "detail": "인증 없이 검색 — 공개 저장소 %d개. 비공개 저장소는 계정이나 토큰이 "
+                                 "있어야 보입니다." % len(anon)})
+    return report
 
 
 # ========================================================================
@@ -3247,10 +3516,12 @@ def _install_or_update_from_url(url, token, gitea_tokens=None, db_type="general"
     등록해둔 {호스트: 토큰})에서 이 호스트에 맞는 토큰을 찾아 폴백으로 쓴다.
     설치에 성공하면 자격증명이 담긴 URL 그대로 github.txt에 **실제 설치 폴더명**을
     키로 기록한다(파일 권한 600). existing_folder는 업데이트 대상 폴더다."""
+    # [PATCH-6] 자격증명 없는 Gitea 주소면 설정에 저장된 계정을 자동으로 넣는다
+    url, injected = _inject_gitea_credentials(url, gitea_tokens)
     clean_url, url_username, url_password = _extract_url_credentials(url)
     host, owner, repo = _parse_repo_url(clean_url)
     if not host or not owner or not repo:
-        return False, "Git 저장소 주소를 해석하지 못했습니다: %s" % url
+        return False, "Git 저장소 주소를 해석하지 못했습니다: %s" % _scrub_credentials(url)
 
     if _is_github_host(host):
         effective_token = url_password or url_username or token
@@ -3266,6 +3537,8 @@ def _install_or_update_from_url(url, token, gitea_tokens=None, db_type="general"
 
     if ok and folder:
         _remember_repo_install(url, plugin_id=folder)
+        if injected:
+            msg += " (설정에 저장된 %s 계정으로 인증해 등록했습니다)" % host
     return ok, msg
 
 
@@ -3287,13 +3560,12 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             "type": "password",
             "required": False,
             "description": (
-                "Git 저장소 URL에 자격증명을 직접 넣지 않아도, 등록해둔 Gitea 서버는 "
-                "바로 설치/업데이트할 수 있게 해줍니다. 저장소 읽기(read) 권한만 있는 "
-                "토큰을 발급받아 등록하세요 — 쓰기 권한은 필요 없습니다. 아이디/비밀번호 "
-                "방식만 지원하는 서버는 등록된 목록에서 확인할 수는 있지만, 이 화면에서 "
-                "새로 추가할 수는 없습니다(필요하면 문의해주세요). URL 자체에 "
-                "https://토큰@host/... 처럼 자격증명이 있으면 그쪽이 항상 우선합니다 — "
-                "이 화면만으로 관리하려면 Git 주소는 자격증명 없이 순수 주소로 등록하세요."
+                "비공개 저장소가 있는 Gitea 서버의 주소·아이디·비밀번호·읽기 토큰을 저장합니다. "
+                "저장해두면 https://서버/소유자/저장소 처럼 자격증명 없는 주소로 설치해도 자동으로 "
+                "인증하고, https://아이디:비밀번호@서버/... 형태로 등록합니다(비밀번호를 바꾸면 "
+                "등록된 주소도 자동 갱신). 토픽 검색·버전 확인 같은 API 호출에는 읽기 토큰을 "
+                "우선 사용하므로, 토큰은 repository 읽기 권한으로 발급하는 것을 권장합니다. "
+                "주소 옆 '연결 테스트'로 접속·인증·토픽 검색 결과를 바로 확인할 수 있습니다."
             ),
         },
         {
@@ -3463,6 +3735,13 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             })
             return True, data
 
+        if action == "test_gitea":
+            cfg = self.get_plugin_config(db_type, default={})
+            extra_topics = [t.strip() for t in str(cfg.get("EXTRA_DISCOVERY_TOPICS") or "").split(",") if t.strip()]
+            catalog_topic = str(cfg.get("CATALOG_TOPIC") or "").strip()
+            topics = list(dict.fromkeys(DISCOVERY_TOPICS + extra_topics + ([catalog_topic] if catalog_topic else [])))
+            return True, _test_gitea_server(item_data, _parse_gitea_tokens_cfg(cfg.get("GITEA_TOKENS")), topics)
+
         if action in ("install_git", "update", "install_zip"):
             ok, msg = self._dispatch_install(db_type, action, plugin_id, item_data)
             if not ok and not getattr(_HISTORY_CTX, "recorded", False):
@@ -3488,7 +3767,10 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             filename = str(item_data.get("filename", "")).strip()
             if not zip_data:
                 return False, "zip_data가 필요합니다."
-            return _install_from_archive(zip_data, filename, db_type)
+            cfg = self.get_plugin_config(db_type, default={})
+            return _install_from_archive(
+                zip_data, filename, db_type, gitea_tokens=_parse_gitea_tokens_cfg(cfg.get("GITEA_TOKENS"))
+            )
 
         return self._dispatch_git_install(db_type, action, plugin_id, item_data)
 
@@ -3579,7 +3861,13 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             new_git_url = str(item_data.get("git_url", "")).strip()
             if not new_git_url:
                 return False, "새 git_url이 필요합니다."
+            cfg = self.get_plugin_config(db_type, default={})
+            new_git_url, injected = _inject_gitea_credentials(
+                new_git_url, _parse_gitea_tokens_cfg(cfg.get("GITEA_TOKENS"))
+            )
             ok, msg = _update_registered_repo_url(plugin_id, new_git_url)
+            if ok and injected:
+                msg += " (설정에 저장된 계정을 주소에 자동으로 포함했습니다)"
             if ok:
                 clean_new, _u, _p = _extract_url_credentials(new_git_url)
                 _record_history("url_changed", plugin_id, message="새 주소: %s" % clean_new)
@@ -3687,14 +3975,32 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         # 있게 한다 — 매번 새 서버마다 토큰을 등록해야만 발견이 되는 건 아니다.
         # 인증 정보는 GITEA_TOKENS 항목이 있으면 그걸 쓰고, 없으면 등록된 URL
         # 자체에 담긴 자격증명(있다면)을, 그마저 없으면 인증 없이 시도한다.
+        # [PATCH-6] 설정에 계정이 저장된 서버의 레지스트리 주소를 최신 자격증명으로 맞춘다
+        if is_admin:
+            try:
+                _sync_registry_credentials(gitea_tokens)
+            except Exception:
+                pass
         registry_entries_all = _load_github_registry_entries()
+        # {host: {"cfg": 인증, "scheme": http|https, "from_registry": 설치 이력이 있는 서버인지}}
         gitea_hosts_to_search = {
-            host: _gitea_cfg_from_tokens_entry(entry) for host, entry in gitea_tokens.items()
+            host: {"cfg": _gitea_cfg_from_tokens_entry(entry), "scheme": entry.get("scheme") or "https",
+                   "from_registry": False}
+            for host, entry in gitea_tokens.items()
         }
         for _pid, _url in registry_entries_all:
             h, _o, _r = _parse_repo_url(_url)
-            if h and not _is_github_host(h) and h.lower() not in gitea_hosts_to_search:
-                gitea_hosts_to_search[h.lower()] = _effective_gitea_cfg(_url, gitea_tokens)
+            if not h or _is_github_host(h):
+                continue
+            h = h.lower()
+            if h in gitea_hosts_to_search:
+                gitea_hosts_to_search[h]["from_registry"] = True
+            else:
+                gitea_hosts_to_search[h] = {
+                    "cfg": _effective_gitea_cfg(_url, gitea_tokens),
+                    "scheme": _url_scheme(_url),
+                    "from_registry": True,
+                }
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2 + len(gitea_hosts_to_search)) as executor:
             self_future = executor.submit(
@@ -3702,8 +4008,10 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             )
             topics_future = executor.submit(_fetch_repos_by_topic, all_topics, token)
             gitea_topic_futures = {
-                host: executor.submit(_fetch_gitea_repos_by_topic, host, gcfg, "https", all_topics)
-                for host, gcfg in gitea_hosts_to_search.items()
+                host: executor.submit(
+                    _fetch_gitea_repos_by_topic, host, spec["cfg"], spec["scheme"], all_topics
+                )
+                for host, spec in gitea_hosts_to_search.items()
             }
             # plugin_board 자기 자신은 GitHub Topics 검색 결과와 무관하게 항상
             # 별도로 조회해 카드 목록 맨 앞에 고정한다("미검수" 표시 없이, 개발
@@ -3767,7 +4075,9 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         for host, repo_list in gitea_topic_repos.items():
             if not repo_list:
                 continue
-            gitea_cfg_h = gitea_hosts_to_search.get(host) or _gitea_cfg_from_tokens_entry(gitea_tokens.get(host))
+            spec_h = gitea_hosts_to_search.get(host) or {}
+            gitea_cfg_h = spec_h.get("cfg") or _gitea_cfg_from_tokens_entry(gitea_tokens.get(host))
+            scheme_h = spec_h.get("scheme") or "https"
             version_specs_g = []
             for repo_json in repo_list:
                 owner_login = ((repo_json.get("owner") or {}).get("login")) or ""
@@ -3779,7 +4089,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             if version_specs_g:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(version_specs_g))) as vexec:
                     vfuture_map = {
-                        vexec.submit(_gitea_fetch_version, host, o, r, db, gitea_cfg_h, "https"): (o, r)
+                        vexec.submit(_gitea_fetch_version, host, o, r, db, gitea_cfg_h, scheme_h): (o, r)
                         for (o, r, db) in version_specs_g
                     }
                     for vfut in concurrent.futures.as_completed(vfuture_map):
@@ -3817,12 +4127,40 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                     "type_label": TYPE_LABELS["other"],
                     "desc": "이 Gitea 서버에서 토픽 검색이 실패했습니다: %s" % err_msg,
                     "tags": [], "features": [], "version_label": "—",
-                    "url": "https://%s" % host,
+                    "url": "%s://%s" % ((gitea_hosts_to_search.get(host) or {}).get("scheme", "https"), host),
                     "error": True,
+                    "notice": True,
                     "installed": False, "installed_version": None, "has_update": False,
                     "has_config": False, "enabled": None,
                     "discovered": True, "gitea": True,
                 })
+            # [PATCH-6] 인증 없이 검색했는데 결과가 0개인 서버 — 이 서버에서 설치한 적이
+            # 있으므로 플러그인이 있는 서버인데, 비공개 저장소라 안 보였을 가능성이 높다.
+            # Gitea는 이 경우 오류 없이 빈 목록을 주므로 따로 알려주지 않으면 원인을 알 수 없다.
+            for host, spec in gitea_hosts_to_search.items():
+                if host in gitea_topic_errors or gitea_topic_repos.get(host):
+                    continue
+                if spec.get("from_registry") and (spec.get("cfg") or {}).get("source") == "none":
+                    discovered_items.append({
+                        "id": "gitea-search-hint:" + host,
+                        "owner": "",
+                        "title": "%s — 비공개 저장소가 검색되지 않았을 수 있음" % host,
+                        "type": "other",
+                        "type_label": TYPE_LABELS["other"],
+                        "desc": (
+                            "이 Gitea 서버를 인증 없이 검색해 공개 저장소만 조회됐고, 토픽이 달린 "
+                            "저장소가 하나도 없었습니다. 비공개 저장소라면 플러그인게시판 설정(⚙)의 "
+                            "'Gitea 서버'에 이 서버의 아이디/비밀번호 또는 읽기 토큰을 등록한 뒤 "
+                            "'연결 테스트'로 확인하고 목록을 새로고침하세요."
+                        ),
+                        "tags": [], "features": [], "version_label": "—",
+                        "url": "%s://%s" % (spec.get("scheme", "https"), host),
+                        "error": True,
+                        "notice": True,
+                        "installed": False, "installed_version": None, "has_update": False,
+                        "has_config": False, "enabled": None,
+                        "discovered": True, "gitea": True,
+                    })
 
         if len(discovered_items) > _MAX_DISCOVERED_ITEMS:
             discovered_items = discovered_items[:_MAX_DISCOVERED_ITEMS]

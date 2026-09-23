@@ -284,6 +284,13 @@
   // item.installed / item.has_update 값(백엔드가 plugins/metadata 디렉토리를 직접
   // 확인해 계산)에 따라 "신규설치" / "업데이트" 버튼 또는 "설치됨" 배지를 만든다.
   function buildActionControl(item) {
+    if (item.notice) {
+      // [PATCH-6] 검색 실패/안내 카드 — 설치할 대상이 아니다
+      const badge = document.createElement("span");
+      badge.className = "pb-installed-badge pb-installed-badge-muted";
+      badge.textContent = "안내";
+      return badge;
+    }
     if (item.installed && !item.has_update) {
       const badge = document.createElement("span");
       badge.className = "pb-installed-badge";
@@ -390,41 +397,138 @@
   }
 
   // ------------------------------------------------------------------
-  // GITEA_TOKENS 설정값("호스트:토큰" 또는 "호스트:아이디:비밀번호"를 콤마로
-  // 구분한 문자열)을 사람이 편집하기 쉬운 "서버 추가/삭제" UI로 대체한다.
-  // 백엔드(_parse_gitea_tokens_cfg)가 읽는 문자열 형식 자체는 그대로 두고,
-  // 프론트에서만 파싱/조립해 hidden input에 채워 넣으므로 저장 흐름은 기존과
-  // 완전히 동일하다(다른 config_schema 필드처럼 name 속성만으로 자동 수집됨).
+  // [PATCH-6] "Gitea 서버" 설정(GITEA_TOKENS) 편집 UI.
+  // 저장 형식은 서버별 {host, scheme, username, password, token} JSON 목록이다.
+  // 구버전 콤마 문자열("호스트:토큰", "호스트:아이디:비밀번호", "호스트:포트:토큰")도
+  // 읽어서 이 화면에서 한 번 저장하면 새 형식으로 바뀐다. 내부 입력칸에는 name
+  // 속성을 달지 않아, 저장 시에는 hidden input(GITEA_TOKENS) 하나만 수집된다.
   // ------------------------------------------------------------------
+  function normalizeGiteaServer(raw, fallbackScheme) {
+    let text = String(raw || "").trim();
+    let scheme = fallbackScheme || "";
+    const m = text.match(/^([a-z][a-z0-9+.-]*):\/\//i);
+    if (m) {
+      scheme = m[1].toLowerCase();
+      text = text.slice(m[0].length);
+    }
+    const host = text.split("/")[0].split("@").pop().trim().toLowerCase();
+    if (scheme !== "http" && scheme !== "https") scheme = "https";
+    return { scheme, host };
+  }
+
   function parseGiteaTokensValue(raw) {
+    const text = String(raw || "").trim();
+    if (!text) return [];
+    if (text.startsWith("[")) {
+      try {
+        const arr = JSON.parse(text);
+        return (Array.isArray(arr) ? arr : [])
+          .filter((e) => e && e.host)
+          .map((e) => {
+            const { scheme, host } = normalizeGiteaServer(e.host, e.scheme);
+            return {
+              host,
+              scheme,
+              username: e.username || "",
+              password: e.password || "",
+              token: e.token || "",
+            };
+          });
+      } catch (err) {
+        console.warn(`${LOG_PREFIX} GITEA_TOKENS JSON 파싱 실패:`, err);
+        return [];
+      }
+    }
     const entries = [];
-    String(raw || "").split(",").forEach((chunk) => {
+    text.split(",").forEach((chunk) => {
       chunk = chunk.trim();
       if (!chunk || !chunk.includes(":")) return;
-      const parts = chunk.split(":");
-      const host = (parts[0] || "").trim();
-      if (!host) return;
-      if (parts.length === 2) {
-        const token = parts[1].trim();
-        if (token) entries.push({ host, token });
-      } else if (parts.length === 3) {
-        // "호스트:아이디:비밀번호" — 이 UI엔 아이디/비밀번호 입력칸이 없지만,
-        // 예전에(또는 다른 경로로) 등록해둔 항목을 삭제 없이는 화면에서
-        // 지워버리지 않도록 읽기 전용으로 계속 보여주고 값도 그대로 유지한다.
-        const username = parts[1].trim();
-        const password = parts[2].trim();
-        if (username && password) entries.push({ host, username, password });
+      let scheme = "https";
+      const m = chunk.match(/^(https?):\/\//i);
+      if (m) {
+        scheme = m[1].toLowerCase();
+        chunk = chunk.slice(m[0].length);
       }
-      // 콜론이 4개 이상이면 형식이 불분명하니 이 UI에서는 건너뛴다(원본 저장값
-      // 자체를 지우진 않지만, 이 필드를 한 번이라도 저장하면 사라질 수 있음).
+      const parts = chunk.split(":").map((x) => x.trim());
+      let host = (parts.shift() || "").toLowerCase();
+      if (parts.length && /^\d+$/.test(parts[0])) host += ":" + parts.shift();
+      if (!host) return;
+      if (parts.length === 1 && parts[0]) {
+        entries.push({ host, scheme, username: "", password: "", token: parts[0] });
+      } else if (parts.length === 2 && parts[0] && parts[1]) {
+        entries.push({ host, scheme, username: parts[0], password: parts[1], token: "" });
+      }
     });
     return entries;
   }
 
   function serializeGiteaTokensValue(entries) {
-    return entries
-      .map((e) => (e.token ? `${e.host}:${e.token}` : `${e.host}:${e.username}:${e.password}`))
-      .join(",");
+    if (!entries.length) return "";
+    return JSON.stringify(
+      entries.map((e) => {
+        const out = { host: e.host, scheme: e.scheme || "https" };
+        if (e.username) out.username = e.username;
+        if (e.password) out.password = e.password;
+        if (e.token) out.token = e.token;
+        return out;
+      })
+    );
+  }
+
+  const GITEA_TEST_MARK = { ok: "✓", warn: "!", fail: "✗", skip: "–" };
+
+  function renderGiteaTestResult(targetEl, data) {
+    targetEl.innerHTML = "";
+    targetEl.hidden = false;
+    (data.checks || []).forEach((c) => {
+      const row = document.createElement("div");
+      row.className = "pb-gitea-test-row pb-gitea-test-" + (c.status || "skip");
+      const mark = document.createElement("span");
+      mark.className = "pb-gitea-test-mark";
+      mark.textContent = GITEA_TEST_MARK[c.status] || "·";
+      const label = document.createElement("strong");
+      label.textContent = c.label || "";
+      const detail = document.createElement("span");
+      detail.textContent = c.detail || "";
+      row.append(mark, label, detail);
+      targetEl.appendChild(row);
+    });
+    const repos = data.repos || [];
+    if (repos.length) {
+      const list = document.createElement("div");
+      list.className = "pb-gitea-test-repos";
+      list.textContent =
+        "발견된 저장소: " + repos.map((r) => r.name + (r.private ? " (비공개)" : "")).join(", ");
+      targetEl.appendChild(list);
+    }
+  }
+
+  async function runGiteaTest(entry, resultEl, btn) {
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "테스트 중…";
+    resultEl.hidden = false;
+    resultEl.textContent = "연결을 확인하는 중…";
+    try {
+      const result = await callPluginBoardAction(getDbType(), {
+        action: "test_gitea",
+        host: entry.host,
+        scheme: entry.scheme,
+        username: entry.username,
+        password: entry.password,
+        token: entry.token,
+      });
+      if (result && result.success && result.message && typeof result.message === "object") {
+        renderGiteaTestResult(resultEl, result.message);
+      } else {
+        resultEl.textContent = (result && result.error) || "연결 테스트에 실패했습니다.";
+      }
+    } catch (err) {
+      resultEl.textContent = `연결 테스트 중 오류: ${err && err.message ? err.message : err}`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
   }
 
   function buildGiteaServersField(key, currentValue) {
@@ -433,14 +537,19 @@
 
     const hidden = document.createElement("input");
     hidden.type = "hidden";
-    hidden.name = key; // 저장 시 이 값이 그대로 GITEA_TOKENS로 수집된다(다른 필드와 동일한 방식)
+    hidden.name = key; // 저장 시 이 값만 GITEA_TOKENS로 수집된다
 
     const listEl = document.createElement("div");
     listEl.className = "pb-gitea-servers-list";
 
     let entries = parseGiteaTokensValue(currentValue);
+    let editingIndex = -1; // -1이면 새 서버 추가 모드
 
-    const syncHidden = () => { hidden.value = serializeGiteaTokensValue(entries); };
+    const syncHidden = () => {
+      hidden.value = serializeGiteaTokensValue(entries);
+    };
+
+    const mask = (v) => "•".repeat(Math.min(String(v || "").length, 10));
 
     const renderList = () => {
       listEl.innerHTML = "";
@@ -452,18 +561,33 @@
         return;
       }
       entries.forEach((entry, idx) => {
+        const wrap = document.createElement("div");
+        wrap.className = "pb-gitea-servers-item";
+
         const row = document.createElement("div");
         row.className = "pb-gitea-servers-row";
 
         const hostEl = document.createElement("span");
         hostEl.className = "pb-gitea-servers-host";
-        hostEl.textContent = entry.host;
+        hostEl.textContent = `${entry.scheme}://${entry.host}`;
 
+        const authParts = [];
+        if (entry.username) authParts.push(`계정 ${entry.username}${entry.password ? " / " + mask(entry.password) : " (비밀번호 없음)"}`);
+        if (entry.token) authParts.push(`토큰 ${mask(entry.token)}`);
         const authEl = document.createElement("span");
         authEl.className = "pb-gitea-servers-auth";
-        authEl.textContent = entry.token
-          ? "토큰 " + "•".repeat(Math.min(entry.token.length, 10))
-          : "아이디/비밀번호 설정됨 (" + entry.username + ")";
+        authEl.textContent = authParts.length ? authParts.join(" · ") : "인증 정보 없음(공개 저장소만)";
+
+        const testBtn = document.createElement("button");
+        testBtn.type = "button";
+        testBtn.className = "pb-gitea-servers-action";
+        testBtn.textContent = "연결 테스트";
+
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "pb-gitea-servers-action";
+        editBtn.textContent = "수정";
+        editBtn.addEventListener("click", () => startEdit(idx));
 
         const delBtn = document.createElement("button");
         delBtn.type = "button";
@@ -472,71 +596,149 @@
         delBtn.innerHTML = "&times;";
         delBtn.addEventListener("click", () => {
           entries.splice(idx, 1);
+          if (editingIndex === idx) resetForm();
           syncHidden();
           renderList();
         });
 
-        row.append(hostEl, authEl, delBtn);
-        listEl.appendChild(row);
+        const resultEl = document.createElement("div");
+        resultEl.className = "pb-gitea-test-result";
+        resultEl.hidden = true;
+        testBtn.addEventListener("click", () => runGiteaTest(entry, resultEl, testBtn));
+
+        row.append(hostEl, authEl, testBtn, editBtn, delBtn);
+        wrap.append(row, resultEl);
+        listEl.appendChild(wrap);
       });
     };
 
-    const formRow = document.createElement("div");
-    formRow.className = "pb-gitea-servers-form";
-    const hostInput = document.createElement("input");
-    hostInput.type = "text";
-    hostInput.placeholder = "https://git.example.com";
-    hostInput.autocomplete = "off";
-    const tokenInput = document.createElement("input");
-    tokenInput.type = "text";
-    tokenInput.placeholder = "토큰 (선택 — 비공개 저장소용)";
-    tokenInput.autocomplete = "off";
-    const addBtn = document.createElement("button");
-    addBtn.type = "button";
-    addBtn.textContent = "+ 추가";
+    // ---- 추가/수정 폼
+    const formEl = document.createElement("div");
+    formEl.className = "pb-gitea-servers-form pb-gitea-servers-form-grid";
 
-    const addEntry = () => {
-      // 호스트만 추출(https:// 등 스킴이 붙어 있어도 host만 저장) — 백엔드가
-      // host 문자열 그대로를 URL의 호스트와 대소문자 무관 비교하기 때문에,
-      // 스킴/경로가 섞여 있으면 매칭이 안 될 수 있어 여기서 정리해둔다.
-      let host = hostInput.value.trim();
-      if (!host) {
+    const makeInput = (type, placeholder) => {
+      const input = document.createElement("input");
+      input.type = type;
+      input.placeholder = placeholder;
+      input.autocomplete = type === "password" ? "new-password" : "off";
+      return input;
+    };
+    const hostInput = makeInput("text", "서버 주소 (예: https://gitea.example.com 또는 http://host:3000)");
+    const userInput = makeInput("text", "아이디");
+    const passInput = makeInput("password", "비밀번호");
+    const tokenInput = makeInput("password", "읽기 토큰 (repository 읽기 권한)");
+
+    const submitBtn = document.createElement("button");
+    submitBtn.type = "button";
+    submitBtn.textContent = "+ 추가";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.textContent = "취소";
+    cancelBtn.hidden = true;
+    const testFormBtn = document.createElement("button");
+    testFormBtn.type = "button";
+    testFormBtn.textContent = "입력값으로 테스트";
+    const formResultEl = document.createElement("div");
+    formResultEl.className = "pb-gitea-test-result";
+    formResultEl.hidden = true;
+
+    const hint = document.createElement("p");
+    hint.className = "pb-gitea-servers-hint";
+    hint.textContent =
+      "아이디/비밀번호를 저장하면 이 서버의 저장소를 https://서버/소유자/저장소 처럼 자격증명 없이 " +
+      "입력해도 https://아이디:비밀번호@서버/... 로 자동 등록됩니다. 토픽 검색·버전 확인에는 읽기 " +
+      "토큰을 우선 사용합니다. 추가·수정 후 아래 '저장'을 눌러야 반영됩니다.";
+
+    const readForm = () => {
+      const { scheme, host } = normalizeGiteaServer(hostInput.value, "");
+      return {
+        host,
+        scheme,
+        username: userInput.value.trim(),
+        password: passInput.value,
+        token: tokenInput.value.trim(),
+      };
+    };
+
+    function resetForm() {
+      editingIndex = -1;
+      hostInput.value = "";
+      userInput.value = "";
+      passInput.value = "";
+      tokenInput.value = "";
+      submitBtn.textContent = "+ 추가";
+      cancelBtn.hidden = true;
+      formResultEl.hidden = true;
+    }
+
+    function startEdit(idx) {
+      const e = entries[idx];
+      editingIndex = idx;
+      hostInput.value = `${e.scheme}://${e.host}`;
+      userInput.value = e.username || "";
+      passInput.value = e.password || "";
+      tokenInput.value = e.token || "";
+      submitBtn.textContent = "수정 완료";
+      cancelBtn.hidden = false;
+      formResultEl.hidden = true;
+      hostInput.focus();
+    }
+
+    const submit = () => {
+      const entry = readForm();
+      if (!entry.host) {
         showToast("Gitea 서버 주소를 입력해주세요.", true);
         return;
       }
-      host = host.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").split("/")[0].trim();
-      if (!host) {
-        showToast("올바른 서버 주소를 입력해주세요.", true);
+      if (Boolean(entry.username) !== Boolean(entry.password)) {
+        showToast("아이디와 비밀번호는 함께 입력해주세요.", true);
         return;
       }
-      const token = tokenInput.value.trim();
-      if (entries.some((e) => e.host.toLowerCase() === host.toLowerCase())) {
-        showToast(`이미 등록된 서버입니다: ${host} (먼저 삭제 후 다시 추가해주세요)`, true);
+      const dupIdx = entries.findIndex((e) => e.host === entry.host);
+      if (dupIdx !== -1 && dupIdx !== editingIndex) {
+        showToast(`이미 등록된 서버입니다: ${entry.host} — 목록에서 '수정'을 눌러주세요.`, true);
         return;
       }
-      entries.push(token ? { host, token } : { host, token: "" });
-      if (!token) {
-        // 토큰 없이 추가하는 건(공개 저장소 등) 허용하되, 빈 토큰 항목은
-        // 저장 형식("호스트:토큰")상 의미가 없으므로 실제로는 등록하지 않는다.
-        entries.pop();
-        showToast("토큰 없이는 등록할 수 없습니다 — 공개 저장소는 등록하지 않아도 그대로 동작합니다.", true);
-        return;
+      if (editingIndex >= 0) {
+        entries[editingIndex] = entry;
+      } else {
+        entries.push(entry);
+      }
+      if (!entry.username && !entry.token) {
+        showToast("인증 정보 없이 등록했습니다 — 공개 저장소만 검색됩니다.", false);
       }
       syncHidden();
       renderList();
-      hostInput.value = "";
-      tokenInput.value = "";
-      hostInput.focus();
+      resetForm();
     };
 
-    addBtn.addEventListener("click", addEntry);
-    tokenInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addEntry(); });
-    hostInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); tokenInput.focus(); } });
+    submitBtn.addEventListener("click", submit);
+    cancelBtn.addEventListener("click", resetForm);
+    testFormBtn.addEventListener("click", () => {
+      const entry = readForm();
+      if (!entry.host) {
+        showToast("테스트할 서버 주소를 입력해주세요.", true);
+        return;
+      }
+      runGiteaTest(entry, formResultEl, testFormBtn);
+    });
+    [hostInput, userInput, passInput, tokenInput].forEach((input) =>
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          submit();
+        }
+      })
+    );
 
-    formRow.append(hostInput, tokenInput, addBtn);
+    const btnRow = document.createElement("div");
+    btnRow.className = "pb-gitea-servers-form-buttons";
+    btnRow.append(testFormBtn, cancelBtn, submitBtn);
+    formEl.append(hostInput, userInput, passInput, tokenInput, btnRow);
+
     syncHidden();
     renderList();
-    container.append(listEl, formRow, hidden);
+    container.append(listEl, formEl, formResultEl, hint, hidden);
     return container;
   }
 
@@ -1443,7 +1645,7 @@
     btnGroup.appendChild(buildActionControl(item));
 
     // [PATCH-5] 이력 버튼 — 이 서버 기록 + 저장소 변경 내용(관리자 전용)
-    if (isAdmin && !String(item.id || "").startsWith("gitea-search-error:")) {
+    if (isAdmin && !item.notice) {
       const histBtn = document.createElement("button");
       histBtn.type = "button";
       histBtn.className = "pb-link pb-history-btn";
