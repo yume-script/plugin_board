@@ -10,7 +10,8 @@
   const ownerFilterWrapEl = document.getElementById("pb-owner-filter-wrap");
 
   let allItems = [];
-  let isAdmin = false; // 서버 응답을 받기 전 기본값(fail-closed) — 응답에서 갱신됨
+  let isAdmin = false;
+  let autoUpdateEnabledGlobal = false; // [PATCH-10] 체크박스 툴팁 안내용 // 서버 응답을 받기 전 기본값(fail-closed) — 응답에서 갱신됨
   let activeFilter = "all";
   let activeOwner = "all"; // 제작자별 필터 — activeFilter(분류/설치여부)와 별개 축, AND로 결합
   let catalogTopic = ""; // 서버 응답의 catalog_topic — 비어있으면 "카탈로그" 탭을 숨긴다
@@ -1089,6 +1090,8 @@
     disable: "비활성화",
     url_changed: "Git 주소 변경",
     unregister: "추적 해제",
+    auto_update_off: "자동 업데이트 제외",
+    auto_update_on: "자동 업데이트 포함",
   };
   const HISTORY_RESULT_LABELS = {
     success: "성공",
@@ -1333,6 +1336,51 @@
   // 관리 행 — 활성화/비활성화 스위치 + 환경설정(gear) + 삭제(trash).
   // 이미 설치된 카드에만 표시된다.
   // ------------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // [PATCH-10] 플러그인별 "자동 업데이트 안 함" 체크박스. 전역 자동 업데이트가 꺼져 있어도
+  // 미리 설정해둘 수 있고, 수동 "업데이트" 버튼은 이 설정과 무관하게 동작한다.
+  // ------------------------------------------------------------------
+  function buildAutoUpdateSkipControl(item) {
+    const label = document.createElement("label");
+    label.className = "pb-auto-skip";
+    label.title = autoUpdateEnabledGlobal
+      ? "체크하면 자동 업데이트에서 이 플러그인을 건너뜁니다(수동 업데이트는 가능)."
+      : "전역 자동 업데이트가 꺼져 있습니다 — 켜면 이 설정이 적용됩니다(수동 업데이트는 항상 가능).";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = !!item.auto_update_skip;
+    const text = document.createElement("span");
+    text.textContent = "자동 업데이트 안 함";
+    label.append(box, text);
+    label.classList.toggle("pb-auto-skip-on", box.checked);
+
+    box.addEventListener("change", async () => {
+      const wanted = box.checked;
+      box.disabled = true;
+      try {
+        const result = await callPluginBoardAction(getDbType(), {
+          action: "set_auto_update_skip",
+          plugin_id: item.id,
+          skip: wanted,
+        });
+        if (result && result.success) {
+          item.auto_update_skip = wanted;
+          label.classList.toggle("pb-auto-skip-on", wanted);
+          showToast(result.message || "저장했습니다.", false);
+        } else {
+          box.checked = !wanted;
+          showToast((result && result.error) || "자동 업데이트 설정을 저장하지 못했습니다.", true);
+        }
+      } catch (err) {
+        box.checked = !wanted;
+        showToast(`자동 업데이트 설정 저장 중 오류: ${err && err.message ? err.message : err}`, true);
+      } finally {
+        box.disabled = false;
+      }
+    });
+    return label;
+  }
+
   function buildManageRow(item) {
     // plugin_board 자기 자신은 삭제·비활성화가 백엔드에서 항상 거부되므로 이
     // 함수 자체가 자기 카드에는 호출되지 않는다(buildCard에서 걸러짐).
@@ -1362,6 +1410,8 @@
 
       left.append(switchLabel, statusText);
     }
+
+    left.appendChild(buildAutoUpdateSkipControl(item));
 
     const actions = document.createElement("div");
     actions.className = "pb-manage-actions";
@@ -1736,7 +1786,9 @@
     // 카드 헤더 우측 상단에 항상 고정 표시되므로 이 행과는 무관하다.
     // 관리자가 아니면 이 행 전체(활성화 스위치·삭제)도 표시하지 않는다 —
     // 백엔드도 동일 기준으로 toggle/delete 요청을 거부한다.
-    if (item.installed && item.id !== "plugin_board" && isAdmin) {
+    // [PATCH-10] plugin_board 자신도 "자동 업데이트 안 함" 체크박스를 쓰도록 관리 행을 표시한다
+    // (자기 카드에서는 스위치·삭제·주소 버튼은 buildManageRow 안에서 계속 숨겨진다).
+    if (item.installed && isAdmin) {
       parts.push(buildManageRow(item));
     }
     card.append(...parts);
@@ -1990,6 +2042,7 @@
           (errorCount ? ` (GitHub 조회 실패 ${errorCount}건)` : "")
       );
 
+      autoUpdateEnabledGlobal = !!json.auto_update_enabled;
       if (json.auto_update_enabled && isAdmin) {
         runAutoUpdates();
       }
@@ -2016,8 +2069,9 @@
     const now = Date.now();
     if (now - lastAutoUpdateAt < AUTO_UPDATE_COOLDOWN_MS) return;
 
+    // [PATCH-10] "자동 업데이트 안 함"으로 체크한 플러그인은 대상에서 뺀다(백엔드도 한 번 더 거른다)
     const targets = allItems.filter(
-      (it) => it.installed && it.enabled && it.has_update && it.url
+      (it) => it.installed && it.enabled && it.has_update && it.url && !it.auto_update_skip
     );
     if (targets.length === 0) return;
 

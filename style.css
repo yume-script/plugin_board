@@ -1572,3 +1572,38 @@
   word-break: break-word;
   color: var(--app-text-muted);
 }
+
+/* [PATCH-10] 플러그인별 "자동 업데이트 안 함" 체크박스 */
+.pb-auto-skip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 6px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--app-border-light, var(--app-border));
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--app-text-muted);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.pb-auto-skip input {
+  margin: 0;
+  width: 13px;
+  height: 13px;
+  accent-color: var(--app-accent);
+  cursor: pointer;
+}
+.pb-auto-skip input:disabled {
+  cursor: progress;
+}
+.pb-auto-skip-on {
+  color: color-mix(in srgb, #b9862f 90%, var(--app-text-primary));
+  border-color: color-mix(in srgb, #b9862f 45%, transparent);
+  background: color-mix(in srgb, #b9862f 10%, transparent);
+}
+.pb-manage-left {
+  flex-wrap: wrap;
+}

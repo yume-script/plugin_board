@@ -65,6 +65,10 @@ _install_or_update_gitea)는 원래 "저장소 이름과 같은 .py 파일이 �
   올리고, 결과 순서를 설정 순서(카탈로그 → 추가 발견 → 기본 토픽)로 고정했다.
 - GitHub Search API를 per_page=100, 토픽당 최대 3페이지까지 조회(50개 넘는 토픽 대비).
 - 응답에 실제로 검색한 토픽 목록(searched_topics)을 실어 화면에 표시한다.
+[PATCH-10] 플러그인별 "자동 업데이트 안 함":
+- 카드마다 체크박스로 자동 업데이트 대상에서 제외할 수 있다(plugins/data/plugin_board/
+  auto_update_skip.json, 설치 폴더명 기준). 수동 "업데이트" 버튼은 그대로 동작한다.
+- 프런트가 대상을 거르는 것에 더해, 백엔드도 auto=true 업데이트 요청이 제외 대상이면 거부한다.
 [PATCH-9] Gitea 서버에도 같은 기준 적용:
 - 토픽 검색·소유자 스캔을 X-Total-Count 헤더 기준으로 끝까지 페이지 조회(Gitea는 서버 설정
   MAX_RESPONSE_ITEMS 때문에 limit을 크게 줘도 보통 50개씩만 돌려준다).
@@ -2873,10 +2877,55 @@ def _delete_plugin(plugin_id):
     # 삭제된 plugin_id의 github.txt 등록도 함께 제거한다 — 파일은 이미 지워졌는데
     # 등록만 남아있으면 죽은 주소로 계속 업데이트를 시도하게 된다.
     _unregister_repo(plugin_id)
+    if plugin_id in _load_auto_update_skip():
+        _set_auto_update_skip(plugin_id, False)
     _record_history("delete", plugin_id, class_id, from_version=deleted_version,
                     message=data_dir_warning.strip() or None)
 
     return True, "'%s' 플러그인이 삭제되었습니다.%s" % (plugin_id, data_dir_warning)
+
+
+# ========================================================================
+# [PATCH-10] 플러그인별 자동 업데이트 제외 목록
+# ========================================================================
+_AUTO_UPDATE_SKIP_FILE = os.path.join(_PLUGIN_DATA_DIR, "auto_update_skip.json")
+_AUTO_UPDATE_SKIP_LOCK = threading.Lock()
+
+
+def _load_auto_update_skip():
+    try:
+        with open(_AUTO_UPDATE_SKIP_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return set()
+    if not isinstance(data, list):
+        return set()
+    return {x for x in data if isinstance(x, str) and _PLUGIN_ID_RE.match(x)}
+
+
+def _set_auto_update_skip(folder, skip):
+    """설치 폴더명 기준으로 자동 업데이트 제외 여부를 저장한다. 반환: (성공 여부, 메시지)"""
+    try:
+        _validate_plugin_id(folder)
+    except ValueError as exc:
+        return False, str(exc)
+    with _AUTO_UPDATE_SKIP_LOCK:
+        current = _load_auto_update_skip()
+        if skip:
+            current.add(folder)
+        else:
+            current.discard(folder)
+        try:
+            os.makedirs(_PLUGIN_DATA_DIR, exist_ok=True)
+            tmp_path = "%s.%d.tmp" % (_AUTO_UPDATE_SKIP_FILE, os.getpid())
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(sorted(current), f, ensure_ascii=False)
+            os.replace(tmp_path, _AUTO_UPDATE_SKIP_FILE)
+        except Exception as exc:
+            return False, "자동 업데이트 설정 저장에 실패했습니다: %s" % exc
+    if skip:
+        return True, "'%s'은(는) 이제 자동 업데이트하지 않습니다(수동 업데이트는 가능)." % folder
+    return True, "'%s'을(를) 다시 자동 업데이트 대상에 포함했습니다." % folder
 
 
 # ========================================================================
@@ -3929,12 +3978,29 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             })
             return True, data
 
+        if action == "set_auto_update_skip":
+            if not plugin_id:
+                return False, "plugin_id가 필요합니다."
+            skip = str(item_data.get("skip", "")).lower() in ("1", "true")
+            ok, msg = _set_auto_update_skip(plugin_id, skip)
+            if ok:
+                installed = _is_installed(plugin_id)
+                _record_history("auto_update_off" if skip else "auto_update_on", plugin_id,
+                                _class_id_for_folder(plugin_id) if installed else None,
+                                from_version=_local_version(plugin_id) if installed else None)
+            return ok, msg
+
         if action == "test_gitea":
             cfg = self.get_plugin_config(db_type, default={})
             extra_topics = [t.strip() for t in str(cfg.get("EXTRA_DISCOVERY_TOPICS") or "").split(",") if t.strip()]
             catalog_topic = str(cfg.get("CATALOG_TOPIC") or "").strip()
             topics = list(dict.fromkeys(([catalog_topic] if catalog_topic else []) + extra_topics + DISCOVERY_TOPICS))
             return True, _test_gitea_server(item_data, _parse_gitea_tokens_cfg(cfg.get("GITEA_TOKENS")), topics)
+
+        # [PATCH-10] 자동 업데이트 제외 플러그인은 자동(auto=true) 요청을 백엔드에서도 거부한다
+        if (action == "update" and _HISTORY_CTX.mode == "auto" and plugin_id
+                and plugin_id in _load_auto_update_skip()):
+            return False, "'%s'은(는) 자동 업데이트 제외로 설정되어 있어 건너뜁니다." % plugin_id
 
         if action in ("install_git", "update", "install_zip"):
             ok, msg = self._dispatch_install(db_type, action, plugin_id, item_data)
@@ -4481,6 +4547,9 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         _save_shared_cache(self)  # 다른 워커와 공유
 
         all_items = [self_item] + discovered_items + registry_items + local_items
+        auto_skip = _load_auto_update_skip()
+        for it in all_items:
+            it["auto_update_skip"] = bool(it.get("installed")) and it.get("id") in auto_skip
         if catalog_topic:
             # 카탈로그 토픽이 설정돼 있으면, 각 카드의 실제 GitHub 토픽 목록(tags)에
             # 그 토픽이 들어있는지로 "카탈로그" 필터 탭 소속 여부를 표시한다. 로컬
