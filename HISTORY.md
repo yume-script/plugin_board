@@ -3,6 +3,17 @@
 버전별 제목은 `## 버전 - 날짜` 형식을 씁니다. 플러그인게시판은 설치된 버전 이후의
 구간만 잘라서 "업데이트 변경 내용"으로 보여줍니다.
 
+## 2.52.1 - 2026-11-14
+
+### 수정
+- BookOasis 3.1.3(플러그인 계약 1.1.5) 기준으로 호환성 점검. 코어 API(`/api/media/context-menu/book/plugins/action`,
+  `/api/media/dashboard/widgets/<id>/data`, `/api/media/metadata/plugins/manage`·`save-config`), `MetadataFactory`
+  (`get_available_providers`·`hot_reload_plugin`), `PluginService.toggle_plugin_enabled`, `plugins.metadata.base`,
+  테마 CSS 변수(`--app-*`)가 그대로라 동작 변경 없음.
+- 3.x에서 생긴 도서 상세 별점 위젯 계약 `rating_widget`(샘플 `book_rating` 커뮤니티 별점)을 알아보지 못해
+  카드 분류가 '기타'로 나오던 문제 — 이제 '상세 화면'으로 분류하고, 설치 전 정적 검증에서도 이 선언을 인정.
+- README의 버전 표가 2.40.0에 머물러 있던 것.
+
 ## 2.52.0 - 2026-10-09
 
 ### 추가

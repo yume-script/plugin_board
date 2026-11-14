@@ -1116,7 +1116,7 @@ def _read_local_class_attrs(plugin_id):
     wanted = {
         "name", "id", "is_searchable", "category_tab", "dashboard_widget", "config_schema",
         "home_widget", "detail_sidebar_widget", "smart_recommend_widget", "detail_view",
-        "admin_only",
+        "admin_only", "rating_widget",
     }
     attrs = {}
     for node in ast.walk(tree):
@@ -1149,7 +1149,8 @@ def _classify_attrs(attrs):
         return "home"
     if attrs.get("dashboard_widget"):
         return "desk"
-    if any(attrs.get(k) for k in ("detail_view", "detail_sidebar_widget", "smart_recommend_widget")):
+    # rating_widget: BookOasis 3.x 도서 상세의 별점 위젯 계약(샘플 book_rating)
+    if any(attrs.get(k) for k in ("detail_view", "detail_sidebar_widget", "smart_recommend_widget", "rating_widget")):
         return "detail"
     return "other"
 
@@ -2430,7 +2431,7 @@ def _validate_plugin_source(plugin_dir, detected_id):
                                 cls_fields.add("config_schema")
                         elif t.id in ("category_tab", "update_manifest", "dashboard_widget",
                                       "home_widget", "detail_view", "detail_sidebar_widget",
-                                      "smart_recommend_widget"):
+                                      "smart_recommend_widget", "rating_widget"):
                             if isinstance(val, ast.Dict):
                                 cls_fields.add(t.id)
                 elif isinstance(stmt, ast.FunctionDef):
