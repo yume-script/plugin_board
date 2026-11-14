@@ -1,5 +1,24 @@
 // plugins/metadata/plugin_board/script.js
 (function () {
+  // 화면 언어: BookOasis에서 고른 언어(window.i18n.currentLang, 없으면 저장된 bookoasis_lang)가 영어면 영어 문구.
+  // T(한국어, 영어) - 두 문구를 나란히 적어 둔다 (BookOasis 코어 번역 파일에는 플러그인 문구를 넣을 수 없어서)
+  const PB_LANG = (() => {
+    try {
+      const l = (window.i18n && window.i18n.currentLang) || localStorage.getItem("bookoasis_lang") || "ko";
+      return String(l).toLowerCase().startsWith("en") ? "en" : "ko";
+    } catch (e) { return "ko"; }
+  })();
+  function T(ko, en) { return PB_LANG === "en" ? en : ko; }
+  // index.html의 고정 문구: data-en(글자) / data-en-html(정적 HTML, 이 파일에 적힌 것만) / data-en-title / data-en-placeholder
+  (function applyStaticLang() {
+    if (PB_LANG !== "en") return;
+    const root = document.querySelector(".pb-root") || document;
+    root.querySelectorAll("[data-en]").forEach((el) => { el.textContent = el.getAttribute("data-en"); });
+    root.querySelectorAll("[data-en-html]").forEach((el) => { el.innerHTML = el.getAttribute("data-en-html"); });
+    root.querySelectorAll("[data-en-title]").forEach((el) => { el.title = el.getAttribute("data-en-title"); });
+    root.querySelectorAll("[data-en-placeholder]").forEach((el) => { el.placeholder = el.getAttribute("data-en-placeholder"); });
+  })();
+
   const PLUGIN_ID = "plugin_board";
   const LOG_PREFIX = "[Plugin-Board]";
 
@@ -47,13 +66,15 @@
   }
 
   function reloadAfterInstall(message) {
-    showToast((message || "설치가 완료되었습니다.") + " 잠시 후 페이지를 새로고침합니다…", false);
+    showToast((message || T("설치가 완료되었습니다.", "Installation complete.")) + T(" 잠시 후 페이지를 새로고침합니다…", " The page will refresh shortly…"), false);
     setTimeout(hardReloadPage, 1200); // 토스트 메시지를 읽을 시간을 준 뒤 새로고침
   }
 
+  // 코어는 플러그인 켜짐 상태(PLUGIN_ENABLED_*)와 설정(PLUGIN_CONFIG_*)을 늘 'general' DB에서 읽는다.
+  // 플러그인게시판은 성인·오디오북·영상 강좌 사이드바에서도 열리므로(category_tab.sessions='all'),
+  // 어느 서재에서 열든 읽기·저장·켜고 끄기는 모두 'general'로 한다 (다른 DB에 쓰면 코어가 보지 않는다).
   function getDbType() {
-    const params = new URLSearchParams(window.location.search);
-    return params.get("db_type") || "general";
+    return "general";
   }
 
   function dataUrl() {
@@ -197,15 +218,15 @@
         return {
           success: false,
           error:
-            `요청이 ${Math.round(timeoutMs / 1000)}초 안에 응답을 받지 못해 중단했습니다. ` +
-            "서버가 아직 처리 중이거나 타임아웃/충돌했을 수 있습니다. 파일이 크다면 크기를 줄이거나 " +
-            "Git 저장소 URL 설치를 대신 사용해보세요. 잠시 후 새로고침해 실제로 설치됐는지도 확인해보세요.",
+            T(`요청이 ${Math.round(timeoutMs / 1000)}초 안에 응답을 받지 못해 중단했습니다. `, `The request got no response within ${Math.round(timeoutMs / 1000)} seconds and was stopped. `) +
+            T("서버가 아직 처리 중이거나 타임아웃/충돌했을 수 있습니다. 파일이 크다면 크기를 줄이거나 ", "The server may still be working, or it timed out or crashed. If the file is large, make it smaller or ") +
+            T("Git 저장소 URL 설치를 대신 사용해보세요. 잠시 후 새로고침해 실제로 설치됐는지도 확인해보세요.", "use the Git repository URL install instead. Refresh in a moment to check whether it was actually installed."),
         };
       }
       // fetch 자체가 실패(오프라인, DNS, CORS 등) — 서버 응답조차 못 받은 경우
       return {
         success: false,
-        error: `서버에 연결하지 못했습니다: ${networkErr && networkErr.message ? networkErr.message : networkErr}`,
+        error: T(`서버에 연결하지 못했습니다: ${networkErr && networkErr.message ? networkErr.message : networkErr}`, `Could not connect to the server: ${networkErr && networkErr.message ? networkErr.message : networkErr}`),
       };
     } finally {
       clearTimeout(timer);
@@ -215,7 +236,7 @@
     try {
       bodyText = await res.text();
     } catch (readErr) {
-      return { success: false, error: `응답 본문을 읽지 못했습니다 (HTTP ${res.status}).` };
+      return { success: false, error: T(`응답 본문을 읽지 못했습니다 (HTTP ${res.status}).`, `Could not read the response body (HTTP ${res.status}).`) };
     }
 
     let json = null;
@@ -229,25 +250,25 @@
         const snippet = bodyText.replace(/\s+/g, " ").trim().slice(0, 160);
         let hint = "";
         if (res.status === 413) {
-          hint = " 파일이 너무 커서 서버(또는 앞단 프록시)가 요청을 거부한 것으로 보입니다.";
+          hint = T(" 파일이 너무 커서 서버(또는 앞단 프록시)가 요청을 거부한 것으로 보입니다.", " The file seems too large and the server (or a proxy in front of it) refused the request.");
         } else if (res.status === 502 || res.status === 504) {
-          hint = " 서버(백엔드)와 프록시 사이의 연결/응답 지연 문제로 보입니다.";
+          hint = T(" 서버(백엔드)와 프록시 사이의 연결/응답 지연 문제로 보입니다.", " This looks like a connection or response delay between the backend and the proxy.");
         } else if (
           res.status === 500 &&
           /openresty|nginx/i.test(snippet) &&
           !/traceback|werkzeug/i.test(snippet)
         ) {
           hint =
-            " 프록시가 보여주는 기본 오류 페이지입니다 — plugin_board 코드가 아니라 " +
-            "백엔드 프로세스가 타임아웃되었거나 요청 처리 중 다운되었을 가능성이 높습니다. " +
-            "서버(Gunicorn/Flask) 로그를 확인해주세요.";
+            T(" 프록시가 보여주는 기본 오류 페이지입니다 — plugin_board 코드가 아니라 ", " This is the proxy's default error page — not plugin_board code; ") +
+            T("백엔드 프로세스가 타임아웃되었거나 요청 처리 중 다운되었을 가능성이 높습니다. ", "the backend process most likely timed out or went down while handling the request. ") +
+            T("서버(Gunicorn/Flask) 로그를 확인해주세요.", "Check the server (Gunicorn/Flask) logs.");
         } else if (res.status >= 500) {
-          hint = " 서버 내부 오류로 보입니다.";
+          hint = T(" 서버 내부 오류로 보입니다.", " This looks like an internal server error.");
         }
         return {
           success: false,
-          error: `서버가 올바른 응답을 반환하지 않았습니다 (HTTP ${res.status}).${hint}` +
-            (snippet ? ` 응답 일부: ${snippet}` : ""),
+          error: T(`서버가 올바른 응답을 반환하지 않았습니다 (HTTP ${res.status}).${hint}`, `The server did not return a valid response (HTTP ${res.status}).${hint}`) +
+            (snippet ? T(` 응답 일부: ${snippet}`, ` Part of the response: ${snippet}`) : ""),
         };
       }
     }
@@ -255,11 +276,11 @@
     if (!res.ok && (!json || typeof json.success === "undefined")) {
       return {
         success: false,
-        error: (json && (json.error || json.message)) || `요청이 실패했습니다 (HTTP ${res.status}).`,
+        error: (json && (json.error || json.message)) || T(`요청이 실패했습니다 (HTTP ${res.status}).`, `The request failed (HTTP ${res.status}).`),
       };
     }
 
-    return json || { success: false, error: "서버로부터 빈 응답을 받았습니다." };
+    return json || { success: false, error: T("서버로부터 빈 응답을 받았습니다.", "The server returned an empty response.") };
   }
 
   // ------------------------------------------------------------------
@@ -289,7 +310,7 @@
       // [PATCH-6] 검색 실패/안내 카드 — 설치할 대상이 아니다
       const badge = document.createElement("span");
       badge.className = "pb-installed-badge pb-installed-badge-muted";
-      badge.textContent = "안내";
+      badge.textContent = T("안내", "Notice");
       return badge;
     }
     if (item.installed && !item.has_update) {
@@ -298,7 +319,7 @@
       // 버전 문자열은 외부 저장소의 VERSION 파일 값이라 텍스트 노드로만 넣는다(XSS 방지)
       badge.innerHTML = CHECK_ICON;
       badge.appendChild(
-        document.createTextNode(`설치됨${item.installed_version ? " · v" + item.installed_version : ""}`)
+        document.createTextNode(T(`설치됨${item.installed_version ? " · v" + item.installed_version : ""}`, `Installed${item.installed_version ? " · v" + item.installed_version : ""}`))
       );
       return badge;
     }
@@ -309,8 +330,8 @@
       const badge = document.createElement("span");
       badge.className = "pb-installed-badge pb-installed-badge-muted";
       badge.innerHTML = item.installed
-        ? `${UPDATE_ICON}업데이트 필요 (관리자 전용)`
-        : `${INSTALL_ICON}미설치 (관리자 전용)`;
+        ? T(`${UPDATE_ICON}업데이트 필요 (관리자 전용)`, `${UPDATE_ICON}Update available (admin only)`)
+        : T(`${INSTALL_ICON}미설치 (관리자 전용)`, `${INSTALL_ICON}Not installed (admin only)`);
       return badge;
     }
 
@@ -319,16 +340,16 @@
     btn.type = "button";
     btn.className = "pb-install-btn" + (isUpdate ? " pb-install-btn-update" : "");
     btn.innerHTML = isUpdate
-      ? `${UPDATE_ICON}업데이트`
-      : `${INSTALL_ICON}신규설치`;
+      ? T(`${UPDATE_ICON}업데이트`, `${UPDATE_ICON}Update`)
+      : T(`${INSTALL_ICON}신규설치`, `${INSTALL_ICON}Install`);
 
     btn.addEventListener("click", async () => {
       const originalHtml = btn.innerHTML;
       const dbType = getDbType();
       btn.disabled = true;
       btn.innerHTML = isUpdate
-        ? `${UPDATE_ICON}업데이트 중…`
-        : `${INSTALL_ICON}설치 중…`;
+        ? T(`${UPDATE_ICON}업데이트 중…`, `${UPDATE_ICON}Updating…`)
+        : T(`${INSTALL_ICON}설치 중…`, `${INSTALL_ICON}Installing…`);
 
       try {
         const result = await callPluginBoardAction(dbType, {
@@ -343,15 +364,15 @@
         });
 
         if (result && result.success) {
-          reloadAfterInstall(result.message || `'${item.title}' 처리가 완료되었습니다.`);
+          reloadAfterInstall(result.message || T(`'${item.title}' 처리가 완료되었습니다.`, `'${item.title}' is done.`));
         } else {
-          showToast((result && result.error) || "요청이 실패했습니다.", true);
+          showToast((result && result.error) || T("요청이 실패했습니다.", "The request failed."), true);
           btn.disabled = false;
           btn.innerHTML = originalHtml;
         }
       } catch (err) {
         console.error(`${LOG_PREFIX} 설치/업데이트 오류:`, err);
-        showToast(`설치/업데이트 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
+        showToast(T(`설치/업데이트 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, `Error while handling the install/update request: ${err && err.message ? err.message : err}`), true);
         btn.disabled = false;
         btn.innerHTML = originalHtml;
       }
@@ -373,7 +394,7 @@
     modal = document.createElement("div");
     modal.id = "pb-settings-modal";
     modal.className = "pb-modal-overlay";
-    modal.innerHTML = `
+    modal.innerHTML = T(`
       <div class="pb-modal">
         <div class="pb-modal-head">
           <h3 id="pb-settings-modal-title">설정</h3>
@@ -385,7 +406,19 @@
           <button type="button" class="pb-modal-btn pb-modal-btn-save" id="pb-settings-modal-save">저장</button>
         </div>
       </div>
-    `;
+    `, `
+      <div class="pb-modal">
+        <div class="pb-modal-head">
+          <h3 id="pb-settings-modal-title">Settings</h3>
+          <button type="button" class="pb-modal-close" id="pb-settings-modal-close">&times;</button>
+        </div>
+        <div class="pb-modal-body" id="pb-settings-modal-body"></div>
+        <div class="pb-modal-foot">
+          <button type="button" class="pb-modal-btn pb-modal-btn-cancel" id="pb-settings-modal-cancel">Cancel</button>
+          <button type="button" class="pb-modal-btn pb-modal-btn-save" id="pb-settings-modal-save">Save</button>
+        </div>
+      </div>
+    `);
     document.body.appendChild(modal);
 
     const close = () => modal.classList.remove("pb-modal-show");
@@ -504,7 +537,7 @@
     if (Array.isArray(data.topics) && data.topics.length) {
       const topicsEl = document.createElement("div");
       topicsEl.className = "pb-gitea-test-repos";
-      topicsEl.textContent = "검색 토픽: " + data.topics.join(", ");
+      topicsEl.textContent = T("검색 토픽: ", "Topics searched: ") + data.topics.join(", ");
       targetEl.appendChild(topicsEl);
     }
     const repos = data.repos || [];
@@ -512,7 +545,7 @@
       const list = document.createElement("div");
       list.className = "pb-gitea-test-repos";
       list.textContent =
-        "발견된 저장소: " + repos.map((r) => r.name + (r.private ? " (비공개)" : "")).join(", ");
+        T("발견된 저장소: ", "Repositories found: ") + repos.map((r) => r.name + (r.private ? T(" (비공개)", " (private)") : "")).join(", ");
       targetEl.appendChild(list);
     }
   }
@@ -520,9 +553,9 @@
   async function runGiteaTest(entry, resultEl, btn) {
     const orig = btn.textContent;
     btn.disabled = true;
-    btn.textContent = "테스트 중…";
+    btn.textContent = T("테스트 중…", "Testing…");
     resultEl.hidden = false;
-    resultEl.textContent = "연결을 확인하는 중…";
+    resultEl.textContent = T("연결을 확인하는 중…", "Checking the connection…");
     try {
       const result = await callPluginBoardAction(getDbType(), {
         action: "test_gitea",
@@ -536,10 +569,10 @@
       if (result && result.success && result.message && typeof result.message === "object") {
         renderGiteaTestResult(resultEl, result.message);
       } else {
-        resultEl.textContent = (result && result.error) || "연결 테스트에 실패했습니다.";
+        resultEl.textContent = (result && result.error) || T("연결 테스트에 실패했습니다.", "The connection test failed.");
       }
     } catch (err) {
-      resultEl.textContent = `연결 테스트 중 오류: ${err && err.message ? err.message : err}`;
+      resultEl.textContent = T(`연결 테스트 중 오류: ${err && err.message ? err.message : err}`, `Error during the connection test: ${err && err.message ? err.message : err}`);
     } finally {
       btn.disabled = false;
       btn.textContent = orig;
@@ -571,7 +604,7 @@
       if (entries.length === 0) {
         const empty = document.createElement("p");
         empty.className = "pb-gitea-servers-empty";
-        empty.textContent = "등록된 Gitea 서버가 없습니다.";
+        empty.textContent = T("등록된 Gitea 서버가 없습니다.", "No Gitea servers registered.");
         listEl.appendChild(empty);
         return;
       }
@@ -587,28 +620,28 @@
         hostEl.textContent = `${entry.scheme}://${entry.host}`;
 
         const authParts = [];
-        if (entry.username) authParts.push(`계정 ${entry.username}${entry.password ? " / " + mask(entry.password) : " (비밀번호 없음)"}`);
-        if (entry.token) authParts.push(`토큰 ${mask(entry.token)}`);
-        if (entry.owners && entry.owners.length) authParts.push(`소유자 ${entry.owners.join(", ")}`);
+        if (entry.username) authParts.push(T(`계정 ${entry.username}${entry.password ? " / " + mask(entry.password) : " (비밀번호 없음)"}`, `Account ${entry.username}${entry.password ? " / " + mask(entry.password) : " (no password)"}`));
+        if (entry.token) authParts.push(T(`토큰 ${mask(entry.token)}`, `Token ${mask(entry.token)}`));
+        if (entry.owners && entry.owners.length) authParts.push(T(`소유자 ${entry.owners.join(", ")}`, `Owners ${entry.owners.join(", ")}`));
         const authEl = document.createElement("span");
         authEl.className = "pb-gitea-servers-auth";
-        authEl.textContent = authParts.length ? authParts.join(" · ") : "인증 정보 없음(공개 저장소만)";
+        authEl.textContent = authParts.length ? authParts.join(" · ") : T("인증 정보 없음(공개 저장소만)", "No credentials (public repositories only)");
 
         const testBtn = document.createElement("button");
         testBtn.type = "button";
         testBtn.className = "pb-gitea-servers-action";
-        testBtn.textContent = "연결 테스트";
+        testBtn.textContent = T("연결 테스트", "Test connection");
 
         const editBtn = document.createElement("button");
         editBtn.type = "button";
         editBtn.className = "pb-gitea-servers-action";
-        editBtn.textContent = "수정";
+        editBtn.textContent = T("수정", "Edit");
         editBtn.addEventListener("click", () => startEdit(idx));
 
         const delBtn = document.createElement("button");
         delBtn.type = "button";
         delBtn.className = "pb-gitea-servers-del";
-        delBtn.title = "삭제";
+        delBtn.title = T("삭제", "Delete");
         delBtn.innerHTML = "&times;";
         delBtn.addEventListener("click", () => {
           entries.splice(idx, 1);
@@ -639,22 +672,22 @@
       input.autocomplete = type === "password" ? "new-password" : "off";
       return input;
     };
-    const hostInput = makeInput("text", "서버 주소 (예: https://gitea.example.com 또는 http://host:3000)");
-    const userInput = makeInput("text", "아이디");
-    const passInput = makeInput("password", "비밀번호");
-    const tokenInput = makeInput("password", "읽기 토큰 (repository 읽기 권한)");
-    const ownersInput = makeInput("text", "소유자 (쉼표 구분, 선택 — 예: javara999)");
+    const hostInput = makeInput("text", T("서버 주소 (예: https://gitea.example.com 또는 http://host:3000)", "Server address (e.g. https://gitea.example.com or http://host:3000)"));
+    const userInput = makeInput("text", T("아이디", "Username"));
+    const passInput = makeInput("password", T("비밀번호", "Password"));
+    const tokenInput = makeInput("password", T("읽기 토큰 (repository 읽기 권한)", "Read token (repository read permission)"));
+    const ownersInput = makeInput("text", T("소유자 (쉼표 구분, 선택 — 예: javara999)", "Owners (comma separated, optional — e.g. javara999)"));
 
     const submitBtn = document.createElement("button");
     submitBtn.type = "button";
-    submitBtn.textContent = "+ 추가";
+    submitBtn.textContent = T("+ 추가", "+ Add");
     const cancelBtn = document.createElement("button");
     cancelBtn.type = "button";
-    cancelBtn.textContent = "취소";
+    cancelBtn.textContent = T("취소", "Cancel");
     cancelBtn.hidden = true;
     const testFormBtn = document.createElement("button");
     testFormBtn.type = "button";
-    testFormBtn.textContent = "입력값으로 테스트";
+    testFormBtn.textContent = T("입력값으로 테스트", "Test with these values");
     const formResultEl = document.createElement("div");
     formResultEl.className = "pb-gitea-test-result";
     formResultEl.hidden = true;
@@ -662,11 +695,11 @@
     const hint = document.createElement("p");
     hint.className = "pb-gitea-servers-hint";
     hint.textContent =
-      "아이디/비밀번호를 저장하면 이 서버의 저장소를 https://서버/소유자/저장소 처럼 자격증명 없이 " +
-      "입력해도 https://아이디:비밀번호@서버/... 로 자동 등록됩니다. 토픽 검색·버전 확인에는 읽기 " +
-      "토큰을 우선 사용합니다. '소유자'에 적은 사용자·조직의 저장소는 토픽이 없어도 전부 살펴보고, " +
-      "VERSION 파일이 있는 저장소를 플러그인으로 표시합니다(이 서버에서 설치한 적 있는 소유자는 " +
-      "적지 않아도 자동 포함). 추가·수정 후 아래 '저장'을 눌러야 반영됩니다.";
+      T("아이디/비밀번호를 저장하면 이 서버의 저장소를 https://서버/소유자/저장소 처럼 자격증명 없이 ", "If you save a username and password, repositories on this server entered without credentials like https://server/owner/repo ") +
+      T("입력해도 https://아이디:비밀번호@서버/... 로 자동 등록됩니다. 토픽 검색·버전 확인에는 읽기 ", "are registered automatically as https://user:password@server/... Topic search and version checks use the read ") +
+      T("토큰을 우선 사용합니다. '소유자'에 적은 사용자·조직의 저장소는 토픽이 없어도 전부 살펴보고, ", "token first. Repositories of the users and organizations listed in 'Owners' are all checked even without topics, ") +
+      T("VERSION 파일이 있는 저장소를 플러그인으로 표시합니다(이 서버에서 설치한 적 있는 소유자는 ", "and those with a VERSION file are shown as plugins (owners you have installed from on this server are ") +
+      T("적지 않아도 자동 포함). 추가·수정 후 아래 '저장'을 눌러야 반영됩니다.", "included automatically). After adding or editing, press 'Save' below to apply.");
 
     const readForm = () => {
       const { scheme, host } = normalizeGiteaServer(hostInput.value, "");
@@ -687,7 +720,7 @@
       passInput.value = "";
       tokenInput.value = "";
       ownersInput.value = "";
-      submitBtn.textContent = "+ 추가";
+      submitBtn.textContent = T("+ 추가", "+ Add");
       cancelBtn.hidden = true;
       formResultEl.hidden = true;
     }
@@ -700,7 +733,7 @@
       passInput.value = e.password || "";
       tokenInput.value = e.token || "";
       ownersInput.value = (e.owners || []).join(", ");
-      submitBtn.textContent = "수정 완료";
+      submitBtn.textContent = T("수정 완료", "Done");
       cancelBtn.hidden = false;
       formResultEl.hidden = true;
       hostInput.focus();
@@ -709,16 +742,16 @@
     const submit = () => {
       const entry = readForm();
       if (!entry.host) {
-        showToast("Gitea 서버 주소를 입력해주세요.", true);
+        showToast(T("Gitea 서버 주소를 입력해주세요.", "Enter the Gitea server address."), true);
         return;
       }
       if (Boolean(entry.username) !== Boolean(entry.password)) {
-        showToast("아이디와 비밀번호는 함께 입력해주세요.", true);
+        showToast(T("아이디와 비밀번호는 함께 입력해주세요.", "Enter the username and password together."), true);
         return;
       }
       const dupIdx = entries.findIndex((e) => e.host === entry.host);
       if (dupIdx !== -1 && dupIdx !== editingIndex) {
-        showToast(`이미 등록된 서버입니다: ${entry.host} — 목록에서 '수정'을 눌러주세요.`, true);
+        showToast(T(`이미 등록된 서버입니다: ${entry.host} — 목록에서 '수정'을 눌러주세요.`, `This server is already registered: ${entry.host} — press 'Edit' in the list.`), true);
         return;
       }
       if (editingIndex >= 0) {
@@ -727,7 +760,7 @@
         entries.push(entry);
       }
       if (!entry.username && !entry.token) {
-        showToast("인증 정보 없이 등록했습니다 — 공개 저장소만 검색됩니다.", false);
+        showToast(T("인증 정보 없이 등록했습니다 — 공개 저장소만 검색됩니다.", "Registered without credentials — only public repositories will be searched."), false);
       }
       syncHidden();
       renderList();
@@ -739,7 +772,7 @@
     testFormBtn.addEventListener("click", () => {
       const entry = readForm();
       if (!entry.host) {
-        showToast("테스트할 서버 주소를 입력해주세요.", true);
+        showToast(T("테스트할 서버 주소를 입력해주세요.", "Enter the server address to test."), true);
         return;
       }
       runGiteaTest(entry, formResultEl, testFormBtn);
@@ -798,7 +831,7 @@
       input.type = "checkbox";
       input.name = key;
       input.checked = currentValue === true || currentValue === "1" || currentValue === 1 || currentValue === "true";
-      row.append(input, document.createTextNode(" 사용"));
+      row.append(input, document.createTextNode(T(" 사용", " Use")));
       wrap.appendChild(row);
     } else if (type === "select") {
       const select = document.createElement("select");
@@ -827,7 +860,7 @@
         const toggleBtn = document.createElement("button");
         toggleBtn.type = "button";
         toggleBtn.className = "pb-field-password-toggle";
-        toggleBtn.title = "값 표시/숨기기";
+        toggleBtn.title = T("값 표시/숨기기", "Show/hide value");
         toggleBtn.innerHTML = EYE_ICON;
         toggleBtn.addEventListener("click", () => {
           const showing = input.type === "text";
@@ -958,21 +991,21 @@
     const bodyEl = modal.querySelector("#pb-settings-modal-body");
     const saveBtn = modal.querySelector("#pb-settings-modal-save");
 
-    titleEl.textContent = `${item.title} (${item.id}) 설정`;
-    bodyEl.innerHTML = '<p class="pb-status" style="padding:24px 0;">설정 정보를 불러오는 중…</p>';
+    titleEl.textContent = T(`${item.title} (${item.id}) 설정`, `${item.title} (${item.id}) settings`);
+    bodyEl.innerHTML = T('<p class="pb-status" style="padding:24px 0;">설정 정보를 불러오는 중…</p>', '<p class="pb-status" style="padding:24px 0;">Loading settings…</p>');
     modal.classList.add("pb-modal-show");
 
     try {
       const res = await fetch("/api/media/metadata/plugins/manage");
       const data = await res.json();
       if (!data || data.success === false || !data.plugins) {
-        throw new Error((data && data.error) || "플러그인 설정 정보를 가져오지 못했습니다.");
+        throw new Error((data && data.error) || T("플러그인 설정 정보를 가져오지 못했습니다.", "Could not get the plugin settings."));
       }
       // 코어는 클래스 id로 플러그인을 식별한다 — 설치 폴더명(item.id)과 다를 수 있다
       const classId = item.class_id || item.id;
       const p =
         data.plugins.find((x) => x.id === classId) || data.plugins.find((x) => x.id === item.id);
-      if (!p) throw new Error("선택한 플러그인 정보를 찾을 수 없습니다.");
+      if (!p) throw new Error(T("선택한 플러그인 정보를 찾을 수 없습니다.", "Could not find the selected plugin."));
 
       const schema = p.config_schema || [];
       const configFromManage = p.config || {};
@@ -1008,7 +1041,7 @@
         const empty = document.createElement("p");
         empty.className = "pb-status";
         empty.style.padding = "24px 0";
-        empty.textContent = "이 플러그인은 별도의 설정 항목이 없습니다.";
+        empty.textContent = T("이 플러그인은 별도의 설정 항목이 없습니다.", "This plugin has no settings.");
         bodyEl.appendChild(empty);
         saveBtn.hidden = true;
         return;
@@ -1025,7 +1058,7 @@
       const errorEl = document.createElement("p");
       errorEl.className = "pb-status pb-error";
       errorEl.style.padding = "24px 0";
-      errorEl.textContent = err.message || "설정 정보를 불러오지 못했습니다.";
+      errorEl.textContent = err.message || T("설정 정보를 불러오지 못했습니다.", "Could not load the settings.");
       bodyEl.appendChild(errorEl);
       saveBtn.hidden = true;
     }
@@ -1052,7 +1085,7 @@
 
       const orig = saveBtn.textContent;
       saveBtn.disabled = true;
-      saveBtn.textContent = "저장 중…";
+      saveBtn.textContent = T("저장 중…", "Saving…");
       try {
         const res = await fetch("/api/media/metadata/plugins/save-config", {
           method: "POST",
@@ -1063,15 +1096,15 @@
         saveBtn.disabled = false;
         saveBtn.textContent = orig;
         if (data && data.success) {
-          showToast(data.message || "설정이 저장되었습니다.", false);
+          showToast(data.message || T("설정이 저장되었습니다.", "Settings saved."), false);
           modal.classList.remove("pb-modal-show");
         } else {
-          showToast((data && data.error) || "설정 저장에 실패했습니다.", true);
+          showToast((data && data.error) || T("설정 저장에 실패했습니다.", "Could not save the settings."), true);
         }
       } catch (err) {
         saveBtn.disabled = false;
         saveBtn.textContent = orig;
-        showToast(`설정 저장 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
+        showToast(T(`설정 저장 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, `Error while saving the settings: ${err && err.message ? err.message : err}`), true);
       }
     });
   }
@@ -1083,20 +1116,20 @@
   // 모든 외부 텍스트(changelog 본문, 메시지)는 textContent로만 넣는다.
   // ------------------------------------------------------------------
   const HISTORY_ACTION_LABELS = {
-    install: "신규 설치",
-    update: "업데이트",
-    delete: "삭제",
-    enable: "활성화",
-    disable: "비활성화",
-    url_changed: "Git 주소 변경",
-    unregister: "추적 해제",
-    auto_update_off: "자동 업데이트 제외",
-    auto_update_on: "자동 업데이트 포함",
+    install: T("신규 설치", "Install"),
+    update: T("업데이트", "Update"),
+    delete: T("삭제", "Delete"),
+    enable: T("활성화", "Enable"),
+    disable: T("비활성화", "Disable"),
+    url_changed: T("Git 주소 변경", "Change Git URL"),
+    unregister: T("추적 해제", "Stop tracking"),
+    auto_update_off: T("자동 업데이트 제외", "Excluded from auto-update"),
+    auto_update_on: T("자동 업데이트 포함", "Included in auto-update"),
   };
   const HISTORY_RESULT_LABELS = {
-    success: "성공",
-    failed: "실패",
-    rolled_back: "롤백됨",
+    success: T("성공", "Success"),
+    failed: T("실패", "Failed"),
+    rolled_back: T("롤백됨", "Rolled back"),
   };
 
   function ensureHistoryModal() {
@@ -1105,7 +1138,7 @@
     modal = document.createElement("div");
     modal.id = "pb-history-modal";
     modal.className = "pb-modal-overlay";
-    modal.innerHTML = `
+    modal.innerHTML = T(`
       <div class="pb-modal pb-modal-wide">
         <div class="pb-modal-head">
           <h3 id="pb-history-modal-title">이력</h3>
@@ -1114,7 +1147,16 @@
         <div class="pb-hist-tabs" id="pb-history-tabs"></div>
         <div class="pb-modal-body" id="pb-history-modal-body"></div>
       </div>
-    `;
+    `, `
+      <div class="pb-modal pb-modal-wide">
+        <div class="pb-modal-head">
+          <h3 id="pb-history-modal-title">History</h3>
+          <button type="button" class="pb-modal-close" id="pb-history-modal-close">&times;</button>
+        </div>
+        <div class="pb-hist-tabs" id="pb-history-tabs"></div>
+        <div class="pb-modal-body" id="pb-history-modal-body"></div>
+      </div>
+    `);
     document.body.appendChild(modal);
     const close = () => modal.classList.remove("pb-modal-show");
     modal.addEventListener("click", (e) => {
@@ -1155,16 +1197,16 @@
     const summary = el(
       "summary",
       null,
-      `변경 파일: 추가 ${counts.added || 0} · 삭제 ${counts.removed || 0} · 수정 ${counts.modified || 0}`
+      T(`변경 파일: 추가 ${counts.added || 0} · 삭제 ${counts.removed || 0} · 수정 ${counts.modified || 0}`, `Changed files: ${counts.added || 0} added · ${counts.removed || 0} removed · ${counts.modified || 0} modified`)
     );
     details.appendChild(summary);
     const list = el("ul");
     (files.modified || []).forEach((m) => {
-      const lines = m.added === null || m.added === undefined ? "(바이너리/대용량)" : `+${m.added} −${m.removed}`;
-      list.appendChild(el("li", "pb-hist-file-mod", `수정  ${m.path}  ${lines}`));
+      const lines = m.added === null || m.added === undefined ? T("(바이너리/대용량)", "(binary/large)") : `+${m.added} −${m.removed}`;
+      list.appendChild(el("li", "pb-hist-file-mod", T(`수정  ${m.path}  ${lines}`, `Modified  ${m.path}  ${lines}`)));
     });
-    (files.added || []).forEach((f) => list.appendChild(el("li", "pb-hist-file-add", `추가  ${f}`)));
-    (files.removed || []).forEach((f) => list.appendChild(el("li", "pb-hist-file-del", `삭제  ${f}`)));
+    (files.added || []).forEach((f) => list.appendChild(el("li", "pb-hist-file-add", T(`추가  ${f}`, `Added  ${f}`))));
+    (files.removed || []).forEach((f) => list.appendChild(el("li", "pb-hist-file-del", T(`삭제  ${f}`, `Removed  ${f}`))));
     if (list.childNodes.length) details.appendChild(list);
     return details;
   }
@@ -1172,7 +1214,7 @@
   function renderHistoryEntries(bodyEl, entries, showPluginName) {
     bodyEl.innerHTML = "";
     if (!entries.length) {
-      historyStatus(bodyEl, "아직 기록이 없습니다. 이 버전부터 설치·업데이트·삭제 등이 기록됩니다.");
+      historyStatus(bodyEl, T("아직 기록이 없습니다. 이 버전부터 설치·업데이트·삭제 등이 기록됩니다.", "No records yet. Installs, updates, deletions and so on are recorded from this version on."));
       return;
     }
     const list = el("div", "pb-hist-list");
@@ -1181,13 +1223,13 @@
       const head = el("div", "pb-hist-entry-head");
       head.appendChild(el("span", "pb-hist-time", formatHistoryTime(e.ts)));
       if (showPluginName) {
-        head.appendChild(el("span", "pb-hist-plugin", e.folder || e.class_id || "(알 수 없음)"));
+        head.appendChild(el("span", "pb-hist-plugin", e.folder || e.class_id || T("(알 수 없음)", "(unknown)")));
       }
       head.appendChild(el("span", "pb-hist-action", HISTORY_ACTION_LABELS[e.action] || e.action || ""));
       head.appendChild(
         el("span", "pb-hist-badge pb-hist-badge-" + (e.result || "success"), HISTORY_RESULT_LABELS[e.result] || e.result || "")
       );
-      if (e.mode === "auto") head.appendChild(el("span", "pb-hist-badge pb-hist-badge-auto", "자동"));
+      if (e.mode === "auto") head.appendChild(el("span", "pb-hist-badge pb-hist-badge-auto", T("자동", "Auto")));
       row.appendChild(head);
 
       const metaParts = [];
@@ -1216,26 +1258,26 @@
     bodyEl.innerHTML = "";
     const info = el("p", "pb-hist-info");
     if (data.source === "file") {
-      info.textContent = `출처: 저장소의 ${data.file}`;
+      info.textContent = T(`출처: 저장소의 ${data.file}`, `Source: ${data.file} in the repository`);
     } else if (data.source === "releases") {
-      info.textContent = "출처: 저장소 릴리즈(Releases)";
+      info.textContent = T("출처: 저장소 릴리즈(Releases)", "Source: repository releases");
     } else {
       info.textContent = data.error
-        ? `변경 내용을 불러오지 못했습니다: ${data.error}`
-        : "이 저장소에는 HISTORY.md / CHANGELOG.md / CHANGES.md 파일이나 릴리즈가 없습니다. " +
-          "제작자에게 변경 기록을 남겨달라고 요청해보세요.";
+        ? T(`변경 내용을 불러오지 못했습니다: ${data.error}`, `Could not load the changes: ${data.error}`)
+        : T("이 저장소에는 HISTORY.md / CHANGELOG.md / CHANGES.md 파일이나 릴리즈가 없습니다. ", "This repository has no HISTORY.md / CHANGELOG.md / CHANGES.md file or releases. ") +
+          T("제작자에게 변경 기록을 남겨달라고 요청해보세요.", "Ask the author to keep a change log.");
     }
     bodyEl.appendChild(info);
 
     if (data.source !== "none") {
       let rangeText = "";
       if (!data.installed_version) {
-        rangeText = "이 서버에 설치되지 않은 플러그인입니다 — 최근 변경 내용을 보여줍니다.";
+        rangeText = T("이 서버에 설치되지 않은 플러그인입니다 — 최근 변경 내용을 보여줍니다.", "This plugin is not installed on this server — showing the latest changes.");
       } else if (data.in_range) {
-        rangeText = `설치된 v${data.installed_version} 이후` +
-          (data.remote_version ? ` ~ v${data.remote_version}` : "") + "의 변경 내용입니다.";
+        rangeText = T(`설치된 v${data.installed_version} 이후`, `Changes after the installed v${data.installed_version}`) +
+          (data.remote_version ? ` ~ v${data.remote_version}` : "") + T("의 변경 내용입니다.", ".");
       } else {
-        rangeText = `설치된 v${data.installed_version} 이후의 새 항목이 없어 최근 기록을 참고로 보여줍니다.`;
+        rangeText = T(`설치된 v${data.installed_version} 이후의 새 항목이 없어 최근 기록을 참고로 보여줍니다.`, `Nothing new after the installed v${data.installed_version}, so the latest entries are shown for reference.`);
       }
       bodyEl.appendChild(el("p", "pb-hist-info pb-hist-range", rangeText));
     }
@@ -1252,13 +1294,13 @@
 
     if (data.raw) {
       bodyEl.appendChild(
-        el("p", "pb-hist-info", "버전별 제목(## 1.2.3 형식)을 찾지 못해 파일 앞부분을 그대로 보여줍니다.")
+        el("p", "pb-hist-info", T("버전별 제목(## 1.2.3 형식)을 찾지 못해 파일 앞부분을 그대로 보여줍니다.", "No version headings (## 1.2.3) found, so the start of the file is shown as is."))
       );
       bodyEl.appendChild(el("div", "pb-changelog-body pb-changelog-raw", data.raw));
     }
 
     if (data.repo_url || (item && item.url)) {
-      const link = el("a", "pb-hist-repo-link", "저장소에서 보기 ↗");
+      const link = el("a", "pb-hist-repo-link", T("저장소에서 보기 ↗", "View in the repository ↗"));
       link.href = data.repo_url || item.url;
       link.target = "_blank";
       link.rel = "noopener";
@@ -1268,7 +1310,7 @@
 
   async function loadHistoryTab(tab, item, bodyEl) {
     const dbType = getDbType();
-    historyStatus(bodyEl, "불러오는 중…");
+    historyStatus(bodyEl, T("불러오는 중…", "Loading…"));
     if (tab === "changelog") {
       const versionLabel = String(item.version_label || "");
       const result = await callPluginBoardAction(dbType, {
@@ -1278,7 +1320,7 @@
         remote_version: /^v?\d/.test(versionLabel) ? versionLabel.replace(/^v/i, "") : "",
       });
       if (!result || !result.success || !result.message || typeof result.message !== "object") {
-        historyStatus(bodyEl, (result && result.error) || "변경 내용을 불러오지 못했습니다.", true);
+        historyStatus(bodyEl, (result && result.error) || T("변경 내용을 불러오지 못했습니다.", "Could not load the changes."), true);
         return;
       }
       renderChangelog(bodyEl, result.message, item);
@@ -1291,7 +1333,7 @@
       limit: item ? 200 : 500,
     });
     if (!result || !result.success || !result.message || typeof result.message !== "object") {
-      historyStatus(bodyEl, (result && result.error) || "이력을 불러오지 못했습니다.", true);
+      historyStatus(bodyEl, (result && result.error) || T("이력을 불러오지 못했습니다.", "Could not load the history."), true);
       return;
     }
     renderHistoryEntries(bodyEl, result.message.entries || [], !item);
@@ -1303,15 +1345,15 @@
     const tabsEl = modal.querySelector("#pb-history-tabs");
     const bodyEl = modal.querySelector("#pb-history-modal-body");
 
-    titleEl.textContent = item ? `${item.title} (${item.id}) 이력` : "이 서버의 플러그인 설치 이력";
+    titleEl.textContent = item ? T(`${item.title} (${item.id}) 이력`, `${item.title} (${item.id}) history`) : T("이 서버의 플러그인 설치 이력", "Plugin install history on this server");
     tabsEl.innerHTML = "";
 
     const tabs = item
       ? [
-          ["changelog", item.has_update ? "업데이트 변경 내용" : "변경 내용"],
-          ["server", "이 서버 기록"],
+          ["changelog", item.has_update ? T("업데이트 변경 내용", "Changes in this update") : T("변경 내용", "Changes")],
+          ["server", T("이 서버 기록", "This server's records")],
         ]
-      : [["server", "전체 기록"]];
+      : [["server", T("전체 기록", "All records")]];
     // 로컬 전용(저장소 주소 없음) 카드는 변경 내용을 가져올 곳이 없으므로 서버 기록부터 보여준다
     const initial = item && item.installed && !item.has_update && !item.url ? "server" : tabs[0][0];
 
@@ -1344,13 +1386,13 @@
     const label = document.createElement("label");
     label.className = "pb-auto-skip";
     label.title = autoUpdateEnabledGlobal
-      ? "체크하면 자동 업데이트에서 이 플러그인을 건너뜁니다(수동 업데이트는 가능)."
-      : "전역 자동 업데이트가 꺼져 있습니다 — 켜면 이 설정이 적용됩니다(수동 업데이트는 항상 가능).";
+      ? T("체크하면 자동 업데이트에서 이 플러그인을 건너뜁니다(수동 업데이트는 가능).", "When checked, auto-update skips this plugin (manual updates still work).")
+      : T("전역 자동 업데이트가 꺼져 있습니다 — 켜면 이 설정이 적용됩니다(수동 업데이트는 항상 가능).", "Global auto-update is off — this takes effect once it is on (manual updates always work).");
     const box = document.createElement("input");
     box.type = "checkbox";
     box.checked = !!item.auto_update_skip;
     const text = document.createElement("span");
-    text.textContent = "자동 업데이트 안 함";
+    text.textContent = T("자동 업데이트 안 함", "No auto-update");
     label.append(box, text);
     label.classList.toggle("pb-auto-skip-on", box.checked);
 
@@ -1366,14 +1408,14 @@
         if (result && result.success) {
           item.auto_update_skip = wanted;
           label.classList.toggle("pb-auto-skip-on", wanted);
-          showToast(result.message || "저장했습니다.", false);
+          showToast(result.message || T("저장했습니다.", "Saved."), false);
         } else {
           box.checked = !wanted;
-          showToast((result && result.error) || "자동 업데이트 설정을 저장하지 못했습니다.", true);
+          showToast((result && result.error) || T("자동 업데이트 설정을 저장하지 못했습니다.", "Could not save the auto-update setting."), true);
         }
       } catch (err) {
         box.checked = !wanted;
-        showToast(`자동 업데이트 설정 저장 중 오류: ${err && err.message ? err.message : err}`, true);
+        showToast(T(`자동 업데이트 설정 저장 중 오류: ${err && err.message ? err.message : err}`, `Error while saving the auto-update setting: ${err && err.message ? err.message : err}`), true);
       } finally {
         box.disabled = false;
       }
@@ -1406,7 +1448,7 @@
 
       statusText = document.createElement("span");
       statusText.className = "pb-manage-status";
-      statusText.textContent = item.enabled ? "사용 중" : "중지됨";
+      statusText.textContent = item.enabled ? T("사용 중", "In use") : T("중지됨", "Stopped");
 
       left.append(switchLabel, statusText);
     }
@@ -1420,10 +1462,10 @@
       const trashBtn = document.createElement("button");
       trashBtn.type = "button";
       trashBtn.className = "pb-icon-btn pb-icon-btn-danger";
-      trashBtn.title = "삭제";
+      trashBtn.title = T("삭제", "Delete");
       trashBtn.innerHTML = TRASH_ICON;
       trashBtn.addEventListener("click", async () => {
-        if (!window.confirm(`'${item.title}' 플러그인을 삭제할까요? 이 작업은 되돌릴 수 없습니다.`)) {
+        if (!window.confirm(T(`'${item.title}' 플러그인을 삭제할까요? 이 작업은 되돌릴 수 없습니다.`, `Delete the '${item.title}' plugin? This cannot be undone.`))) {
           return;
         }
         trashBtn.disabled = true;
@@ -1433,14 +1475,14 @@
             plugin_id: item.id,
           });
           if (result && result.success) {
-            showToast(result.message || `'${item.title}'이(가) 삭제되었습니다.`, false);
+            showToast(result.message || T(`'${item.title}'이(가) 삭제되었습니다.`, `'${item.title}' was deleted.`), false);
             load();
           } else {
-            showToast((result && result.error) || "삭제에 실패했습니다.", true);
+            showToast((result && result.error) || T("삭제에 실패했습니다.", "Could not delete it."), true);
             trashBtn.disabled = false;
           }
         } catch (err) {
-          showToast(`삭제 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
+          showToast(T(`삭제 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, `Error while handling the delete request: ${err && err.message ? err.message : err}`), true);
           trashBtn.disabled = false;
         }
       });
@@ -1458,16 +1500,16 @@
         editUrlBtn.type = "button";
         editUrlBtn.className = "pb-icon-btn";
         editUrlBtn.title = item.user_registered
-          ? "Git 주소 변경 (저장소가 다른 곳으로 옮겨간 경우)"
-          : "Git 주소 등록/변경 (등록하면 이후 이 주소로 업데이트를 확인합니다)";
+          ? T("Git 주소 변경 (저장소가 다른 곳으로 옮겨간 경우)", "Change Git URL (when the repository moved elsewhere)")
+          : T("Git 주소 등록/변경 (등록하면 이후 이 주소로 업데이트를 확인합니다)", "Register/change Git URL (updates are then checked against this address)");
         editUrlBtn.innerHTML = EDIT_ICON;
         editUrlBtn.addEventListener("click", async () => {
           const currentUrl = item.url || "";
           const input = window.prompt(
-            `'${item.title}'의 Git 저장소 주소를 입력하세요.\n` +
-              "(등록된 적이 없으면 새로 등록되고, 이미 등록돼 있다면 저장소가 다른 계정/호스트로\n" +
-              " 옮겨갔거나 이름이 바뀐 경우에 맞춰 갱신됩니다. 재설치 없이 다음 '업데이트'부터\n" +
-              " 이 주소를 기준으로 확인합니다.)",
+            T(`'${item.title}'의 Git 저장소 주소를 입력하세요.\n`, `Enter the Git repository URL for '${item.title}'.\n`) +
+              T("(등록된 적이 없으면 새로 등록되고, 이미 등록돼 있다면 저장소가 다른 계정/호스트로\n", "(If none is registered it is added; if one is registered, it is updated for a repository that moved to another\n") +
+              T(" 옮겨갔거나 이름이 바뀐 경우에 맞춰 갱신됩니다. 재설치 없이 다음 '업데이트'부터\n", " account/host or was renamed. No reinstall needed — the next 'Update' checks\n") +
+              T(" 이 주소를 기준으로 확인합니다.)", " against this address.)"),
             currentUrl
           );
           if (input === null) return; // 취소
@@ -1475,7 +1517,7 @@
           if (!newUrl) return;
           if (!/^https?:\/\/[^/]+\/[^/]+\/[^/]+/i.test(newUrl)) {
             showToast(
-              "올바른 저장소 주소를 입력해주세요. (예: https://github.com/user/repo)",
+              T("올바른 저장소 주소를 입력해주세요. (예: https://github.com/user/repo)", "Enter a valid repository URL. (e.g. https://github.com/user/repo)"),
               true
             );
             return;
@@ -1488,13 +1530,13 @@
               git_url: newUrl,
             });
             if (result && result.success) {
-              showToast(result.message || "Git 주소가 갱신되었습니다.", false);
+              showToast(result.message || T("Git 주소가 갱신되었습니다.", "Git URL updated."), false);
               load();
             } else {
-              showToast((result && result.error) || "Git 주소 갱신에 실패했습니다.", true);
+              showToast((result && result.error) || T("Git 주소 갱신에 실패했습니다.", "Could not update the Git URL."), true);
             }
           } catch (err) {
-            showToast(`Git 주소 갱신 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
+            showToast(T(`Git 주소 갱신 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, `Error while handling the Git URL update: ${err && err.message ? err.message : err}`), true);
           } finally {
             editUrlBtn.disabled = false;
           }
@@ -1504,14 +1546,14 @@
         const unregisterBtn = document.createElement("button");
         unregisterBtn.type = "button";
         unregisterBtn.className = "pb-icon-btn";
-        unregisterBtn.title = "등록 해제 (원본 저장소가 삭제된 경우 — 설치된 파일은 유지됩니다)";
+        unregisterBtn.title = T("등록 해제 (원본 저장소가 삭제된 경우 — 설치된 파일은 유지됩니다)", "Unregister (when the original repository was deleted — installed files are kept)");
         unregisterBtn.innerHTML = UNLINK_ICON;
         unregisterBtn.addEventListener("click", async () => {
           if (
             !window.confirm(
-              `'${item.title}'의 등록된 Git 주소를 목록에서 제거할까요?\n` +
-                "설치된 플러그인 파일은 그대로 유지되며, 더 이상 이 주소로 업데이트를 확인하지 않습니다.\n" +
-                "(등록된 주소가 원래 없었다면 아무 변화도 없습니다.)"
+              T(`'${item.title}'의 등록된 Git 주소를 목록에서 제거할까요?\n`, `Remove the registered Git URL of '${item.title}' from the list?\n`) +
+                T("설치된 플러그인 파일은 그대로 유지되며, 더 이상 이 주소로 업데이트를 확인하지 않습니다.\n", "The installed plugin files stay, and updates are no longer checked against this URL.\n") +
+                T("(등록된 주소가 원래 없었다면 아무 변화도 없습니다.)", "(Nothing changes if no URL was registered.)")
             )
           ) {
             return;
@@ -1523,14 +1565,14 @@
               plugin_id: item.id,
             });
             if (result && result.success) {
-              showToast(result.message || "등록이 해제되었습니다.", false);
+              showToast(result.message || T("등록이 해제되었습니다.", "Unregistered."), false);
               load();
             } else {
-              showToast((result && result.error) || "등록된 Git 주소가 없습니다.", true);
+              showToast((result && result.error) || T("등록된 Git 주소가 없습니다.", "No Git URL is registered."), true);
               unregisterBtn.disabled = false;
             }
           } catch (err) {
-            showToast(`등록 해제 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
+            showToast(T(`등록 해제 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, `Error while handling the unregister request: ${err && err.message ? err.message : err}`), true);
             unregisterBtn.disabled = false;
           }
         });
@@ -1547,15 +1589,15 @@
             enabled: nextEnabled ? "1" : "0",
           });
           if (result && result.success) {
-            statusText.textContent = nextEnabled ? "사용 중" : "중지됨";
-            showToast(result.message || "상태가 변경되었습니다.", false);
+            statusText.textContent = nextEnabled ? T("사용 중", "In use") : T("중지됨", "Stopped");
+            showToast(result.message || T("상태가 변경되었습니다.", "Status changed."), false);
           } else {
             checkbox.checked = !nextEnabled; // 실패 시 원상복구
-            showToast((result && result.error) || "상태 변경에 실패했습니다.", true);
+            showToast((result && result.error) || T("상태 변경에 실패했습니다.", "Could not change the status."), true);
           }
         } catch (err) {
           checkbox.checked = !nextEnabled;
-          showToast(`상태 변경 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
+          showToast(T(`상태 변경 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, `Error while handling the status change: ${err && err.message ? err.message : err}`), true);
         } finally {
           checkbox.disabled = false;
         }
@@ -1601,7 +1643,7 @@
       const headGearBtn = document.createElement("button");
       headGearBtn.type = "button";
       headGearBtn.className = "pb-icon-btn pb-card-head-gear";
-      headGearBtn.title = "환경설정";
+      headGearBtn.title = T("환경설정", "Settings");
       headGearBtn.innerHTML = GEAR_ICON;
       headGearBtn.addEventListener("click", () => {
         const dbType = getDbType();
@@ -1621,7 +1663,7 @@
     // 분류 태그(검색형/탭형/기타)를 항상 첫 태그로 표시
     const typeTag = document.createElement("span");
     typeTag.className = "pb-tag pb-tag-type";
-    typeTag.textContent = item.type_label || "기타";
+    typeTag.textContent = item.type_label || T("기타", "Other");
     tagsWrap.appendChild(typeTag);
 
     // 카테고리 탭 UI 플러그인이 사이드바에서 몇 번째로 표시되는지(order 값).
@@ -1629,7 +1671,7 @@
     if (typeof item.tab_order === "number") {
       const orderTag = document.createElement("span");
       orderTag.className = "pb-tag pb-tag-order";
-      orderTag.title = "사이드바 카테고리 탭에서의 표시 순서 (숫자가 작을수록 앞에 표시됩니다)";
+      orderTag.title = T("사이드바 카테고리 탭에서의 표시 순서 (숫자가 작을수록 앞에 표시됩니다)", "Display order in the sidebar category tabs (smaller numbers come first)");
       orderTag.textContent = `ORDER ${item.tab_order}`;
       tagsWrap.appendChild(orderTag);
     }
@@ -1637,14 +1679,14 @@
     if (item.has_update) {
       const updTag = document.createElement("span");
       updTag.className = "pb-tag pb-tag-update";
-      updTag.textContent = "업데이트 가능";
+      updTag.textContent = T("업데이트 가능", "Update available");
       tagsWrap.appendChild(updTag);
     }
 
     if (item.id === "plugin_board") {
       const selfTag = document.createElement("span");
       selfTag.className = "pb-tag pb-tag-self";
-      selfTag.textContent = "이 플러그인게시판";
+      selfTag.textContent = T("이 플러그인게시판", "This plugin board");
       tagsWrap.appendChild(selfTag);
     }
 
@@ -1655,12 +1697,12 @@
         // 경고("미검수")는 더 이상 맞지 않는다 — 정적 검증을 통과해 이미 설치된
         // 상태이므로, 출처만 알려주는 중립적인 표기로 바꾼다.
         discTag.className = "pb-tag pb-tag-registered";
-        discTag.title = "GitHub Topics 검색으로 발견되어 이 서버에 설치되어 있는 플러그인입니다.";
-        discTag.textContent = "토픽 발견 · 설치됨";
+        discTag.title = T("GitHub Topics 검색으로 발견되어 이 서버에 설치되어 있는 플러그인입니다.", "Found by the GitHub Topics search and installed on this server.");
+        discTag.textContent = T("토픽 발견 · 설치됨", "Topic found · installed");
       } else {
         discTag.className = "pb-tag pb-tag-discovered";
-        discTag.title = "GitHub Topics로 자동 발견된 저장소입니다. 별도 검수를 거치지 않았으니 설치 전 내용을 직접 확인하세요.";
-        discTag.textContent = "토픽 발견 (미설치)";
+        discTag.title = T("GitHub Topics로 자동 발견된 저장소입니다. 별도 검수를 거치지 않았으니 설치 전 내용을 직접 확인하세요.", "Repository found automatically through GitHub Topics. It has not been reviewed, so check its contents yourself before installing.");
+        discTag.textContent = T("토픽 발견 (미설치)", "Topic found (not installed)");
       }
       tagsWrap.appendChild(discTag);
     }
@@ -1668,24 +1710,24 @@
     if (item.admin_only) {
       const adminTag = document.createElement("span");
       adminTag.className = "pb-tag pb-tag-local";
-      adminTag.title = "admin_only로 선언된 플러그인 — 관리자에게만 표시됩니다.";
-      adminTag.textContent = "관리자 전용";
+      adminTag.title = T("admin_only로 선언된 플러그인 — 관리자에게만 표시됩니다.", "Declared admin_only — shown to administrators only.");
+      adminTag.textContent = T("관리자 전용", "Admin only");
       tagsWrap.appendChild(adminTag);
     }
 
     if (item.user_registered) {
       const regTag = document.createElement("span");
       regTag.className = "pb-tag pb-tag-registered";
-      regTag.title = "GitHub Topics로는 발견되지 않았지만, 이 서버에서 Git URL로 직접 설치한 이력이 있어 계속 추적 중인 저장소입니다.";
-      regTag.textContent = "직접 설치됨";
+      regTag.title = T("GitHub Topics로는 발견되지 않았지만, 이 서버에서 Git URL로 직접 설치한 이력이 있어 계속 추적 중인 저장소입니다.", "Not found through GitHub Topics, but still tracked because it was installed on this server from a Git URL.");
+      regTag.textContent = T("직접 설치됨", "Installed directly");
       tagsWrap.appendChild(regTag);
     }
 
     if (item.local_only) {
       const localTag = document.createElement("span");
       localTag.className = "pb-tag pb-tag-local";
-      localTag.title = "GitHub 저장소 정보 없이, 이 서버에 설치된 파일에서만 확인한 플러그인입니다.";
-      localTag.textContent = "로컬플러그인";
+      localTag.title = T("GitHub 저장소 정보 없이, 이 서버에 설치된 파일에서만 확인한 플러그인입니다.", "Plugin known only from the files installed on this server, without GitHub repository information.");
+      localTag.textContent = T("로컬플러그인", "Local plugin");
       tagsWrap.appendChild(localTag);
     }
 
@@ -1721,10 +1763,10 @@
       histBtn.type = "button";
       histBtn.className = "pb-link pb-history-btn";
       histBtn.innerHTML = HISTORY_ICON;
-      histBtn.appendChild(document.createTextNode("이력"));
+      histBtn.appendChild(document.createTextNode(T("이력", "History")));
       histBtn.title = item.has_update
-        ? "업데이트로 바뀌는 내용과 이 서버의 설치 이력 보기"
-        : "변경 내용과 이 서버의 설치 이력 보기";
+        ? T("업데이트로 바뀌는 내용과 이 서버의 설치 이력 보기", "See what this update changes and this server's install history")
+        : T("변경 내용과 이 서버의 설치 이력 보기", "See the changes and this server's install history");
       histBtn.addEventListener("click", () => openHistoryModal(item));
       btnGroup.appendChild(histBtn);
     }
@@ -1755,7 +1797,7 @@
       const starsEl = document.createElement("span");
       starsEl.className = "pb-stars";
       starsEl.innerHTML = `${STAR_ICON}${formatStars(item.stars)}`;
-      starsEl.title = `별(star) ${item.stars.toLocaleString()}개 — 다운로드 횟수가 아닌 참고용 인기도 지표입니다`;
+      starsEl.title = T(`별(star) ${item.stars.toLocaleString()}개 — 다운로드 횟수가 아닌 참고용 인기도 지표입니다`, `${item.stars.toLocaleString()} stars — a popularity hint, not a download count`);
       footLeft.appendChild(starsEl);
     }
     // 최종 업데이트 일자 — GitHub/Gitea면 저장소의 마지막 코드 푸시 시각, 로컬
@@ -1765,10 +1807,10 @@
     if (pushedAtText) {
       const pushedEl = document.createElement("span");
       pushedEl.className = "pb-pushed-at";
-      pushedEl.textContent = `최종 업데이트 ${pushedAtText}`;
+      pushedEl.textContent = T(`최종 업데이트 ${pushedAtText}`, `Last updated ${pushedAtText}`);
       pushedEl.title = item.local_only
-        ? "이 서버에 설치된 폴더가 마지막으로 바뀐 시각입니다 (원격 저장소 정보를 알 수 없어 근사치로 표시)."
-        : "GitHub/Gitea 저장소에 마지막으로 코드가 반영된(push) 시각입니다.";
+        ? T("이 서버에 설치된 폴더가 마지막으로 바뀐 시각입니다 (원격 저장소 정보를 알 수 없어 근사치로 표시).", "When the folder installed on this server last changed (shown as an approximation since the remote repository is unknown).")
+        : T("GitHub/Gitea 저장소에 마지막으로 코드가 반영된(push) 시각입니다.", "When code was last pushed to the GitHub/Gitea repository.");
       footLeft.appendChild(pushedEl);
     }
     if (footLeft.childNodes.length > 0) {
@@ -1807,7 +1849,7 @@
     if (items.length === 0) {
       const empty = document.createElement("p");
       empty.className = "pb-status";
-      empty.textContent = "해당 분류의 플러그인이 없습니다.";
+      empty.textContent = T("해당 분류의 플러그인이 없습니다.", "No plugins in this category.");
       gridEl.appendChild(empty);
       return;
     }
@@ -1843,10 +1885,10 @@
       block.append(strong, span);
       tallyEl.appendChild(block);
     };
-    addTally(baseItems.length, "등록 플러그인");
-    addTally(installedCount, "이 서버에 설치됨");
+    addTally(baseItems.length, T("등록 플러그인", "Registered plugins"));
+    addTally(installedCount, T("이 서버에 설치됨", "Installed on this server"));
     if (uninstalledDiscoveredCount > 0) {
-      addTally(uninstalledDiscoveredCount, "토픽 발견(미검수)");
+      addTally(uninstalledDiscoveredCount, T("토픽 발견(미검수)", "Found by topic (unreviewed)"));
     }
     Object.keys(counts).sort().forEach((t) => {
       const item = allItems.find((it) => it.type === t);
@@ -1854,11 +1896,11 @@
     });
 
     const uninstalledBtn = filtersEl.querySelector('[data-filter="uninstalled"]');
-    if (uninstalledBtn) uninstalledBtn.textContent = `미설치 (${uninstalledCount})`;
+    if (uninstalledBtn) uninstalledBtn.textContent = T(`미설치 (${uninstalledCount})`, `Not installed (${uninstalledCount})`);
 
     if (catalogTopic) {
       const catalogBtn = filtersEl.querySelector('[data-filter="catalog"]');
-      if (catalogBtn) catalogBtn.textContent = `카탈로그 (${catalogCount})`;
+      if (catalogBtn) catalogBtn.textContent = T(`카탈로그 (${catalogCount})`, `Catalog (${catalogCount})`);
     }
   }
 
@@ -1892,17 +1934,17 @@
       return btn;
     };
 
-    filtersEl.appendChild(makeBtn("all", "전체", true));
+    filtersEl.appendChild(makeBtn("all", T("전체", "All"), true));
     if (catalogTopic) {
       // 카탈로그 토픽이 설정돼 있을 때만 탭을 노출한다 — 설정 안 하면 탭 자체가 없다.
-      filtersEl.appendChild(makeBtn("catalog", "카탈로그", false));
+      filtersEl.appendChild(makeBtn("catalog", T("카탈로그", "Catalog"), false));
     }
     types.forEach((t) => {
       const item = allItems.find((it) => it.type === t);
       filtersEl.appendChild(makeBtn(t, (item && item.type_label) || t, false));
     });
     // "설치 여부"는 type과 별개 축이라 마지막에 별도 필터로 추가한다.
-    filtersEl.appendChild(makeBtn("uninstalled", "미설치", false));
+    filtersEl.appendChild(makeBtn("uninstalled", T("미설치", "Not installed"), false));
 
     // 제작자별 필터 — owner 값 종류가 많아질 수 있어 버튼 나열 대신 드롭다운으로
     // 구성한다. activeFilter(분류/설치여부)와는 별개 축이라 AND로 함께 적용된다.
@@ -1916,7 +1958,7 @@
     if (owners.length > 0) {
       const label = document.createElement("label");
       label.className = "pb-owner-filter-label";
-      label.textContent = "제작자";
+      label.textContent = T("제작자", "Author");
       label.htmlFor = "pb-owner-filter-select";
 
       const select = document.createElement("select");
@@ -1925,7 +1967,7 @@
 
       const allOpt = document.createElement("option");
       allOpt.value = "all";
-      allOpt.textContent = `전체 제작자 (${allItems.length})`;
+      allOpt.textContent = T(`전체 제작자 (${allItems.length})`, `All authors (${allItems.length})`);
       select.appendChild(allOpt);
 
       owners.forEach((owner) => {
@@ -1976,7 +2018,7 @@
     const el = document.getElementById("pb-topic-search-time");
     if (!el) return;
     // [PATCH-8] 설정한 추가 발견/카탈로그 토픽이 실제로 검색에 들어갔는지 화면에서 확인할 수 있게 한다
-    const topicsText = Array.isArray(topics) && topics.length ? ` · 검색 토픽: ${topics.join(", ")}` : "";
+    const topicsText = Array.isArray(topics) && topics.length ? T(` · 검색 토픽: ${topics.join(", ")}`, ` · topics searched: ${topics.join(", ")}`) : "";
     if (!epochSeconds) {
       if (topicsText) {
         el.textContent = `🔍${topicsText}`;
@@ -1991,16 +2033,16 @@
     const diffMin = Math.floor(diffMs / 60000);
 
     let relative;
-    if (diffMin < 1) relative = "방금 전";
-    else if (diffMin < 60) relative = `${diffMin}분 전`;
+    if (diffMin < 1) relative = T("방금 전", "just now");
+    else if (diffMin < 60) relative = T(`${diffMin}분 전`, `${diffMin} min ago`);
     else {
       const diffHour = Math.floor(diffMin / 60);
-      relative = diffHour < 24 ? `${diffHour}시간 전` : `${Math.floor(diffHour / 24)}일 전`;
+      relative = diffHour < 24 ? T(`${diffHour}시간 전`, `${diffHour} h ago`) : T(`${Math.floor(diffHour / 24)}일 전`, `${Math.floor(diffHour / 24)} days ago`);
     }
 
     const hh = String(date.getHours()).padStart(2, "0");
     const mm = String(date.getMinutes()).padStart(2, "0");
-    el.textContent = `🔍 토픽 검색: ${relative} (${hh}:${mm} 기준, 최대 1시간마다 자동 갱신)${topicsText}`;
+    el.textContent = T(`🔍 토픽 검색: ${relative} (${hh}:${mm} 기준, 최대 1시간마다 자동 갱신)${topicsText}`, `🔍 Topic search: ${relative} (as of ${hh}:${mm}, refreshed automatically at most hourly)${topicsText}`);
     el.hidden = false;
   }
 
@@ -2039,7 +2081,7 @@
       const errorCount = allItems.filter((it) => it.error).length;
       console.log(
         `${LOG_PREFIX} 카드 ${allItems.length}개 렌더링 완료` +
-          (errorCount ? ` (GitHub 조회 실패 ${errorCount}건)` : "")
+          (errorCount ? T(` (GitHub 조회 실패 ${errorCount}건)`, ` (${errorCount} GitHub lookups failed)`) : "")
       );
 
       autoUpdateEnabledGlobal = !!json.auto_update_enabled;
@@ -2048,7 +2090,7 @@
       }
     } catch (err) {
       console.error(`${LOG_PREFIX} 로드 실패:`, err);
-      statusEl.textContent = "플러그인 목록을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.";
+      statusEl.textContent = T("플러그인 목록을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.", "Could not load the plugin list. Please try again in a moment.");
       statusEl.classList.add("pb-error");
       statusEl.hidden = false;
       gridEl.hidden = true;
@@ -2110,13 +2152,13 @@
 
     if (succeeded.length > 0) {
       showToast(
-        `자동 업데이트 완료: ${succeeded.join(", ")}` +
-          (failed.length ? ` (실패: ${failed.join(", ")})` : ""),
+        T(`자동 업데이트 완료: ${succeeded.join(", ")}`, `Auto-update done: ${succeeded.join(", ")}`) +
+          (failed.length ? T(` (실패: ${failed.join(", ")})`, ` (failed: ${failed.join(", ")})`) : ""),
         false
       );
       load(); // 카드 상태 새로고침 (자동 업데이트이므로 강제 새로고침은 하지 않음)
     } else if (failed.length > 0) {
-      showToast(`자동 업데이트 실패: ${failed.join(", ")}`, true);
+      showToast(T(`자동 업데이트 실패: ${failed.join(", ")}`, `Auto-update failed: ${failed.join(", ")}`), true);
     }
   }
 
@@ -2142,8 +2184,8 @@
       // 부분은 github.com으로 제한하지 않고 "owner/repo" 구조만 검사한다.
       if (!/^https?:\/\/[^/]+\/[^/]+\/[^/]+/i.test(url)) {
         showToast(
-          "올바른 저장소 주소를 입력해주세요. (예: https://github.com/user/repo 또는 " +
-            "https://아이디:비밀번호@gitea.example.com/user/repo)",
+          T("올바른 저장소 주소를 입력해주세요. (예: https://github.com/user/repo 또는 ", "Enter a valid repository URL. (e.g. https://github.com/user/repo or ") +
+            T("https://아이디:비밀번호@gitea.example.com/user/repo)", "https://user:password@gitea.example.com/user/repo)"),
           true
         );
         return;
@@ -2152,7 +2194,7 @@
       const origText = btn.textContent;
       btn.disabled = true;
       input.disabled = true;
-      btn.textContent = "설치 중…";
+      btn.textContent = T("설치 중…", "Installing…");
 
       try {
         const result = await callPluginBoardAction(getDbType(), {
@@ -2161,13 +2203,13 @@
         });
         if (result && result.success) {
           input.value = "";
-          reloadAfterInstall(result.message || "설치가 완료되었습니다.");
+          reloadAfterInstall(result.message || T("설치가 완료되었습니다.", "Installation complete."));
         } else {
-          showToast((result && result.error) || "설치에 실패했습니다.", true);
+          showToast((result && result.error) || T("설치에 실패했습니다.", "Installation failed."), true);
         }
       } catch (err) {
         console.error(`${LOG_PREFIX} Git URL 설치 오류:`, err);
-        showToast(`설치 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
+        showToast(T(`설치 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, `Error while handling the install request: ${err && err.message ? err.message : err}`), true);
       } finally {
         btn.disabled = false;
         input.disabled = false;
@@ -2182,7 +2224,7 @@
   // 패턴(숨긴 input + 텍스트 표시용 버튼)을 그대로 따른다.
   // ------------------------------------------------------------------
   const PB_SUPPORTED_ARCHIVE_RE = /\.(zip|tar|tar\.gz|tgz|tar\.bz2|tbz2|tar\.xz|txz|7z)$/i;
-  const PB_ARCHIVE_DEFAULT_LABEL = "압축 파일 선택…";
+  const PB_ARCHIVE_DEFAULT_LABEL = T("압축 파일 선택…", "Choose an archive…");
 
   function wireZipInstallPanel() {
     const form = document.getElementById("pb-zip-install-form");
@@ -2209,12 +2251,12 @@
       e.preventDefault();
       const file = fileInput.files && fileInput.files[0];
       if (!file) {
-        showToast("설치할 압축 파일을 먼저 선택해주세요.", true);
+        showToast(T("설치할 압축 파일을 먼저 선택해주세요.", "Choose an archive to install first."), true);
         return;
       }
       if (!PB_SUPPORTED_ARCHIVE_RE.test(file.name)) {
         showToast(
-          "지원하지 않는 압축 형식입니다. zip / tar / tar.gz / tar.bz2 / tar.xz / 7z 파일만 업로드할 수 있습니다.",
+          T("지원하지 않는 압축 형식입니다. zip / tar / tar.gz / tar.bz2 / tar.xz / 7z 파일만 업로드할 수 있습니다.", "Unsupported archive format. Only zip / tar / tar.gz / tar.bz2 / tar.xz / 7z files can be uploaded."),
           true
         );
         return;
@@ -2223,13 +2265,13 @@
       const origText = installBtn.textContent;
       installBtn.disabled = true;
       selectBtn.disabled = true;
-      installBtn.textContent = "설치 중…";
+      installBtn.textContent = T("설치 중…", "Installing…");
 
       try {
         const zipDataUrl = await new Promise((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => resolve(reader.result);
-          reader.onerror = () => reject(reader.error || new Error("파일을 읽지 못했습니다."));
+          reader.onerror = () => reject(reader.error || new Error(T("파일을 읽지 못했습니다.", "Could not read the file.")));
           reader.readAsDataURL(file);
         });
 
@@ -2243,13 +2285,13 @@
           fileInput.value = "";
           fileLabel.textContent = PB_ARCHIVE_DEFAULT_LABEL;
           selectBtn.classList.remove("pb-zip-file-selected");
-          reloadAfterInstall(result.message || "설치가 완료되었습니다.");
+          reloadAfterInstall(result.message || T("설치가 완료되었습니다.", "Installation complete."));
         } else {
-          showToast((result && result.error) || "설치에 실패했습니다.", true);
+          showToast((result && result.error) || T("설치에 실패했습니다.", "Installation failed."), true);
         }
       } catch (err) {
         console.error(`${LOG_PREFIX} ZIP 설치 오류:`, err);
-        showToast(`설치 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
+        showToast(T(`설치 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, `Error while handling the install request: ${err && err.message ? err.message : err}`), true);
       } finally {
         installBtn.disabled = false;
         selectBtn.disabled = false;
@@ -2274,14 +2316,14 @@
       try {
         const result = await callPluginBoardAction(getDbType(), { action: "refresh_list" });
         if (result && result.success) {
-          showToast(result.message || "목록을 새로 불러왔습니다.", false);
+          showToast(result.message || T("목록을 새로 불러왔습니다.", "List reloaded."), false);
           await load();
         } else {
-          showToast((result && result.error) || "목록을 새로 불러오지 못했습니다.", true);
+          showToast((result && result.error) || T("목록을 새로 불러오지 못했습니다.", "Could not reload the list."), true);
         }
       } catch (err) {
         console.error(`${LOG_PREFIX} 목록 새로고침 오류:`, err);
-        showToast(`새로고침 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
+        showToast(T(`새로고침 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, `Error while handling the refresh request: ${err && err.message ? err.message : err}`), true);
       } finally {
         btn.disabled = false;
         btn.classList.remove("pb-refresh-spinning");
@@ -2302,8 +2344,8 @@
     btn.addEventListener("click", async () => {
       if (
         !window.confirm(
-          "캐시 파일과 공유 캐시를 삭제하고 완전히 새로 불러올까요?\n" +
-            "설치된 플러그인에는 영향이 없으며, GitHub 정보만 다시 조회합니다."
+          T("캐시 파일과 공유 캐시를 삭제하고 완전히 새로 불러올까요?\n", "Delete the cache file and the shared cache and reload everything?\n") +
+            T("설치된 플러그인에는 영향이 없으며, GitHub 정보만 다시 조회합니다.", "Installed plugins are not affected; only the GitHub information is fetched again.")
         )
       ) {
         return;
@@ -2315,14 +2357,14 @@
       try {
         const result = await callPluginBoardAction(getDbType(), { action: "reset_cache" });
         if (result && result.success) {
-          showToast(result.message || "캐시를 초기화했습니다.", false);
+          showToast(result.message || T("캐시를 초기화했습니다.", "Cache cleared."), false);
           await load();
         } else {
-          showToast((result && result.error) || "캐시 초기화에 실패했습니다.", true);
+          showToast((result && result.error) || T("캐시 초기화에 실패했습니다.", "Could not clear the cache."), true);
         }
       } catch (err) {
         console.error(`${LOG_PREFIX} 캐시 초기화 오류:`, err);
-        showToast(`캐시 초기화 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, true);
+        showToast(T(`캐시 초기화 요청 처리 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`, `Error while handling the cache reset request: ${err && err.message ? err.message : err}`), true);
       } finally {
         btn.disabled = false;
         btn.classList.remove("pb-refresh-spinning");

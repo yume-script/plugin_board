@@ -102,6 +102,40 @@ import zipfile
 
 from plugins.metadata.base import BaseMetadataProvider
 
+# ------------------------------------------------------------------
+# 화면 언어 (BookOasis에서 고른 언어 - bookoasis_lang 쿠키). 영어면 영어 문구, 아니면 한국어.
+# _T(한국어, 영어) - 두 문구를 나란히 적는다. 요청 밖(스레드 등)에서는 마지막 요청의 언어를 쓴다.
+# ------------------------------------------------------------------
+_LANG_LAST = ["ko"]
+
+
+def _req_lang():
+    try:
+        from flask import has_request_context, request
+        if has_request_context():
+            raw = (request.cookies.get("bookoasis_lang") or "").strip().lower()
+            lang = "en" if raw.startswith("en") else "ko"
+            _LANG_LAST[0] = lang
+            return lang
+    except Exception:
+        pass
+    return _LANG_LAST[0]
+
+
+def _T(ko, en):
+    return en if _req_lang() == "en" else ko
+
+
+class _LazyText(dict):
+    """값이 (한국어, 영어)인 표 - 꺼낼 때 그 요청의 언어로 (모듈을 불러올 때 언어가 정해지지 않게)"""
+
+    def __getitem__(self, key):
+        return _T(*dict.__getitem__(self, key))
+
+    def get(self, key, default=None):
+        return self[key] if key in self else default
+
+
 
 def _is_admin_session():
     """현재 요청의 Flask 세션이 관리자(role == 'admin')인지 확인한다
@@ -165,14 +199,14 @@ TYPE_OVERRIDES = {
 
 # [PATCH-4] 가이드 §5/§5-1: dashboard_widget은 [플러그인] 공통 데스크용이고, 실제
 # 홈 화면 위젯은 home_widget이다. 둘을 같은 "홈화면 위젯"으로 묶지 않는다.
-TYPE_LABELS = {
-    "search": "검색형 메타데이터",
-    "tab": "카테고리 탭 UI",
-    "home": "홈 화면 위젯",
-    "desk": "플러그인 데스크 위젯",
-    "detail": "도서 상세 확장",
-    "other": "기타",
-}
+TYPE_LABELS = _LazyText({
+    "search": ("검색형 메타데이터", "Metadata search"),
+    "tab": ("카테고리 탭 UI", "Category tab UI"),
+    "home": ("홈 화면 위젯", "Home widget"),
+    "desk": ("플러그인 데스크 위젯", "Plugin desk widget"),
+    "detail": ("도서 상세 확장", "Book detail extension"),
+    "other": ("기타", "Other"),
+})
 
 _DESC_CACHE = {}  # {"owner/repo": (timestamp, {desc, tags, url, default_branch, error})}
 _DESC_CACHE_TTL_SECONDS = 86400  # 24시간 — 설명·토픽은 거의 바뀌지 않으므로 길게 캐시
@@ -282,8 +316,8 @@ def _reset_disk_cache():
             if os.path.isfile(path):
                 os.remove(path)
     except Exception as exc:
-        return False, "캐시 파일 삭제에 실패했습니다: %s" % exc
-    return True, "캐시 파일(cache.json)과 공유 캐시를 삭제하고 초기화했습니다. 목록을 새로 불러옵니다."
+        return False, _T("캐시 파일 삭제에 실패했습니다: %s", "Could not delete the cache file: %s") % exc
+    return True, _T("캐시 파일(cache.json)과 공유 캐시를 삭제하고 초기화했습니다. 목록을 새로 불러옵니다.", "Deleted the cache file (cache.json) and the shared cache. Reloading the list.")
 
 
 def _load_disk_cache():
@@ -346,15 +380,15 @@ def _github_api_error_message(exc, has_token):
     if exc.code == 401:
         if has_token:
             return (
-                "GitHub 인증 실패(401) — 설정한 GITHUB_TOKEN이 잘못됐거나 만료/폐기됐을 "
-                "수 있습니다. GitHub에서 토큰을 다시 확인하거나 새로 발급해 설정에 저장해주세요."
+                _T("GitHub 인증 실패(401) — 설정한 GITHUB_TOKEN이 잘못됐거나 만료/폐기됐을 "
+                "수 있습니다. GitHub에서 토큰을 다시 확인하거나 새로 발급해 설정에 저장해주세요.", "GitHub authentication failed (401) — the GITHUB_TOKEN you set may be wrong, expired or revoked. Check the token on GitHub or issue a new one and save it in the settings.")
             )
-        return "GitHub 인증 실패(401) — 원인을 알 수 없는 인증 오류입니다. 잠시 후 다시 시도해주세요."
+        return _T("GitHub 인증 실패(401) — 원인을 알 수 없는 인증 오류입니다. 잠시 후 다시 시도해주세요.", "GitHub authentication failed (401) — an unknown authentication error. Please try again later.")
     if exc.code == 403:
         if has_token:
-            return "GitHub API 호출 제한(403) — 인증된 토큰 기준 한도(시간당 5,000회)를 초과했을 수 있습니다."
-        return "GitHub API 호출 제한(403) — 무인증 한도(시간당 60회)를 초과했습니다. GITHUB_TOKEN 설정을 권장합니다."
-    return "GitHub API 오류(%s)" % exc.code
+            return _T("GitHub API 호출 제한(403) — 인증된 토큰 기준 한도(시간당 5,000회)를 초과했을 수 있습니다.", "GitHub API rate limit (403) — the authenticated token's limit (5,000 calls per hour) may have been exceeded.")
+        return _T("GitHub API 호출 제한(403) — 무인증 한도(시간당 60회)를 초과했습니다. GITHUB_TOKEN 설정을 권장합니다.", "GitHub API rate limit (403) — the anonymous limit (60 calls per hour) was exceeded. Setting a GITHUB_TOKEN is recommended.")
+    return _T("GitHub API 오류(%s)", "GitHub API error (%s)") % exc.code
 
 
 def _parse_version_json(text):
@@ -378,10 +412,56 @@ def _parse_version_json(text):
         return data, True
 
 
+# ------------------------------------------------------------------
+# 관리자 알림 문제 카드 (BookOasis 2.8.4+ report_problem/resolve_problem, 플러그인 계약 1.1.2).
+# GitHub API 인증 실패(401, 토큰 만료·폐기)와 호출 한도 초과(403)를 로그에만 남기지 않고
+# 상단 🔔 알림의 문제 카드로 올린다. 요청은 스레드에서 일어나므로 여기서는 상태만 적고,
+# get_dashboard_data(공급자 인스턴스가 있는 곳)가 카드를 올리거나 닫는다.
+# ------------------------------------------------------------------
+_GH_PROBLEM_LOCK = threading.Lock()
+_GH_PROBLEMS = {}       # code -> {"has_token": bool, "message": str, "at": epoch}
+_GH_OK_AT = [0.0]       # 마지막으로 api.github.com 요청이 성공한 시각
+
+
+def _note_github_error(exc, has_token):
+    code = getattr(exc, "code", None)
+    if code == 401 and has_token:
+        key = "github_auth"
+    elif code == 403:
+        key = "github_rate"
+    else:
+        return
+    with _GH_PROBLEM_LOCK:
+        _GH_PROBLEMS[key] = {"has_token": bool(has_token), "message": str(exc), "at": time.time()}
+
+
+def _note_github_ok():
+    with _GH_PROBLEM_LOCK:
+        _GH_OK_AT[0] = time.time()
+        # 성공한 요청이 문제 뒤에 왔으면 그 문제는 풀린 것 (같은 토큰으로 다시 됨 / 한도가 돌아옴)
+        for key in list(_GH_PROBLEMS):
+            if _GH_PROBLEMS[key]["at"] < _GH_OK_AT[0]:
+                _GH_PROBLEMS.pop(key, None)
+
+
+def _github_problem_snapshot():
+    with _GH_PROBLEM_LOCK:
+        return {k: dict(v) for k, v in _GH_PROBLEMS.items()}
+
+
 def _http_get_json(url, token=None):
     req = urllib.request.Request(url, headers=_headers(token))
-    with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    is_github = url.startswith("https://api.github.com/")
+    try:
+        with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if is_github:
+            _note_github_error(exc, bool(token))
+        raise
+    if is_github:
+        _note_github_ok()
+    return data
 
 
 def _http_get_text(url, token=None):
@@ -651,14 +731,14 @@ def _sync_registry_credentials(configured_tokens):
     return changed
 
 
-_GITEA_AUTH_SOURCE_LABEL = {
-    "config_auto": "설정(Gitea 서버)에 저장된 계정(주소에 자동 포함됨)",
-    "url_basic": "등록된 주소에 포함된 아이디:비밀번호",
-    "url_token": "등록된 주소에 포함된 토큰",
-    "config_token": "설정(GITEA_TOKENS)에 등록한 토큰",
-    "config_basic": "설정(GITEA_TOKENS)에 등록한 아이디/비밀번호",
-    "none": "인증 정보 없음(공개 저장소로 간주하고 시도)",
-}
+_GITEA_AUTH_SOURCE_LABEL = _LazyText({
+    "config_auto": ("설정(Gitea 서버)에 저장된 계정(주소에 자동 포함됨)", "account saved in the settings (Gitea server), added to the address automatically"),
+    "url_basic": ("등록된 주소에 포함된 아이디:비밀번호", "username:password included in the registered address"),
+    "url_token": ("등록된 주소에 포함된 토큰", "token included in the registered address"),
+    "config_token": ("설정(GITEA_TOKENS)에 등록한 토큰", "token registered in the settings (GITEA_TOKENS)"),
+    "config_basic": ("설정(GITEA_TOKENS)에 등록한 아이디/비밀번호", "username/password registered in the settings (GITEA_TOKENS)"),
+    "none": ("인증 정보 없음(공개 저장소로 간주하고 시도)", "no credentials (tried as a public repository)"),
+})
 
 
 def _gitea_auth_error_hint(gitea_cfg):
@@ -667,21 +747,21 @@ def _gitea_auth_error_hint(gitea_cfg):
     박힌 옛 자격증명이 우선 적용돼 GITEA_TOKENS가 아예 시도되지 않은 경우가
     많음)을 바로 알아챌 수 있게 한다."""
     source = (gitea_cfg or {}).get("source", "none")
-    label = _GITEA_AUTH_SOURCE_LABEL.get(source, "알 수 없는 인증 정보")
+    label = _GITEA_AUTH_SOURCE_LABEL.get(source, _T("알 수 없는 인증 정보", "unknown credentials"))
     if source in ("url_basic", "url_token"):
         return (
-            "(%s(으)로 인증을 시도했지만 실패했습니다. 이 주소가 우선 적용되므로 "
+            _T("(%s(으)로 인증을 시도했지만 실패했습니다. 이 주소가 우선 적용되므로 "
             "설정에 GITEA_TOKENS를 등록해뒀어도 그쪽은 시도되지 않습니다 — 비밀번호/토큰이 "
             "바뀌었거나 서버가 더 이상 이 인증 방식을 지원하지 않을 수 있습니다(Gitea 1.23+는 "
             "Basic Auth 지원이 폐지됨). 카드의 '✏️ Git 주소 변경'으로 자격증명 없이 순수 "
-            "주소만 다시 등록하면, 이후 GITEA_TOKENS에 등록한 항목이 대신 적용됩니다.)" % label
+            "주소만 다시 등록하면, 이후 GITEA_TOKENS에 등록한 항목이 대신 적용됩니다.)", "(Authentication with %s failed. This address takes priority, so GITEA_TOKENS in the settings are not tried even if registered — the password/token may have changed, or the server may no longer support this method (Gitea 1.23+ dropped Basic Auth). Re-register the plain address without credentials using the card's '✏️ Change Git URL', and the GITEA_TOKENS entry will be used instead.)") % label
         )
     if source in ("config_token", "config_basic", "config_auto"):
         return (
-            "(%s(으)로 인증을 시도했지만 실패했습니다. 정보가 만료됐거나 저장소에 대한 "
-            "읽기 권한이 없을 수 있습니다 — 설정의 Gitea 서버 '연결 테스트'로 확인해주세요.)" % label
+            _T("(%s(으)로 인증을 시도했지만 실패했습니다. 정보가 만료됐거나 저장소에 대한 "
+            "읽기 권한이 없을 수 있습니다 — 설정의 Gitea 서버 '연결 테스트'로 확인해주세요.)", "(Authentication with %s failed. The credentials may have expired or lack read access to the repository — check with 'Test connection' for the Gitea server in the settings.)") % label
         )
-    return "(이 저장소는 인증 없이는 접근할 수 없습니다 — 설정의 'Gitea 서버'에 이 서버의 아이디/비밀번호 또는 읽기 토큰을 등록하면 자동으로 적용됩니다.)"
+    return _T("(이 저장소는 인증 없이는 접근할 수 없습니다 — 설정의 'Gitea 서버'에 이 서버의 아이디/비밀번호 또는 읽기 토큰을 등록하면 자동으로 적용됩니다.)", "(This repository cannot be accessed without authentication — register this server's username/password or a read token under 'Gitea server' in the settings and it will be used automatically.)")
 
 
 def _effective_github_token(url, fallback_token):
@@ -769,7 +849,7 @@ def _gitea_fetch_description_info(host, owner, repo, gitea_cfg, scheme="https"):
     try:
         data = _gitea_get_json(host, "/api/v1/repos/%s/%s" % (owner, repo), gitea_cfg, scheme)
         info = {
-            "desc": data.get("description") or "(등록된 설명이 없습니다)",
+            "desc": data.get("description") or _T("(등록된 설명이 없습니다)", "(no description)"),
             "tags": data.get("topics") or [],
             "url": data.get("html_url") or fallback_url,
             "default_branch": data.get("default_branch"),
@@ -780,12 +860,12 @@ def _gitea_fetch_description_info(host, owner, repo, gitea_cfg, scheme="https"):
     except urllib.error.HTTPError as exc:
         hint = " " + _gitea_auth_error_hint(gitea_cfg) if exc.code in (401, 403) else ""
         info = {
-            "desc": "Gitea API 호출 오류 (HTTP %s)%s" % (exc.code, hint),
+            "desc": _T("Gitea API 호출 오류 (HTTP %s)%s", "Gitea API error (HTTP %s)%s") % (exc.code, hint),
             "tags": [], "url": fallback_url, "default_branch": None, "stars": None, "pushed_at": None, "error": True,
         }
     except Exception as exc:
         info = {
-            "desc": "Gitea 저장소 정보를 불러오지 못했습니다 (%s)" % exc,
+            "desc": _T("Gitea 저장소 정보를 불러오지 못했습니다 (%s)", "Could not load the Gitea repository information (%s)") % exc,
             "tags": [], "url": fallback_url, "default_branch": None, "stars": None, "pushed_at": None, "error": True,
         }
 
@@ -962,7 +1042,7 @@ def _update_registered_repo_url(plugin_id, new_url):
 
     host, owner, repo = _parse_repo_url(new_url)
     if not host or not owner or not repo:
-        return False, "Git 저장소 주소를 해석하지 못했습니다: %s" % _scrub_credentials(new_url)
+        return False, _T("Git 저장소 주소를 해석하지 못했습니다: %s", "Could not parse the Git repository URL: %s") % _scrub_credentials(new_url)
 
     # 주소가 바뀌면(자격증명만 바뀐 경우 포함) 예전 주소로 실패했던 결과가
     # 캐시에 최대 24시간 남아있을 수 있다 — 예를 들어 URL에 박힌 옛 자격증명
@@ -974,7 +1054,7 @@ def _update_registered_repo_url(plugin_id, new_url):
     _VERSION_CACHE.pop(cache_key, None)
 
     _remember_repo_install(new_url, plugin_id=plugin_id)
-    return True, "'%s'의 등록된 Git 주소를 갱신했습니다. '업데이트' 버튼으로 새 주소에서 최신 상태를 확인해보세요." % plugin_id
+    return True, _T("'%s'의 등록된 Git 주소를 갱신했습니다. '업데이트' 버튼으로 새 주소에서 최신 상태를 확인해보세요.", "Updated the registered Git URL of '%s'. Use the 'Update' button to check the latest state at the new address.") % plugin_id
 
 
 def _unregister_repo(plugin_id):
@@ -991,12 +1071,12 @@ def _unregister_repo(plugin_id):
     entries = _load_github_registry_entries()
     remaining = [(pid, url) for pid, url in entries if pid != plugin_id]
     if len(remaining) == len(entries):
-        return False, "등록된 Git 주소 목록에 '%s'가 없습니다." % plugin_id
+        return False, _T("등록된 Git 주소 목록에 '%s'가 없습니다.", "'%s' is not in the registered Git URL list.") % plugin_id
 
     _save_github_registry_entries(remaining)
     return True, (
-        "'%s'의 등록된 Git 주소를 목록에서 제거했습니다. 설치된 플러그인 파일은 "
-        "그대로 유지됩니다(더 이상 이 주소로 업데이트를 확인하지 않습니다)." % plugin_id
+        _T("'%s'의 등록된 Git 주소를 목록에서 제거했습니다. 설치된 플러그인 파일은 "
+        "그대로 유지됩니다(더 이상 이 주소로 업데이트를 확인하지 않습니다).", "Removed the registered Git URL of '%s' from the list. The installed plugin files are kept (updates are no longer checked against this address).") % plugin_id
     )
 
 
@@ -1365,7 +1445,7 @@ def _fetch_description_info(owner, repo, token):
         ):
             canonical_owner, canonical_repo = None, None  # 이름이 바뀌지 않은 경우
         info = {
-            "desc": api_data.get("description") or "(GitHub에 등록된 설명이 없습니다)",
+            "desc": api_data.get("description") or _T("(GitHub에 등록된 설명이 없습니다)", "(no description on GitHub)"),
             "tags": api_data.get("topics") or [],
             "url": api_data.get("html_url") or ("https://github.com/%s/%s" % (owner, repo)),
             "default_branch": api_data.get("default_branch"),
@@ -1389,7 +1469,7 @@ def _fetch_description_info(owner, repo, token):
         }
     except Exception as exc:
         info = {
-            "desc": "GitHub 정보를 불러오지 못했습니다 (%s)" % exc,
+            "desc": _T("GitHub 정보를 불러오지 못했습니다 (%s)", "Could not load the GitHub information (%s)") % exc,
             "tags": [],
             "url": "https://github.com/%s/%s" % (owner, repo),
             "default_branch": None,
@@ -1614,7 +1694,7 @@ def _gitea_list_owner_repos_uncached(host, owner, gitea_cfg, scheme):
     /users/{owner}/repos는 본인 계정이 아니면 비공개 저장소를 빼고 돌려주기 때문이다."""
     uid = _gitea_owner_id(host, owner, gitea_cfg, scheme)
     if uid is None:
-        raise RuntimeError("소유자 '%s'를 찾을 수 없습니다" % owner)
+        raise RuntimeError(_T("소유자 '%s'를 찾을 수 없습니다", "Owner '%s' not found") % owner)
     return _gitea_search_paged(host, "/api/v1/repos/search?uid=%s&exclusive=true" % uid, gitea_cfg, scheme)
 
 
@@ -1711,7 +1791,7 @@ def _build_gitea_discovered_item(host, repo_json, remote_version, is_enabled_fn,
         "title": title,
         "type": plugin_type,
         "type_label": TYPE_LABELS.get(plugin_type, TYPE_LABELS["other"]),
-        "desc": repo_json.get("description") or "(등록된 설명이 없습니다)",
+        "desc": repo_json.get("description") or _T("(등록된 설명이 없습니다)", "(no description)"),
         "tags": repo_json.get("topics") or [],
         "features": [],
         "version_label": version_label,
@@ -1792,7 +1872,7 @@ def _build_discovered_item(repo_json, version_info, is_enabled_fn, excluded_ids)
         "title": title,
         "type": plugin_type,
         "type_label": TYPE_LABELS.get(plugin_type, TYPE_LABELS["other"]),
-        "desc": repo_json.get("description") or "(GitHub에 등록된 설명이 없습니다)",
+        "desc": repo_json.get("description") or _T("(GitHub에 등록된 설명이 없습니다)", "(no description on GitHub)"),
         "tags": repo_json.get("topics") or [],
         "features": [],
         "version_label": version_label,
@@ -1824,7 +1904,7 @@ def _fetch_repo_entry(url, token, is_enabled_fn, preloaded_info=None, plugin_id_
         return {
             "id": pid, "owner": "", "title": pid, "type": "other",
             "type_label": TYPE_LABELS["other"],
-            "desc": "저장소 주소를 해석하지 못했습니다.",
+            "desc": _T("저장소 주소를 해석하지 못했습니다.", "Could not parse the repository URL."),
             "tags": [], "features": [], "version_label": "—",
             "url": url, "error": True,
             "installed": _is_installed(pid) if plugin_id_override else False,
@@ -1958,7 +2038,7 @@ def _fetch_gitea_repo_entry(host, owner, repo, is_enabled_fn, gitea_cfg, scheme=
 # ========================================================================
 def _validate_plugin_id(plugin_id):
     if not _PLUGIN_ID_RE.match(plugin_id or ""):
-        raise ValueError("허용되지 않는 플러그인 ID입니다: %r" % plugin_id)
+        raise ValueError(_T("허용되지 않는 플러그인 ID입니다: %r", "Plugin ID not allowed: %r") % plugin_id)
 
 
 def _safe_join(base_dir, *parts):
@@ -1966,7 +2046,7 @@ def _safe_join(base_dir, *parts):
     base_norm = os.path.normpath(base_dir)
     target = os.path.normpath(os.path.join(base_dir, *parts))
     if target != base_norm and not target.startswith(base_norm + os.sep):
-        raise ValueError("허용되지 않는 경로입니다(path traversal 감지): %s" % target)
+        raise ValueError(_T("허용되지 않는 경로입니다(path traversal 감지): %s", "Path not allowed (path traversal detected): %s") % target)
     return target
 
 
@@ -1991,15 +2071,15 @@ def _extract_zip_safe(zip_path, extract_dir):
 
         if len(infos) > _MAX_ZIP_ENTRIES:
             raise ValueError(
-                "zip 안의 파일 개수가 너무 많습니다 (%d개, 최대 %d개). "
-                "'.git' 폴더 등 불필요한 항목이 포함되지 않았는지 확인해주세요."
+                _T("zip 안의 파일 개수가 너무 많습니다 (%d개, 최대 %d개). "
+                "'.git' 폴더 등 불필요한 항목이 포함되지 않았는지 확인해주세요.", "Too many files in the zip (%d, max %d). Make sure unneeded items such as the '.git' folder are not included.")
                 % (len(infos), _MAX_ZIP_ENTRIES)
             )
 
         total_uncompressed = sum(info.file_size for info in infos)
         if total_uncompressed > _MAX_ZIP_UNCOMPRESSED_BYTES:
             raise ValueError(
-                "압축을 풀었을 때 총 용량이 너무 큽니다 (%.1fMB, 최대 %.0fMB)."
+                _T("압축을 풀었을 때 총 용량이 너무 큽니다 (%.1fMB, 최대 %.0fMB).", "Total size after extraction is too large (%.1fMB, max %.0fMB).")
                 % (total_uncompressed / (1024 * 1024), _MAX_ZIP_UNCOMPRESSED_BYTES / (1024 * 1024))
             )
 
@@ -2035,22 +2115,22 @@ def _extract_tar_safe(archive_path, extract_dir):
 
         if len(members) > _MAX_ZIP_ENTRIES:
             raise ValueError(
-                "압축 안의 파일 개수가 너무 많습니다 (%d개, 최대 %d개). "
-                "'.git' 폴더 등 불필요한 항목이 포함되지 않았는지 확인해주세요."
+                _T("압축 안의 파일 개수가 너무 많습니다 (%d개, 최대 %d개). "
+                "'.git' 폴더 등 불필요한 항목이 포함되지 않았는지 확인해주세요.", "Too many files in the archive (%d, max %d). Make sure unneeded items such as the '.git' folder are not included.")
                 % (len(members), _MAX_ZIP_ENTRIES)
             )
 
         total_uncompressed = sum(m.size for m in members if m.isfile())
         if total_uncompressed > _MAX_ZIP_UNCOMPRESSED_BYTES:
             raise ValueError(
-                "압축을 풀었을 때 총 용량이 너무 큽니다 (%.1fMB, 최대 %.0fMB)."
+                _T("압축을 풀었을 때 총 용량이 너무 큽니다 (%.1fMB, 최대 %.0fMB).", "Total size after extraction is too large (%.1fMB, max %.0fMB).")
                 % (total_uncompressed / (1024 * 1024), _MAX_ZIP_UNCOMPRESSED_BYTES / (1024 * 1024))
             )
 
         for m in members:
             if m.issym() or m.islnk():
                 raise ValueError(
-                    "보안 경고: 압축 파일 안에 심볼릭/하드 링크가 포함되어 있어 거부합니다: %s" % m.name
+                    _T("보안 경고: 압축 파일 안에 심볼릭/하드 링크가 포함되어 있어 거부합니다: %s", "Security warning: the archive contains symbolic/hard links and is refused: %s") % m.name
                 )
             _safe_join(extract_dir, m.name)  # 경로 이탈 시 예외 발생
 
@@ -2067,16 +2147,16 @@ def _extract_7z_safe(archive_path, extract_dir):
         import py7zr
     except ImportError:
         raise ValueError(
-            "이 서버에는 7z 압축 해제 라이브러리(py7zr)가 설치되어 있지 않아 "
+            _T("이 서버에는 7z 압축 해제 라이브러리(py7zr)가 설치되어 있지 않아 "
             "7z 파일을 처리할 수 없습니다. zip 또는 tar(.tar/.tar.gz/.tar.bz2/"
-            ".tar.xz) 형식으로 다시 올려주세요."
+            ".tar.xz) 형식으로 다시 올려주세요.", "This server has no 7z extraction library (py7zr), so 7z files cannot be handled. Upload it again as zip or tar (.tar/.tar.gz/.tar.bz2/.tar.xz).")
         )
 
     with py7zr.SevenZipFile(archive_path, mode="r") as zf:
         names = zf.getnames()
         if len(names) > _MAX_ZIP_ENTRIES:
             raise ValueError(
-                "압축 안의 파일 개수가 너무 많습니다 (%d개, 최대 %d개)."
+                _T("압축 안의 파일 개수가 너무 많습니다 (%d개, 최대 %d개).", "Too many files in the archive (%d, max %d).")
                 % (len(names), _MAX_ZIP_ENTRIES)
             )
         for name in names:
@@ -2090,7 +2170,7 @@ def _extract_7z_safe(archive_path, extract_dir):
             total_uncompressed = 0  # 크기 정보를 못 가져와도 해제 자체는 진행(개수 제한은 이미 확인함)
         if total_uncompressed > _MAX_ZIP_UNCOMPRESSED_BYTES:
             raise ValueError(
-                "압축을 풀었을 때 총 용량이 너무 큽니다 (%.1fMB, 최대 %.0fMB)."
+                _T("압축을 풀었을 때 총 용량이 너무 큽니다 (%.1fMB, 최대 %.0fMB).", "Total size after extraction is too large (%.1fMB, max %.0fMB).")
                 % (total_uncompressed / (1024 * 1024), _MAX_ZIP_UNCOMPRESSED_BYTES / (1024 * 1024))
             )
 
@@ -2101,7 +2181,7 @@ def _extract_7z_safe(archive_path, extract_dir):
         for entry in dirs + files:
             if os.path.islink(os.path.join(root_dir, entry)):
                 raise ValueError(
-                    "보안 경고: 압축 파일 안에 심볼릭 링크가 포함되어 있어 거부합니다: %s" % entry
+                    _T("보안 경고: 압축 파일 안에 심볼릭 링크가 포함되어 있어 거부합니다: %s", "Security warning: the archive contains symbolic links and is refused: %s") % entry
                 )
 
 
@@ -2116,8 +2196,8 @@ def _extract_archive_safe(archive_path, extract_dir, filename):
         _extract_7z_safe(archive_path, extract_dir)
     else:
         raise ValueError(
-            "지원하지 않는 압축 형식입니다: %s "
-            "(zip, tar/tar.gz/tar.bz2/tar.xz, 7z만 지원)" % (filename or "(파일명 없음)")
+            _T("지원하지 않는 압축 형식입니다: %s "
+            "(zip, tar/tar.gz/tar.bz2/tar.xz, 7z만 지원)", "Unsupported archive format: %s (only zip, tar/tar.gz/tar.bz2/tar.xz and 7z)") % (filename or _T("(파일명 없음)", "(no file name)"))
         )
 
 
@@ -2314,22 +2394,22 @@ def _validate_plugin_source(plugin_dir, detected_id):
             vkey = vdata.get("plugin version") or vdata.get("version")
             if vkey:
                 vfile_ok = True
-                vdetail = "버전 %s" % vkey
+                vdetail = _T("버전 %s", "version %s") % vkey
                 if vfile_lenient:
-                    vdetail += " (중괄호 없이 적혀 있어 관대하게 파싱함 — 표준 형식({\"plugin version\": \"%s\"})을 권장합니다)" % vkey
+                    vdetail += _T(" (중괄호 없이 적혀 있어 관대하게 파싱함 — 표준 형식({\"plugin version\": \"%s\"})을 권장합니다)", " (written without braces and parsed leniently — the standard form ({\"plugin version\": \"%s\"}) is recommended)") % vkey
             else:
-                vdetail = "'plugin version' 키가 없습니다 (업데이트 체크 불가)"
+                vdetail = _T("'plugin version' 키가 없습니다 (업데이트 체크 불가)", "no 'plugin version' key (updates cannot be checked)")
         except Exception:
-            vdetail = "VERSION 형식이 표준 JSON이 아닙니다 (업데이트 체크 불가)"
+            vdetail = _T("VERSION 형식이 표준 JSON이 아닙니다 (업데이트 체크 불가)", "VERSION is not standard JSON (updates cannot be checked)")
     else:
-        vdetail = "VERSION 파일 없음"
+        vdetail = _T("VERSION 파일 없음", "no VERSION file")
 
     if manifest_files:
         checks.append({"name": "VERSION", "ok": vfile_ok, "warn": vfile_ok and vfile_lenient,
-                        "detail": (vdetail if vfile_ok else "update_manifest 선언 시 VERSION 필수 — " + vdetail)})
+                        "detail": (vdetail if vfile_ok else _T("update_manifest 선언 시 VERSION 필수 — ", "VERSION is required when update_manifest is declared — ") + vdetail)})
     else:
         checks.append({"name": "VERSION", "ok": True, "warn": (not vfile_ok) or vfile_lenient,
-                        "detail": vdetail if vfile_ok else "경고: " + vdetail + " (업데이트 체크 불가)"})
+                        "detail": vdetail if vfile_ok else _T("경고: ", "Warning: ") + vdetail + _T(" (업데이트 체크 불가)", " (updates cannot be checked)")})
 
     # 2~6. 파이썬 소스 AST 분석
     try:
@@ -2357,36 +2437,36 @@ def _validate_plugin_source(plugin_dir, detected_id):
                 content = f.read()
             tree = ast.parse(content, filename=fpath)
         except SyntaxError:
-            forbidden_hits.append("%s: 파이썬 구문 오류" % fname)
+            forbidden_hits.append(_T("%s: 파이썬 구문 오류", "%s: Python syntax error") % fname)
             continue
 
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 fn = node.func
                 if isinstance(fn, ast.Name) and fn.id in ("eval", "exec"):
-                    forbidden_hits.append("%s: %s() 호출 발견(plugin_board 자체 정책)" % (fname, fn.id))
+                    forbidden_hits.append(_T("%s: %s() 호출 발견(plugin_board 자체 정책)", "%s: %s() call found (plugin_board policy)") % (fname, fn.id))
                 elif (isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name)
                       and fn.value.id == "os" and _is_os_process_call(fn.attr)):
                     # [PATCH-4] 가이드 §2-5: os.system/popen/exec*/spawn*는 subprocess와
                     # 같은 "프로세스 실행"으로 취급한다(ALLOW_PLUGIN_SUBPROCESS로만 허용).
                     # 예전에는 모듈을 확인하지 않아 platform.system() 같은 무해한 호출도
                     # 금지 패턴으로 오탐했고, 반대로 os.exec*/os.spawn*은 놓쳤다.
-                    subprocess_hits.append("%s: os.%s() 호출 발견" % (fname, fn.attr))
+                    subprocess_hits.append(_T("%s: os.%s() 호출 발견", "%s: os.%s() call found") % (fname, fn.attr))
             elif isinstance(node, ast.ImportFrom) and node.module == "os":
                 for a in node.names:
                     if _is_os_process_call(a.name):
-                        subprocess_hits.append("%s: from os import %s 발견" % (fname, a.name))
+                        subprocess_hits.append(_T("%s: from os import %s 발견", "%s: from os import %s found") % (fname, a.name))
             elif isinstance(node, ast.Import):
                 for a in node.names:
                     if a.name == "subprocess" or a.name.startswith("subprocess."):
-                        subprocess_hits.append("%s: subprocess import 발견" % fname)
+                        subprocess_hits.append(_T("%s: subprocess import 발견", "%s: subprocess import found") % fname)
                     elif a.name.startswith("plugins.metadata."):
                         parts = a.name.split(".")
                         if len(parts) >= 3 and parts[2] not in ("base", detected_id):
                             cross_plugin_deps.add(parts[2])
             elif isinstance(node, ast.ImportFrom):
                 if node.module == "subprocess":
-                    subprocess_hits.append("%s: subprocess import 발견" % fname)
+                    subprocess_hits.append(_T("%s: subprocess import 발견", "%s: subprocess import found") % fname)
                 elif node.module and node.module.startswith("plugins.metadata."):
                     parts = node.module.split(".")
                     if len(parts) >= 3 and parts[2] not in ("base", detected_id):
@@ -2394,7 +2474,7 @@ def _validate_plugin_source(plugin_dir, detected_id):
             elif isinstance(node, ast.keyword) and node.arg == "shell":
                 try:
                     if ast.literal_eval(node.value) is True:
-                        forbidden_hits.append("%s: shell=True 사용(plugin_board 자체 정책)" % fname)
+                        forbidden_hits.append(_T("%s: shell=True 사용(plugin_board 자체 정책)", "%s: shell=True used (plugin_board policy)") % fname)
                 except Exception:
                     pass
 
@@ -2454,20 +2534,20 @@ def _validate_plugin_source(plugin_dir, detected_id):
                     has_apply = True
 
     if not py_files:
-        checks.append({"name": "소스", "ok": False, "detail": "메인 .py 파일이 없습니다"})
+        checks.append({"name": _T("소스", "Source"), "ok": False, "detail": _T("메인 .py 파일이 없습니다", "No main .py file")})
     elif not provider_found:
-        checks.append({"name": "소스", "ok": False, "detail": "BaseMetadataProvider 상속 클래스를 찾을 수 없습니다"})
+        checks.append({"name": _T("소스", "Source"), "ok": False, "detail": _T("BaseMetadataProvider 상속 클래스를 찾을 수 없습니다", "No class inheriting BaseMetadataProvider found")})
     else:
-        checks.append({"name": "소스", "ok": True, "detail": "%d개 .py 파일, BaseMetadataProvider 클래스 발견" % len(py_files)})
+        checks.append({"name": _T("소스", "Source"), "ok": True, "detail": _T("%d개 .py 파일, BaseMetadataProvider 클래스 발견", "%d .py files, BaseMetadataProvider class found") % len(py_files)})
 
     if class_id is not None and not _is_valid_class_id(class_id):
-        checks.append({"name": "클래스 id", "ok": False,
-                        "detail": "클래스 id='%s' 형식이 올바르지 않습니다(영문/숫자/._- 만 허용)" % class_id})
+        checks.append({"name": _T("클래스 id", "Class id"), "ok": False,
+                        "detail": _T("클래스 id='%s' 형식이 올바르지 않습니다(영문/숫자/._- 만 허용)", "Class id='%s' is not valid (only letters, digits and ._- allowed)") % class_id})
     elif class_id is not None:
         class_id_str = str(class_id).strip()
         detected_id_str = str(detected_id).strip()
         if class_id_str == detected_id_str:
-            checks.append({"name": "클래스 id", "ok": True, "detail": class_id})
+            checks.append({"name": _T("클래스 id", "Class id"), "ok": True, "detail": class_id})
         elif class_id_str.replace("-", "_") == detected_id_str.replace("-", "_"):
             # 저장소 이름은 관례상 하이픈을 쓰고(예: bookoasis-m3u-player), 파이썬
             # 식별자는 하이픈을 쓸 수 없어 클래스 id를 언더스코어로 짓는 경우가
@@ -2475,43 +2555,43 @@ def _validate_plugin_source(plugin_dir, detected_id):
             # id이므로 이 차이만으로는 설치를 막지 않고 통과시키되, 코어가 이
             # 값을 그대로 참조하는 곳(목록 표시 등)이 있을 수 있어 경고로 남긴다.
             checks.append({
-                "name": "클래스 id", "ok": True, "warn": True,
+                "name": _T("클래스 id", "Class id"), "ok": True, "warn": True,
                 "detail": (
-                    "경고: 코드 내 id='%s'와 감지된 id='%s'가 하이픈/언더스코어 표기만 "
+                    _T("경고: 코드 내 id='%s'와 감지된 id='%s'가 하이픈/언더스코어 표기만 "
                     "달라 임시로 통과시켰습니다 — 코어가 이 값을 그대로 참조하는 곳이 "
                     "있다면 목록에 정상적으로 안 보일 수 있으니, 가능하면 플러그인 "
-                    "코드의 id를 '%s'로 맞춰주세요." % (class_id, detected_id, detected_id)
+                    "코드의 id를 '%s'로 맞춰주세요.", "Warning: id='%s' in the code and the detected id='%s' differ only by hyphen/underscore and were let through for now — if the core uses this value as is, it may not show up in the list properly, so please change the plugin's id to '%s' if you can.") % (class_id, detected_id, detected_id)
                 ),
             })
         else:
             # [PATCH-4] 폴더명과 클래스 id를 분리해서 다루므로(활성화·설정 키는 항상
             # 클래스 id로 조회) 불일치 자체는 더 이상 설치 실패 사유가 아니다.
             # 네임스페이스 id(leeyj.spotify_mood)처럼 폴더명으로 쓸 수 없는 id가 대표적이다.
-            checks.append({"name": "클래스 id", "ok": True, "warn": True,
-                            "detail": "경고: 코드 내 id='%s'를 설치 폴더 '%s'에 설치합니다 — 설정·활성화 "
-                                      "상태는 클래스 id 기준으로 관리됩니다." % (class_id, detected_id)})
+            checks.append({"name": _T("클래스 id", "Class id"), "ok": True, "warn": True,
+                            "detail": _T("경고: 코드 내 id='%s'를 설치 폴더 '%s'에 설치합니다 — 설정·활성화 "
+                                      "상태는 클래스 id 기준으로 관리됩니다.", "Warning: installing id='%s' from the code into folder '%s' — settings and enabled state are managed by the class id.") % (class_id, detected_id)})
     elif provider_found:
-        checks.append({"name": "클래스 id", "ok": False, "detail": "플러그인 클래스에 id 속성이 없습니다"})
+        checks.append({"name": _T("클래스 id", "Class id"), "ok": False, "detail": _T("플러그인 클래스에 id 속성이 없습니다", "The plugin class has no id attribute")})
     else:
-        checks.append({"name": "클래스 id", "ok": False, "detail": "클래스를 찾을 수 없어 검사 불가"})
+        checks.append({"name": _T("클래스 id", "Class id"), "ok": False, "detail": _T("클래스를 찾을 수 없어 검사 불가", "Cannot check without the class")})
 
     if provider_found:
         # [PATCH-4] 가이드 §3의 필수 계약은 search/apply뿐이다. name/is_searchable/
         # config_schema는 권장 필드라 없으면 경고만 남긴다(베이스 클래스 기본값 사용).
         missing_fields = [f for f in ("name", "is_searchable", "config_schema") if f not in cls_attrs]
-        checks.append({"name": "권장 필드", "ok": True, "warn": bool(missing_fields),
-                        "detail": ("경고: 클래스에 직접 선언되지 않음(기본값 사용): " + ", ".join(missing_fields))
-                                  if missing_fields else "name/is_searchable/config_schema 확인"})
+        checks.append({"name": _T("권장 필드", "Recommended fields"), "ok": True, "warn": bool(missing_fields),
+                        "detail": (_T("경고: 클래스에 직접 선언되지 않음(기본값 사용): ", "Warning: not declared on the class directly (defaults used): ") + ", ".join(missing_fields))
+                                  if missing_fields else _T("name/is_searchable/config_schema 확인", "name/is_searchable/config_schema checked")})
         missing_methods = [m for m, ok in (("search", has_search), ("apply", has_apply)) if not ok]
-        checks.append({"name": "필수 메서드", "ok": not missing_methods,
-                        "detail": ("구현 안 됨: " + ", ".join(missing_methods)) if missing_methods
-                                  else "search/apply 확인"})
+        checks.append({"name": _T("필수 메서드", "Required methods"), "ok": not missing_methods,
+                        "detail": (_T("구현 안 됨: ", "Not implemented: ") + ", ".join(missing_methods)) if missing_methods
+                                  else _T("search/apply 확인", "search/apply checked")})
     else:
-        checks.append({"name": "권장 필드", "ok": False, "detail": "클래스 없음"})
-        checks.append({"name": "필수 메서드", "ok": False, "detail": "클래스 없음"})
+        checks.append({"name": _T("권장 필드", "Recommended fields"), "ok": False, "detail": _T("클래스 없음", "No class")})
+        checks.append({"name": _T("필수 메서드", "Required methods"), "ok": False, "detail": _T("클래스 없음", "No class")})
 
-    checks.append({"name": "금지 패턴", "ok": not forbidden_hits,
-                    "detail": "; ".join(forbidden_hits[:3]) if forbidden_hits else "eval/exec/shell=True 없음"})
+    checks.append({"name": _T("금지 패턴", "Forbidden patterns"), "ok": not forbidden_hits,
+                    "detail": "; ".join(forbidden_hits[:3]) if forbidden_hits else _T("eval/exec/shell=True 없음", "no eval/exec/shell=True")})
 
     if subprocess_hits:
         if _allow_plugin_subprocess():
@@ -2519,24 +2599,24 @@ def _validate_plugin_source(plugin_dir, detected_id):
             # 통과시킨다 — 기본값은 여전히 차단이며, 통과하더라도 설치 결과
             # 메시지에 경고로 남겨 관리자가 알아챌 수 있게 한다.
             checks.append({
-                "name": "프로세스 실행", "ok": True, "warn": True,
+                "name": _T("프로세스 실행", "Process execution"), "ok": True, "warn": True,
                 "detail": (
-                    "경고: subprocess를 사용합니다(%s) — 서버 환경변수 "
+                    _T("경고: subprocess를 사용합니다(%s) — 서버 환경변수 "
                     "ALLOW_PLUGIN_SUBPROCESS=true로 허용되어 있어 설치를 통과시켰습니다. "
                     "이 플러그인이 실제로 외부 명령을 실행한다는 뜻이니, 신뢰할 수 있는 "
-                    "출처인지 다시 한번 확인하세요." % "; ".join(subprocess_hits[:3])
+                    "출처인지 다시 한번 확인하세요.", "Warning: uses subprocess (%s) — allowed because the server environment variable ALLOW_PLUGIN_SUBPROCESS=true is set. This plugin really runs external commands, so make sure the source is trustworthy.") % "; ".join(subprocess_hits[:3])
                 ),
             })
         else:
             checks.append({
-                "name": "프로세스 실행", "ok": False,
+                "name": _T("프로세스 실행", "Process execution"), "ok": False,
                 "detail": (
-                    "%s — 서버 환경변수 ALLOW_PLUGIN_SUBPROCESS=true를 설정하면 설치를 "
-                    "허용할 수 있습니다(기본값은 차단)." % "; ".join(subprocess_hits[:3])
+                    _T("%s — 서버 환경변수 ALLOW_PLUGIN_SUBPROCESS=true를 설정하면 설치를 "
+                    "허용할 수 있습니다(기본값은 차단).", "%s — setting the server environment variable ALLOW_PLUGIN_SUBPROCESS=true allows the install (blocked by default).") % "; ".join(subprocess_hits[:3])
                 ),
             })
     else:
-        checks.append({"name": "프로세스 실행", "ok": True, "detail": "subprocess/os.system·popen·exec*·spawn* 없음"})
+        checks.append({"name": _T("프로세스 실행", "Process execution"), "ok": True, "detail": _T("subprocess/os.system·popen·exec*·spawn* 없음", "no subprocess/os.system·popen·exec*·spawn*")})
 
     # 다른 플러그인 모듈(plugins.metadata.<다른 id>)을 직접 import하는 경우 —
     # 그 다른 플러그인이 이 서버에 설치돼 있지 않으면 설치 자체는 성공해도
@@ -2544,22 +2624,22 @@ def _validate_plugin_source(plugin_dir, detected_id):
     # 조용히 실패한다. 설치 전에 미리 걸러내 훨씬 명확한 원인을 알려준다.
     missing_deps = sorted(dep for dep in cross_plugin_deps if not _is_installed(dep))
     if missing_deps:
-        checks.append({"name": "플러그인 간 의존성", "ok": False,
+        checks.append({"name": _T("플러그인 간 의존성", "Plugin dependencies"), "ok": False,
                         "detail": (
-                            "이 플러그인은 다른 플러그인(plugins.metadata.%s)을 직접 "
+                            _T("이 플러그인은 다른 플러그인(plugins.metadata.%s)을 직접 "
                             "import하는데, 이 서버에 설치돼 있지 않습니다. 먼저 해당 "
-                            "플러그인을 설치한 뒤 다시 시도해주세요." % ", plugins.metadata.".join(missing_deps)
+                            "플러그인을 설치한 뒤 다시 시도해주세요.", "This plugin imports another plugin (plugins.metadata.%s) directly, but it is not installed on this server. Install that plugin first and try again.") % ", plugins.metadata.".join(missing_deps)
                         )})
     elif cross_plugin_deps:
-        checks.append({"name": "플러그인 간 의존성", "ok": True,
-                        "detail": "필요한 다른 플러그인(%s) 전부 설치되어 있음" % ", ".join(sorted(cross_plugin_deps))})
+        checks.append({"name": _T("플러그인 간 의존성", "Plugin dependencies"), "ok": True,
+                        "detail": _T("필요한 다른 플러그인(%s) 전부 설치되어 있음", "All required plugins (%s) are installed") % ", ".join(sorted(cross_plugin_deps))})
     else:
-        checks.append({"name": "플러그인 간 의존성", "ok": True, "detail": "다른 플러그인에 대한 직접 의존성 없음"})
+        checks.append({"name": _T("플러그인 간 의존성", "Plugin dependencies"), "ok": True, "detail": _T("다른 플러그인에 대한 직접 의존성 없음", "no direct dependency on other plugins")})
 
     if os.path.isfile(os.path.join(plugin_dir, "__init__.py")):
-        checks.append({"name": "__init__.py", "ok": True, "detail": "확인"})
+        checks.append({"name": "__init__.py", "ok": True, "detail": _T("확인", "checked")})
     else:
-        checks.append({"name": "__init__.py", "ok": True, "warn": True, "detail": "경고: __init__.py 없음 (폴백 로드 사용)"})
+        checks.append({"name": "__init__.py", "ok": True, "warn": True, "detail": _T("경고: __init__.py 없음 (폴백 로드 사용)", "Warning: no __init__.py (fallback loading used)")})
 
     symlinks = []
     try:
@@ -2570,24 +2650,24 @@ def _validate_plugin_source(plugin_dir, detected_id):
                     symlinks.append(os.path.relpath(p, plugin_dir))
     except Exception:
         pass
-    checks.append({"name": "심볼릭 링크", "ok": not symlinks,
-                    "detail": ("플러그인 폴더 내 심볼릭 링크 금지: " + ", ".join(symlinks[:3])) if symlinks else "없음"})
+    checks.append({"name": _T("심볼릭 링크", "Symbolic links"), "ok": not symlinks,
+                    "detail": (_T("플러그인 폴더 내 심볼릭 링크 금지: ", "Symbolic links are not allowed in the plugin folder: ") + ", ".join(symlinks[:3])) if symlinks else _T("없음", "none")})
 
     if "category_tab" in cls_attrs:
         missing_ui = [f for f in ("index.html", "script.js") if not os.path.isfile(os.path.join(plugin_dir, f))]
         no_css = not os.path.isfile(os.path.join(plugin_dir, "style.css"))
-        checks.append({"name": "UI 번들", "ok": not missing_ui, "warn": (not missing_ui) and no_css,
-                        "detail": ("category_tab 선언 시 필수: " + ", ".join(missing_ui)) if missing_ui
-                                  else ("경고: style.css 없음" if no_css else "index/script/style 확인")})
+        checks.append({"name": _T("UI 번들", "UI bundle"), "ok": not missing_ui, "warn": (not missing_ui) and no_css,
+                        "detail": (_T("category_tab 선언 시 필수: ", "required when category_tab is declared: ") + ", ".join(missing_ui)) if missing_ui
+                                  else (_T("경고: style.css 없음", "Warning: no style.css") if no_css else _T("index/script/style 확인", "index/script/style checked"))})
     else:
-        checks.append({"name": "UI 번들", "ok": True, "detail": "미선언"})
+        checks.append({"name": _T("UI 번들", "UI bundle"), "ok": True, "detail": _T("미선언", "not declared")})
 
     if "detail_view" in cls_attrs:
         missing_dv = [f for f in ("detail/index.html", "detail/script.js")
                       if not os.path.isfile(os.path.join(plugin_dir, *f.split("/")))]
-        checks.append({"name": "상세 화면 번들", "ok": not missing_dv,
-                        "detail": ("detail_view 선언 시 필수: " + ", ".join(missing_dv)) if missing_dv
-                                  else "detail/index.html·script.js 확인"})
+        checks.append({"name": _T("상세 화면 번들", "Detail view bundle"), "ok": not missing_dv,
+                        "detail": (_T("detail_view 선언 시 필수: ", "required when detail_view is declared: ") + ", ".join(missing_dv)) if missing_dv
+                                  else _T("detail/index.html·script.js 확인", "detail/index.html·script.js checked")})
 
     all_ok = all(c.get("ok") for c in checks)
     return all_ok, checks
@@ -2606,21 +2686,21 @@ def _install_from_archive(archive_data_b64, filename, db_type, gitea_tokens=None
     6) 활성화 + 핫 리로드 + 실제 로드 여부 재확인(실패 시 자동 롤백)
     """
     if not archive_data_b64:
-        return False, "압축 파일 데이터가 누락되었습니다."
+        return False, _T("압축 파일 데이터가 누락되었습니다.", "The archive data is missing.")
     if "," in archive_data_b64:
         archive_data_b64 = archive_data_b64.split(",", 1)[1]  # data:...;base64, 접두어 제거
 
     archive_kind = _detect_archive_kind(filename)
     if not archive_kind:
         return False, (
-            "지원하지 않는 압축 형식입니다: %s (zip, tar/tar.gz/tar.bz2/tar.xz, 7z만 지원)"
-            % (filename or "(파일명 없음)")
+            _T("지원하지 않는 압축 형식입니다: %s (zip, tar/tar.gz/tar.bz2/tar.xz, 7z만 지원)", "Unsupported archive format: %s (only zip, tar/tar.gz/tar.bz2/tar.xz and 7z)")
+            % (filename or _T("(파일명 없음)", "(no file name)"))
         )
 
     try:
         archive_bytes = base64.b64decode(archive_data_b64)
     except Exception as exc:
-        return False, "압축 파일 데이터를 해석하지 못했습니다: %s" % exc
+        return False, _T("압축 파일 데이터를 해석하지 못했습니다: %s", "Could not decode the archive data: %s") % exc
 
     tmp_dir = tempfile.mkdtemp(prefix="plugin_board_archive_")
     try:
@@ -2633,9 +2713,9 @@ def _install_from_archive(archive_data_b64, filename, db_type, gitea_tokens=None
         try:
             _extract_archive_safe(archive_path, extract_dir, filename)
         except (zipfile.BadZipFile, tarfile.ReadError):
-            return False, "올바른 압축 파일 형식이 아닙니다(%s로 인식됨)." % archive_kind
+            return False, _T("올바른 압축 파일 형식이 아닙니다(%s로 인식됨).", "Not a valid archive (recognized as %s).") % archive_kind
         except Exception as exc:
-            return False, "압축 해제에 실패했습니다: %s" % exc
+            return False, _T("압축 해제에 실패했습니다: %s", "Extraction failed: %s") % exc
 
         plugin_root = _find_plugin_root_dir(extract_dir)
         folder_hint = _detect_plugin_id_from_dir(plugin_root, fallback_name=filename)
@@ -2657,7 +2737,7 @@ def _install_from_archive(archive_data_b64, filename, db_type, gitea_tokens=None
 
         ok, msg, folder = _install_from_source_dir(
             plugin_root, folder_hint, None, source_url, db_type,
-            "압축 파일 %s" % archive_kind,
+            _T("압축 파일 %s", "archive %s") % archive_kind,
             ignore=shutil.ignore_patterns(".git", ".github", "__pycache__", "*.pyc", "__MACOSX", ".DS_Store"),
         )
         if not ok:
@@ -2669,9 +2749,9 @@ def _install_from_archive(archive_data_b64, filename, db_type, gitea_tokens=None
             _remember_repo_install(registered_url, plugin_id=folder)
         return True, msg
     except (zipfile.BadZipFile, tarfile.ReadError):
-        return False, "올바른 압축 파일 형식이 아닙니다."
+        return False, _T("올바른 압축 파일 형식이 아닙니다.", "Not a valid archive.")
     except Exception as exc:
-        return False, "압축 파일 플러그인 설치 중 오류가 발생했습니다: %s" % exc
+        return False, _T("압축 파일 플러그인 설치 중 오류가 발생했습니다: %s", "Error while installing the plugin from the archive: %s") % exc
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -2802,24 +2882,24 @@ def _toggle_plugin_enabled(plugin_id, enabled_val, db_type, reload=True):
 
     class_id = _class_id_for_folder(plugin_id) if _is_installed(plugin_id) else plugin_id
     if plugin_id == "plugin_board" or class_id == "plugin_board":
-        return False, "plugin_board 자기 자신은 이 화면에서 비활성화할 수 없습니다."
+        return False, _T("plugin_board 자기 자신은 이 화면에서 비활성화할 수 없습니다.", "plugin_board cannot disable itself from this screen.")
 
     try:
         from services.plugin_service import PluginService
     except Exception as exc:
-        return False, "코어 PluginService를 사용할 수 없습니다 (%s)" % exc
+        return False, _T("코어 PluginService를 사용할 수 없습니다 (%s)", "The core PluginService is not available (%s)") % exc
 
     try:
         ok, err = PluginService.toggle_plugin_enabled(db_type, class_id, str(enabled_val))
         if not ok:
-            return False, err or "상태 변경에 실패했습니다."
+            return False, err or _T("상태 변경에 실패했습니다.", "Could not change the status.")
     except Exception as exc:
-        return False, "상태 변경 중 오류가 발생했습니다: %s" % exc
+        return False, _T("상태 변경 중 오류가 발생했습니다: %s", "Error while changing the status: %s") % exc
 
     if reload:
         _try_hot_reload(class_id, plugin_id)
-    status_text = "활성화" if str(enabled_val) == "1" else "비활성화"
-    return True, "'%s' 상태가 '%s'로 변경되었습니다." % (plugin_id, status_text)
+    status_text = _T("활성화", "enabled") if str(enabled_val) == "1" else _T("비활성화", "disabled")
+    return True, _T("'%s' 상태가 '%s'로 변경되었습니다.", "'%s' is now '%s'.") % (plugin_id, status_text)
 
 
 def _delete_plugin(plugin_id):
@@ -2828,7 +2908,7 @@ def _delete_plugin(plugin_id):
     plugins/data/{클래스 id}도 함께 정리한다. 모든 경로는 각자의 루트
     (plugins/metadata, plugins/data) 경계 안에 있는지 검증한 뒤에만 삭제한다."""
     if plugin_id == "plugin_board":
-        return False, "plugin_board 자기 자신은 이 화면에서 삭제할 수 없습니다."
+        return False, _T("plugin_board 자기 자신은 이 화면에서 삭제할 수 없습니다.", "plugin_board cannot delete itself from this screen.")
 
     try:
         _validate_plugin_id(plugin_id)
@@ -2837,11 +2917,11 @@ def _delete_plugin(plugin_id):
         return False, str(exc)
 
     if not os.path.isdir(target_dir):
-        return False, "존재하지 않는 플러그인입니다: %s" % plugin_id
+        return False, _T("존재하지 않는 플러그인입니다: %s", "Plugin does not exist: %s") % plugin_id
 
     class_id = _class_id_for_folder(plugin_id)
     if class_id == "plugin_board":
-        return False, "plugin_board 자기 자신은 이 화면에서 삭제할 수 없습니다."
+        return False, _T("plugin_board 자기 자신은 이 화면에서 삭제할 수 없습니다.", "plugin_board cannot delete itself from this screen.")
     deleted_version = _local_version(plugin_id)
 
     data_root = os.path.join(_plugins_root_dir(), "data")
@@ -2858,7 +2938,7 @@ def _delete_plugin(plugin_id):
     try:
         shutil.rmtree(target_dir)
     except Exception as exc:
-        return False, "삭제 실패: %s" % exc
+        return False, _T("삭제 실패: %s", "Delete failed: %s") % exc
 
     # 메타데이터 폴더 삭제가 이미 성공한 뒤이므로, 데이터 폴더 삭제가 실패해도
     # (예: 권한 문제) 전체 삭제 자체를 실패로 처리하지 않고 메시지에만 알린다.
@@ -2868,7 +2948,7 @@ def _delete_plugin(plugin_id):
             try:
                 shutil.rmtree(d)
             except Exception as exc:
-                data_dir_warning += " (경고: 데이터 폴더 %s 삭제 실패: %s)" % (os.path.basename(d), exc)
+                data_dir_warning += _T(" (경고: 데이터 폴더 %s 삭제 실패: %s)", " (warning: could not delete the data folder %s: %s)") % (os.path.basename(d), exc)
 
     _DESC_CACHE.clear()  # 삭제된 플러그인이 GitHub 캐시에 남아 잘못된 정보를 주지 않도록
     _VERSION_CACHE.clear()
@@ -2883,7 +2963,7 @@ def _delete_plugin(plugin_id):
     _record_history("delete", plugin_id, class_id, from_version=deleted_version,
                     message=data_dir_warning.strip() or None)
 
-    return True, "'%s' 플러그인이 삭제되었습니다.%s" % (plugin_id, data_dir_warning)
+    return True, _T("'%s' 플러그인이 삭제되었습니다.%s", "The '%s' plugin was deleted.%s") % (plugin_id, data_dir_warning)
 
 
 # ========================================================================
@@ -2923,10 +3003,10 @@ def _set_auto_update_skip(folder, skip):
                 json.dump(sorted(current), f, ensure_ascii=False)
             os.replace(tmp_path, _AUTO_UPDATE_SKIP_FILE)
         except Exception as exc:
-            return False, "자동 업데이트 설정 저장에 실패했습니다: %s" % exc
+            return False, _T("자동 업데이트 설정 저장에 실패했습니다: %s", "Could not save the auto-update setting: %s") % exc
     if skip:
-        return True, "'%s'은(는) 이제 자동 업데이트하지 않습니다(수동 업데이트는 가능)." % folder
-    return True, "'%s'을(를) 다시 자동 업데이트 대상에 포함했습니다." % folder
+        return True, _T("'%s'은(는) 이제 자동 업데이트하지 않습니다(수동 업데이트는 가능).", "'%s' is no longer auto-updated (manual updates still work).") % folder
+    return True, _T("'%s'을(를) 다시 자동 업데이트 대상에 포함했습니다.", "'%s' is included in auto-update again.") % folder
 
 
 # ========================================================================
@@ -2935,12 +3015,12 @@ def _set_auto_update_skip(folder, skip):
 def _gitea_http_error_detail(exc, what):
     code = getattr(exc, "code", None)
     if code == 401:
-        return "%s 인증 실패(401)" % what
+        return _T("%s 인증 실패(401)", "%s authentication failed (401)") % what
     if code == 403:
-        return "%s 권한 부족(403)" % what
+        return _T("%s 권한 부족(403)", "%s permission denied (403)") % what
     if code == 404:
-        return "%s 경로를 찾을 수 없음(404)" % what
-    return "%s 오류: %s" % (what, exc)
+        return _T("%s 경로를 찾을 수 없음(404)", "%s path not found (404)") % what
+    return _T("%s 오류: %s", "%s error: %s") % (what, exc)
 
 
 def _test_gitea_server(params, configured_tokens, topics):
@@ -2959,20 +3039,20 @@ def _test_gitea_server(params, configured_tokens, topics):
     checks = []
     report = {"host": host, "scheme": scheme, "checks": checks, "repos": [], "topics": list(topics)}
     if not host:
-        checks.append({"label": "서버 주소", "status": "fail", "detail": "주소를 입력해주세요."})
+        checks.append({"label": _T("서버 주소", "Server address"), "status": "fail", "detail": _T("주소를 입력해주세요.", "Enter the address.")})
         return report
 
     # ① 접속
     try:
         ver = _gitea_get_json(host, "/api/v1/version", None, scheme)
-        checks.append({"label": "서버 접속", "status": "ok",
+        checks.append({"label": _T("서버 접속", "Server connection"), "status": "ok",
                        "detail": "%s://%s — Gitea %s" % (scheme, host, (ver or {}).get("version", "?"))})
     except Exception as exc:
         hint = ""
         if scheme == "https":
-            hint = " (http로만 서비스하는 서버라면 주소를 http://로 입력해보세요)"
-        checks.append({"label": "서버 접속", "status": "fail",
-                       "detail": "%s://%s 에 접속하지 못했습니다: %s%s" % (scheme, host, exc, hint)})
+            hint = _T(" (http로만 서비스하는 서버라면 주소를 http://로 입력해보세요)", " (if the server only serves http, try entering the address with http://)")
+        checks.append({"label": _T("서버 접속", "Server connection"), "status": "fail",
+                       "detail": _T("%s://%s 에 접속하지 못했습니다: %s%s", "Could not connect to %s://%s: %s%s") % (scheme, host, exc, hint)})
         return report
 
     # ② 읽기 토큰
@@ -2981,23 +3061,23 @@ def _test_gitea_server(params, configured_tokens, topics):
         try:
             me = _gitea_get_json(host, "/api/v1/user", {"token": token}, scheme)
             token_ok = True
-            checks.append({"label": "읽기 토큰", "status": "ok",
-                           "detail": "유효함 — 계정 %s" % (me or {}).get("login", "?")})
+            checks.append({"label": _T("읽기 토큰", "Read token"), "status": "ok",
+                           "detail": _T("유효함 — 계정 %s", "valid — account %s") % (me or {}).get("login", "?")})
         except urllib.error.HTTPError as exc:
             if exc.code == 403:
                 # 사용자 정보(read:user) 권한이 없을 뿐 토큰 자체는 유효할 수 있다 — 아래 검색으로 판단
                 token_ok = True
-                checks.append({"label": "읽기 토큰", "status": "warn",
-                               "detail": "토큰은 인식됐지만 사용자 정보 조회 권한이 없습니다(403). "
-                                         "저장소 읽기 권한이 있으면 아래 검색은 정상 동작합니다."})
+                checks.append({"label": _T("읽기 토큰", "Read token"), "status": "warn",
+                               "detail": _T("토큰은 인식됐지만 사용자 정보 조회 권한이 없습니다(403). "
+                                         "저장소 읽기 권한이 있으면 아래 검색은 정상 동작합니다.", "The token was recognized but has no permission to read user information (403). If it has repository read access, the search below works.")})
             else:
-                checks.append({"label": "읽기 토큰", "status": "fail",
-                               "detail": _gitea_http_error_detail(exc, "토큰") +
-                                         " — 토큰이 잘못됐거나 만료·폐기됐을 수 있습니다."})
+                checks.append({"label": _T("읽기 토큰", "Read token"), "status": "fail",
+                               "detail": _gitea_http_error_detail(exc, _T("토큰", "Token")) +
+                                         _T(" — 토큰이 잘못됐거나 만료·폐기됐을 수 있습니다.", " — the token may be wrong, expired or revoked.")})
         except Exception as exc:
-            checks.append({"label": "읽기 토큰", "status": "fail", "detail": str(exc)})
+            checks.append({"label": _T("읽기 토큰", "Read token"), "status": "fail", "detail": str(exc)})
     else:
-        checks.append({"label": "읽기 토큰", "status": "skip", "detail": "입력되지 않음"})
+        checks.append({"label": _T("읽기 토큰", "Read token"), "status": "skip", "detail": _T("입력되지 않음", "not entered")})
 
     # ③ 아이디/비밀번호
     basic_ok = False
@@ -3005,19 +3085,19 @@ def _test_gitea_server(params, configured_tokens, topics):
         try:
             me = _gitea_get_json(host, "/api/v1/user", {"username": username, "password": password}, scheme)
             basic_ok = True
-            checks.append({"label": "아이디/비밀번호", "status": "ok",
-                           "detail": "로그인 성공 — 계정 %s" % (me or {}).get("login", username)})
+            checks.append({"label": _T("아이디/비밀번호", "Username/password"), "status": "ok",
+                           "detail": _T("로그인 성공 — 계정 %s", "login succeeded — account %s") % (me or {}).get("login", username)})
         except urllib.error.HTTPError as exc:
-            checks.append({"label": "아이디/비밀번호", "status": "fail",
-                           "detail": _gitea_http_error_detail(exc, "아이디/비밀번호") +
-                                     " — 비밀번호가 틀렸거나, 계정에 2단계 인증이 켜져 있거나, 서버가 "
-                                     "API의 비밀번호 인증을 막아둔 경우입니다. 이때는 읽기 토큰을 등록하세요."})
+            checks.append({"label": _T("아이디/비밀번호", "Username/password"), "status": "fail",
+                           "detail": _gitea_http_error_detail(exc, _T("아이디/비밀번호", "Username/password")) +
+                                     _T(" — 비밀번호가 틀렸거나, 계정에 2단계 인증이 켜져 있거나, 서버가 "
+                                     "API의 비밀번호 인증을 막아둔 경우입니다. 이때는 읽기 토큰을 등록하세요.", " — the password is wrong, the account has two-factor authentication, or the server blocks password authentication for the API. Register a read token instead.")})
         except Exception as exc:
-            checks.append({"label": "아이디/비밀번호", "status": "fail", "detail": str(exc)})
+            checks.append({"label": _T("아이디/비밀번호", "Username/password"), "status": "fail", "detail": str(exc)})
     elif username or password:
-        checks.append({"label": "아이디/비밀번호", "status": "fail", "detail": "아이디와 비밀번호를 모두 입력해주세요."})
+        checks.append({"label": _T("아이디/비밀번호", "Username/password"), "status": "fail", "detail": _T("아이디와 비밀번호를 모두 입력해주세요.", "Enter both the username and the password.")})
     else:
-        checks.append({"label": "아이디/비밀번호", "status": "skip", "detail": "입력되지 않음"})
+        checks.append({"label": _T("아이디/비밀번호", "Username/password"), "status": "skip", "detail": _T("입력되지 않음", "not entered")})
 
     # ④ 토픽 검색 — 실제 검색은 토큰 우선(대시보드와 같은 규칙), 인증 없는 결과와 비교
     def search(cfg):
@@ -3040,7 +3120,7 @@ def _test_gitea_server(params, configured_tokens, topics):
         anon = search(None)
     except Exception as exc:
         anon = None
-        checks.append({"label": "토픽 검색(인증 없음)", "status": "warn", "detail": str(exc)})
+        checks.append({"label": _T("토픽 검색(인증 없음)", "Topic search (no auth)"), "status": "warn", "detail": str(exc)})
 
     topics_text = ", ".join(topics)
     if auth_cfg:
@@ -3049,26 +3129,26 @@ def _test_gitea_server(params, configured_tokens, topics):
             report["repos"] = [{"name": n, "private": p} for n, p in sorted(found.items())]
             private_count = sum(1 for p in found.values() if p)
             if found:
-                checks.append({"label": "토픽 검색", "status": "ok",
-                               "detail": "토픽(%s)이 달린 저장소 %d개 발견 — 비공개 %d개, 인증 없이는 %s개" % (
+                checks.append({"label": _T("토픽 검색", "Topic search"), "status": "ok",
+                               "detail": _T("토픽(%s)이 달린 저장소 %d개 발견 — 비공개 %d개, 인증 없이는 %s개", "Topic (%s): %d repositories found — %d private, %s without authentication") % (
                                    topics_text, len(found), private_count,
                                    "?" if anon is None else len(anon))})
             else:
-                checks.append({"label": "토픽 검색", "status": "warn",
-                               "detail": "인증은 됐지만 토픽(%s)이 달린 저장소가 없습니다. 저장소 설정 → "
+                checks.append({"label": _T("토픽 검색", "Topic search"), "status": "warn",
+                               "detail": _T("인증은 됐지만 토픽(%s)이 달린 저장소가 없습니다. 저장소 설정 → "
                                          "토픽에 해당 토픽을 추가했는지, 이 계정에 저장소 읽기 권한이 "
-                                         "있는지 확인해주세요." % topics_text})
+                                         "있는지 확인해주세요.", "Authenticated, but no repository has the topic (%s). Check that the topic was added in the repository settings → topics, and that this account can read the repositories.") % topics_text})
         except urllib.error.HTTPError as exc:
-            checks.append({"label": "토픽 검색", "status": "fail",
-                           "detail": _gitea_http_error_detail(exc, "저장소 검색") +
-                                     " — 토큰이라면 repository 읽기 권한으로 다시 발급해주세요."})
+            checks.append({"label": _T("토픽 검색", "Topic search"), "status": "fail",
+                           "detail": _gitea_http_error_detail(exc, _T("저장소 검색", "Repository search")) +
+                                     _T(" — 토큰이라면 repository 읽기 권한으로 다시 발급해주세요.", " — if it is a token, issue it again with repository read permission.")})
         except Exception as exc:
-            checks.append({"label": "토픽 검색", "status": "fail", "detail": str(exc)})
+            checks.append({"label": _T("토픽 검색", "Topic search"), "status": "fail", "detail": str(exc)})
     elif anon is not None:
         report["repos"] = [{"name": n, "private": p} for n, p in sorted(anon.items())]
-        checks.append({"label": "토픽 검색", "status": "warn" if not anon else "ok",
-                       "detail": "인증 없이 검색 — 공개 저장소 %d개. 비공개 저장소는 계정이나 토큰이 "
-                                 "있어야 보입니다." % len(anon)})
+        checks.append({"label": _T("토픽 검색", "Topic search"), "status": "warn" if not anon else "ok",
+                       "detail": _T("인증 없이 검색 — 공개 저장소 %d개. 비공개 저장소는 계정이나 토큰이 "
+                                 "있어야 보입니다.", "Searched without authentication — %d public repositories. Private repositories need an account or a token.") % len(anon)})
 
     # ⑤ [PATCH-7] 소유자 스캔 — 입력한 소유자 + 이 서버에서 설치한 적 있는 소유자
     owners = params.get("owners")
@@ -3084,7 +3164,7 @@ def _test_gitea_server(params, configured_tokens, topics):
         try:
             repos = _gitea_list_owner_repos_uncached(host, owner, scan_cfg, scheme)
         except Exception as exc:
-            checks.append({"label": "소유자 %s" % owner, "status": "fail", "detail": str(exc)})
+            checks.append({"label": _T("소유자 %s", "Owner %s") % owner, "status": "fail", "detail": str(exc)})
             continue
         specs = [(r.get("name"), r.get("default_branch"), bool(r.get("private"))) for r in repos if r.get("name")]
         plugins = []
@@ -3100,11 +3180,11 @@ def _test_gitea_server(params, configured_tokens, topics):
                     pass
         private_total = sum(1 for _n, _b, priv in specs if priv)
         status = "ok" if plugins else "warn"
-        detail = "저장소 %d개(비공개 %d개) 중 VERSION 파일이 있는 플러그인 %d개" % (
+        detail = _T("저장소 %d개(비공개 %d개) 중 VERSION 파일이 있는 플러그인 %d개", "%d repositories (%d private), %d of them plugins with a VERSION file") % (
             len(specs), private_total, len(plugins))
         if not scan_cfg:
-            detail += " — 인증 없이 조회해 비공개 저장소는 빠졌을 수 있습니다"
-        checks.append({"label": "소유자 %s" % owner, "status": status, "detail": detail})
+            detail += _T(" — 인증 없이 조회해 비공개 저장소는 빠졌을 수 있습니다", " — queried without authentication, so private repositories may be missing")
+        checks.append({"label": _T("소유자 %s", "Owner %s") % owner, "status": status, "detail": detail})
         for name, priv in sorted(plugins):
             full = "%s/%s" % (owner, name)
             if not any(r["name"] == full for r in report["repos"]):
@@ -3331,7 +3411,7 @@ def _fetch_changelog(url, token, gitea_tokens):
     clean_url, _u, _p = _extract_url_credentials(url)
     host, owner, repo = _parse_repo_url(clean_url)
     if not host or not owner or not repo:
-        return {"source": "none", "entries": [], "error": "저장소 주소를 해석하지 못했습니다."}
+        return {"source": "none", "entries": [], "error": _T("저장소 주소를 해석하지 못했습니다.", "Could not parse the repository URL.")}
     is_github = _is_github_host(host)
     key = ("%s/%s" % (owner, repo)) if is_github else ("gitea:%s/%s/%s" % (host, owner, repo))
     cached = _CHANGELOG_CACHE.get(key)
@@ -3481,8 +3561,8 @@ def _plan_install(src_root, repo_hint, existing_folder=None, source_url=None):
     class_id = _read_class_id(src_root)
     if not class_id:
         return None, None, False, (
-            "플러그인 클래스의 id를 읽지 못했습니다 — BaseMetadataProvider 상속 클래스에 "
-            "id = \"...\" 형태의 문자열 id가 있어야 합니다."
+            _T("플러그인 클래스의 id를 읽지 못했습니다 — BaseMetadataProvider 상속 클래스에 "
+            "id = \"...\" 형태의 문자열 id가 있어야 합니다.", "Could not read the plugin class id — the class inheriting BaseMetadataProvider needs a string id like id = \"...\".")
         )
 
     folder = None
@@ -3500,21 +3580,21 @@ def _plan_install(src_root, repo_hint, existing_folder=None, source_url=None):
                 folder = re.sub(r"[^a-zA-Z0-9_-]", "_", repo_hint or class_id).strip("_")
 
     if not folder or not _PLUGIN_ID_RE.match(folder):
-        return None, None, False, "설치 폴더명을 정하지 못했습니다(영문/숫자/_- 만 허용): %r" % folder
+        return None, None, False, _T("설치 폴더명을 정하지 못했습니다(영문/숫자/_- 만 허용): %r", "Could not decide the install folder name (only letters, digits and _- allowed): %r") % folder
     if folder in _RESERVED_FOLDERS or class_id in _RESERVED_FOLDERS:
-        return None, None, False, "시스템 예약어 또는 핵심 플러그인은 덮어쓸 수 없습니다: %s" % folder
+        return None, None, False, _T("시스템 예약어 또는 핵심 플러그인은 덮어쓸 수 없습니다: %s", "System reserved names or core plugins cannot be overwritten: %s") % folder
 
     # plugin_board 자신은 공식 저장소에서 온 소스로만 교체한다(동명 포크·압축 파일로
     # 관리 도구 자체를 덮어쓰는 것을 막는다).
     if folder == "plugin_board" or class_id == "plugin_board":
         if not source_url or not _same_repo_owner(source_url, SELF_REPO_URL):
-            return None, None, False, "plugin_board는 공식 저장소(%s)에서만 설치·업데이트할 수 있습니다." % SELF_REPO_URL
+            return None, None, False, _T("plugin_board는 공식 저장소(%s)에서만 설치·업데이트할 수 있습니다.", "plugin_board can only be installed or updated from the official repository (%s).") % SELF_REPO_URL
 
     other = _find_folder_by_class_id(class_id, exclude=folder)
     if other:
         return None, None, False, (
-            "id 충돌: 같은 id('%s')의 플러그인이 이미 '%s' 폴더에 설치되어 있습니다. "
-            "기존 플러그인을 먼저 삭제하거나, 서로 다른 id를 쓰는지 확인해주세요." % (class_id, other)
+            _T("id 충돌: 같은 id('%s')의 플러그인이 이미 '%s' 폴더에 설치되어 있습니다. "
+            "기존 플러그인을 먼저 삭제하거나, 서로 다른 id를 쓰는지 확인해주세요.", "id conflict: a plugin with the same id ('%s') is already installed in the '%s' folder. Delete the existing plugin first, or make sure they use different ids.") % (class_id, other)
         )
 
     is_new = not _is_installed(folder)
@@ -3522,17 +3602,17 @@ def _plan_install(src_root, repo_hint, existing_folder=None, source_url=None):
         existing_cid = _class_id_for_folder(folder)
         if existing_cid.replace("-", "_") != class_id.replace("-", "_"):
             return None, None, False, (
-                "id 충돌: '%s' 폴더에는 다른 플러그인(id='%s')이 설치되어 있어 id='%s'로 "
-                "덮어쓸 수 없습니다." % (folder, existing_cid, class_id)
+                _T("id 충돌: '%s' 폴더에는 다른 플러그인(id='%s')이 설치되어 있어 id='%s'로 "
+                "덮어쓸 수 없습니다.", "id conflict: the '%s' folder holds another plugin (id='%s'), so it cannot be overwritten with id='%s'.") % (folder, existing_cid, class_id)
             )
         if source_url and not existing_folder:
             registered = _registry_url_for(folder)
             if registered and not _same_repo_owner(registered, source_url):
                 clean_registered, _u, _p = _extract_url_credentials(registered)
                 return None, None, False, (
-                    "id 충돌: '%s'는 다른 저장소(%s)에서 설치된 플러그인입니다. 같은 이름의 다른 "
+                    _T("id 충돌: '%s'는 다른 저장소(%s)에서 설치된 플러그인입니다. 같은 이름의 다른 "
                     "저장소로 덮어쓰지 않도록 설치를 중단했습니다. 저장소를 옮긴 것이라면 "
-                    "'Git 주소 변경'을 먼저 사용해주세요." % (folder, clean_registered)
+                    "'Git 주소 변경'을 먼저 사용해주세요.", "id conflict: '%s' was installed from another repository (%s). The install was stopped so a different repository with the same name does not overwrite it. If the repository moved, use 'Change Git URL' first.") % (folder, clean_registered)
                 )
     return folder, class_id, is_new, None
 
@@ -3589,9 +3669,9 @@ def _install_dir_atomically(src_root, folder, class_id, db_type, is_new, ignore=
                 shutil.move(backup, target)
             _try_hot_reload(class_id, folder)
             fail_msg = (
-                "'%s'(id=%s) 플러그인이 교체 후 로드되지 않아 %s. 서버 로그에서 "
-                "로드 오류를 확인해주세요." % (
-                    folder, class_id, "이전 버전으로 되돌렸습니다" if had_backup else "설치를 취소했습니다"
+                _T("'%s'(id=%s) 플러그인이 교체 후 로드되지 않아 %s. 서버 로그에서 "
+                "로드 오류를 확인해주세요.", "'%s' (id=%s) did not load after replacing, so %s. Check the server log for the load error.") % (
+                    folder, class_id, _T("이전 버전으로 되돌렸습니다", "it was rolled back to the previous version") if had_backup else _T("설치를 취소했습니다", "the install was cancelled")
                 )
             )
             _record_history(action, folder, class_id, result="rolled_back", from_version=from_version,
@@ -3599,7 +3679,7 @@ def _install_dir_atomically(src_root, folder, class_id, db_type, is_new, ignore=
             return False, fail_msg
         note = ""
         if not reloaded or loaded is None:
-            note = " (코어의 즉시 반영 여부를 확인할 수 없어 서버 재시작 후 적용될 수 있습니다)"
+            note = _T(" (코어의 즉시 반영 여부를 확인할 수 없어 서버 재시작 후 적용될 수 있습니다)", " (whether the core applied it right away cannot be confirmed, so it may take effect after a server restart)")
         _record_history(action, folder, class_id, result="success", from_version=from_version,
                         to_version=to_version, origin=origin, message=note.strip(" ()") or None, files=files)
         return True, note
@@ -3623,7 +3703,7 @@ def _install_from_source_dir(src_root, repo_hint, existing_folder, source_url, d
     if not source_ok:
         failed_items = ["- %s: %s" % (c["name"], c["detail"]) for c in source_checks if not c.get("ok")]
         fail_msg = (
-            "플러그인 검증 실패 — 설치를 중단했습니다(기존 설치는 변경되지 않음):\n"
+            _T("플러그인 검증 실패 — 설치를 중단했습니다(기존 설치는 변경되지 않음):\n", "Plugin validation failed — the install was stopped (the existing install is unchanged):\n")
             + "\n".join(failed_items)
         )
         _record_history("install" if is_new else "update", folder, class_id, result="failed",
@@ -3643,13 +3723,13 @@ def _install_from_source_dir(src_root, repo_hint, existing_folder, source_url, d
 
     new_version = _local_version(folder) or "?"
     passed = [c["name"] for c in source_checks if c.get("ok") and not c.get("warn")]
-    warns = [re.sub(r"^경고:\s*", "", c["detail"]) for c in source_checks if c.get("warn")]
-    result_msg = "'%s'(id=%s) %s 완료 (%s, 버전 v%s, 검증 통과: %s)%s" % (
-        folder, class_id, "신규 설치 및 활성화" if is_new else "업데이트", origin_label,
+    warns = [re.sub(r"^(경고|Warning):\s*", "", c["detail"]) for c in source_checks if c.get("warn")]
+    result_msg = _T("'%s'(id=%s) %s 완료 (%s, 버전 v%s, 검증 통과: %s)%s", "'%s' (id=%s) %s done (%s, version v%s, checks passed: %s)%s") % (
+        folder, class_id, _T("신규 설치 및 활성화", "installed and enabled") if is_new else _T("업데이트", "updated"), origin_label,
         new_version, ", ".join(passed), note,
     )
     if warns:
-        result_msg += " 경고: " + "; ".join(warns)
+        result_msg += _T(" 경고: ", " Warnings: ") + "; ".join(warns)
     return True, result_msg, folder
 
 
@@ -3682,14 +3762,14 @@ def _install_or_update(owner, repo, token=None, db_type="general", existing_fold
             # id와 같은 메인 모듈 파일이 있어야 BookOasis 플러그인 저장소로 간주한다.
             if not _find_module_file(src_root, repo) and not _find_module_file(src_root, _read_class_id(src_root) or repo):
                 return False, (
-                    "'%s.py'(또는 '%s.py') 파일을 찾지 못했습니다 — BookOasis 플러그인 "
-                    "저장소가 맞는지, 메인 모듈 파일명이 저장소 이름과 같은지 확인해주세요."
+                    _T("'%s.py'(또는 '%s.py') 파일을 찾지 못했습니다 — BookOasis 플러그인 "
+                    "저장소가 맞는지, 메인 모듈 파일명이 저장소 이름과 같은지 확인해주세요.", "Could not find '%s.py' (or '%s.py') — check that this is a BookOasis plugin repository and that the main module file is named after the repository.")
                     % (repo, repo.replace("-", "_"))
                 ), None
 
             return _install_from_source_dir(
                 src_root, repo, existing_folder, source_url, db_type,
-                "GitHub %s/%s, 브랜치 %s" % (owner, repo, branch),
+                _T("GitHub %s/%s, 브랜치 %s", "GitHub %s/%s, branch %s") % (owner, repo, branch),
             )
         except urllib.error.HTTPError as exc:
             last_error = _github_api_error_message(exc, bool(token))
@@ -3698,7 +3778,7 @@ def _install_or_update(owner, repo, token=None, db_type="general", existing_fold
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    return False, "설치/업데이트 실패: %s" % (last_error or "알 수 없는 오류"), None
+    return False, _T("설치/업데이트 실패: %s", "Install/update failed: %s") % (last_error or _T("알 수 없는 오류", "unknown error")), None
 
 
 def _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme="https", db_type="general",
@@ -3727,14 +3807,14 @@ def _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme="https", db_ty
 
             if not _find_module_file(src_root, repo) and not _find_module_file(src_root, _read_class_id(src_root) or repo):
                 return False, (
-                    "'%s.py'(또는 '%s.py') 파일을 찾지 못했습니다 — BookOasis 플러그인 "
-                    "저장소가 맞는지, 메인 모듈 파일명이 저장소 이름과 같은지 확인해주세요."
+                    _T("'%s.py'(또는 '%s.py') 파일을 찾지 못했습니다 — BookOasis 플러그인 "
+                    "저장소가 맞는지, 메인 모듈 파일명이 저장소 이름과 같은지 확인해주세요.", "Could not find '%s.py' (or '%s.py') — check that this is a BookOasis plugin repository and that the main module file is named after the repository.")
                     % (repo, repo.replace("-", "_"))
                 ), None
 
             return _install_from_source_dir(
                 src_root, repo, existing_folder, source_url, db_type,
-                "Gitea %s, 브랜치 %s" % (host, branch),
+                _T("Gitea %s, 브랜치 %s", "Gitea %s, branch %s") % (host, branch),
             )
         except urllib.error.HTTPError as exc:
             hint = " " + _gitea_auth_error_hint(gitea_cfg) if exc.code in (401, 403) else ""
@@ -3744,7 +3824,7 @@ def _install_or_update_gitea(host, owner, repo, gitea_cfg, scheme="https", db_ty
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    return False, "설치/업데이트 실패: %s" % (last_error or "알 수 없는 오류"), None
+    return False, _T("설치/업데이트 실패: %s", "Install/update failed: %s") % (last_error or _T("알 수 없는 오류", "unknown error")), None
 
 
 def _install_or_update_from_url(url, token, gitea_tokens=None, db_type="general", existing_folder=None):
@@ -3761,11 +3841,11 @@ def _install_or_update_from_url(url, token, gitea_tokens=None, db_type="general"
     if not host or not owner or not repo:
         if re.match(r"^https?://[^/]+/[^/]+/?$", clean_url or ""):
             return False, (
-                "저장소가 아니라 소유자 주소입니다(%s). 이 소유자의 플러그인을 모두 목록에 표시하려면 "
+                _T("저장소가 아니라 소유자 주소입니다(%s). 이 소유자의 플러그인을 모두 목록에 표시하려면 "
                 "플러그인게시판 설정(⚙) → Gitea 서버의 '소유자'에 추가하세요. 설치는 저장소 주소"
-                "(https://서버/소유자/저장소)로 해주세요." % _scrub_credentials(clean_url)
+                "(https://서버/소유자/저장소)로 해주세요.", "This is an owner address, not a repository (%s). To list all plugins of this owner, add it to 'Owners' of the Gitea server in the Plugin Board settings (⚙). Install with a repository address (https://server/owner/repo).") % _scrub_credentials(clean_url)
             )
-        return False, "Git 저장소 주소를 해석하지 못했습니다: %s" % _scrub_credentials(url)
+        return False, _T("Git 저장소 주소를 해석하지 못했습니다: %s", "Could not parse the Git repository URL: %s") % _scrub_credentials(url)
 
     if _is_github_host(host):
         effective_token = url_password or url_username or token
@@ -3782,7 +3862,7 @@ def _install_or_update_from_url(url, token, gitea_tokens=None, db_type="general"
     if ok and folder:
         _remember_repo_install(url, plugin_id=folder)
         if injected:
-            msg += " (설정에 저장된 %s 계정으로 인증해 등록했습니다)" % host
+            msg += _T(" (설정에 저장된 %s 계정으로 인증해 등록했습니다)", " (registered with the %s account saved in the settings)") % host
     return ok, msg
 
 
@@ -3859,6 +3939,8 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         "title": "플러그인게시판",
         "icon": "fa-solid fa-layer-group",
         "order": 11,
+        # 일반 도서뿐 아니라 성인·오디오북·영상 강좌 사이드바에도 (코어 2.x+ 'sessions', 없으면 일반만)
+        "sessions": "all",
     }
 
     # GitHub raw 기반 자동 업데이트 계약 (plugin_board 자기 자신의 업데이트용)
@@ -3902,7 +3984,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         try:
             ok, payload = self._dispatch_apply(db_type, 0, item_data)
         except Exception as exc:
-            return {"success": False, "error": "예상치 못한 오류가 발생했습니다: %s" % exc}
+            return {"success": False, "error": _T("예상치 못한 오류가 발생했습니다: %s", "An unexpected error occurred: %s") % exc}
         if ok:
             # get_config는 dict를 돌려준다 — 프런트는 예전과 같이 message 필드로 받는다
             return {"success": True, "message": payload}
@@ -3922,11 +4004,11 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         try:
             return self._dispatch_apply(db_type, book_id, item_data)
         except Exception as exc:
-            return False, "예상치 못한 오류가 발생했습니다: %s" % exc
+            return False, _T("예상치 못한 오류가 발생했습니다: %s", "An unexpected error occurred: %s") % exc
 
     def _dispatch_apply(self, db_type, book_id, item_data):
         if not isinstance(item_data, dict):
-            return False, "유효하지 않은 요청 데이터 형식입니다."
+            return False, _T("유효하지 않은 요청 데이터 형식입니다.", "Invalid request data format.")
 
         action = str(item_data.get("action", "")).strip().lower()
         plugin_id = str(item_data.get("plugin_id", "")).strip()
@@ -3936,7 +4018,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         # refresh_list도 포함한다 — 캐시를 비우면 GitHub API 재조회가 일어나므로,
         # 비관리자가 반복 호출해 서버의 rate limit을 소진시키지 못하게 한다.
         if not _is_admin_session():
-            return False, "관리자만 사용할 수 있는 기능입니다."
+            return False, _T("관리자만 사용할 수 있는 기능입니다.", "Only administrators can use this feature.")
 
         # [PATCH-5] 이력 기록용 요청 문맥 — 자동 업데이트는 프런트가 auto=true로 보낸다
         _HISTORY_CTX.mode = "auto" if str(item_data.get("auto", "")).lower() in ("1", "true") else "manual"
@@ -3965,7 +4047,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 url = str(item_data.get("git_url", "")).strip() or None
             if not url:
                 return True, {"source": "none", "entries": [],
-                              "error": "이 플러그인의 원본 저장소 주소를 알 수 없습니다(로컬 전용 플러그인)."}
+                              "error": _T("이 플러그인의 원본 저장소 주소를 알 수 없습니다(로컬 전용 플러그인).", "The original repository address of this plugin is unknown (local-only plugin).")}
             installed_version = _local_version(plugin_id) if plugin_id and _PLUGIN_ID_RE.match(plugin_id) \
                 and _is_installed(plugin_id) else None
             remote_version = str(item_data.get("remote_version") or "").strip().lstrip("vV") or None
@@ -3981,7 +4063,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
 
         if action == "set_auto_update_skip":
             if not plugin_id:
-                return False, "plugin_id가 필요합니다."
+                return False, _T("plugin_id가 필요합니다.", "plugin_id is required.")
             skip = str(item_data.get("skip", "")).lower() in ("1", "true")
             ok, msg = _set_auto_update_skip(plugin_id, skip)
             if ok:
@@ -4001,7 +4083,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         # [PATCH-10] 자동 업데이트 제외 플러그인은 자동(auto=true) 요청을 백엔드에서도 거부한다
         if (action == "update" and _HISTORY_CTX.mode == "auto" and plugin_id
                 and plugin_id in _load_auto_update_skip()):
-            return False, "'%s'은(는) 자동 업데이트 제외로 설정되어 있어 건너뜁니다." % plugin_id
+            return False, _T("'%s'은(는) 자동 업데이트 제외로 설정되어 있어 건너뜁니다.", "'%s' is excluded from auto-update, so it was skipped.") % plugin_id
 
         if action in ("install_git", "update", "install_zip"):
             ok, msg = self._dispatch_install(db_type, action, plugin_id, item_data)
@@ -4027,7 +4109,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             zip_data = str(item_data.get("zip_data", "")).strip()
             filename = str(item_data.get("filename", "")).strip()
             if not zip_data:
-                return False, "zip_data가 필요합니다."
+                return False, _T("zip_data가 필요합니다.", "zip_data is required.")
             cfg = self.get_plugin_config(db_type, default={})
             return _install_from_archive(
                 zip_data, filename, db_type, gitea_tokens=_parse_gitea_tokens_cfg(cfg.get("GITEA_TOKENS"))
@@ -4044,7 +4126,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             # 어떤 플러그인이 설정을 저장했는데도 /manage가 그 값을 안 돌려주는
             # 경우에 대비한 더 확실한(authoritative) 조회 경로다.
             if not plugin_id:
-                return False, "plugin_id가 필요합니다."
+                return False, _T("plugin_id가 필요합니다.", "plugin_id is required.")
             # 설정 키는 클래스 id 기준이다 — 폴더명이 넘어오면 클래스 id로 바꾼다
             config_id = plugin_id
             if _PLUGIN_ID_RE.match(plugin_id) and _is_installed(plugin_id):
@@ -4052,11 +4134,11 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             try:
                 gateway = self.get_db_gateway(db_type)
             except Exception as exc:
-                return False, "DB 게이트웨이를 가져오지 못했습니다: %s" % exc
+                return False, _T("DB 게이트웨이를 가져오지 못했습니다: %s", "Could not get the DB gateway: %s") % exc
             try:
                 raw = gateway.get_setting("PLUGIN_CONFIG_%s" % config_id, default=None)
             except Exception as exc:
-                return False, "설정 조회 중 오류가 발생했습니다: %s" % exc
+                return False, _T("설정 조회 중 오류가 발생했습니다: %s", "Error while reading the settings: %s") % exc
 
             if raw is None:
                 return True, {}
@@ -4087,7 +4169,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             _CHANGELOG_CACHE.clear()
             _clear_shared_cache(self)
             _save_disk_cache()
-            return True, "플러그인 목록과 버전 정보를 새로 불러옵니다."
+            return True, _T("플러그인 목록과 버전 정보를 새로 불러옵니다.", "Reloading the plugin list and version information.")
 
         if action == "reset_cache":
             # [신규] 목록이 이상하게 꼬여 있을 때(중복 카드, 옛 정보가 계속
@@ -4100,7 +4182,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
 
         if action == "toggle":
             if not plugin_id:
-                return False, "plugin_id가 필요합니다."
+                return False, _T("plugin_id가 필요합니다.", "plugin_id is required.")
             enabled_val = str(item_data.get("enabled", "1")).strip()
             ok, msg = _toggle_plugin_enabled(plugin_id, enabled_val, db_type)
             if ok:
@@ -4111,27 +4193,27 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
 
         if action == "delete":
             if not plugin_id:
-                return False, "plugin_id가 필요합니다."
+                return False, _T("plugin_id가 필요합니다.", "plugin_id is required.")
             return _delete_plugin(plugin_id)
 
         if action == "update_url":
             # [신규] 등록된 Git 주소가 바뀐(저장소 이름/owner/호스트 이전 등) 경우,
             # 재설치 없이 "이 plugin_id는 이제 이 URL을 본다"고만 갱신한다.
             if not plugin_id:
-                return False, "plugin_id가 필요합니다."
+                return False, _T("plugin_id가 필요합니다.", "plugin_id is required.")
             new_git_url = str(item_data.get("git_url", "")).strip()
             if not new_git_url:
-                return False, "새 git_url이 필요합니다."
+                return False, _T("새 git_url이 필요합니다.", "A new git_url is required.")
             cfg = self.get_plugin_config(db_type, default={})
             new_git_url, injected = _inject_gitea_credentials(
                 new_git_url, _parse_gitea_tokens_cfg(cfg.get("GITEA_TOKENS"))
             )
             ok, msg = _update_registered_repo_url(plugin_id, new_git_url)
             if ok and injected:
-                msg += " (설정에 저장된 계정을 주소에 자동으로 포함했습니다)"
+                msg += _T(" (설정에 저장된 계정을 주소에 자동으로 포함했습니다)", " (the account saved in the settings was added to the address automatically)")
             if ok:
                 clean_new, _u, _p = _extract_url_credentials(new_git_url)
-                _record_history("url_changed", plugin_id, message="새 주소: %s" % clean_new)
+                _record_history("url_changed", plugin_id, message=_T("새 주소: %s", "New address: %s") % clean_new)
             return ok, msg
 
         if action == "unregister":
@@ -4139,13 +4221,13 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             # 플러그인 파일은 그대로 두고 github.txt 등록만 제거한다(업데이트 확인
             # 대상에서만 빠진다 — plugins/metadata의 실제 파일은 건드리지 않음).
             if not plugin_id:
-                return False, "plugin_id가 필요합니다."
+                return False, _T("plugin_id가 필요합니다.", "plugin_id is required.")
             ok, msg = _unregister_repo(plugin_id)
             if ok:
                 _record_history("unregister", plugin_id)
             return ok, msg
 
-        return False, "지원하지 않는 액션입니다: %s" % action
+        return False, _T("지원하지 않는 액션입니다: %s", "Unsupported action: %s") % action
 
     def _dispatch_git_install(self, db_type, action, plugin_id, item_data):
         if action in ("install_git", "update"):
@@ -4172,8 +4254,8 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
 
             if not git_url:
                 return False, (
-                    "Git 저장소 정보를 확인할 수 없습니다. 원본 저장소 주소가 바뀌었다면 "
-                    "'Git 주소 변경'으로 새 주소를 먼저 등록한 뒤 다시 시도해주세요."
+                    _T("Git 저장소 정보를 확인할 수 없습니다. 원본 저장소 주소가 바뀌었다면 "
+                    "'Git 주소 변경'으로 새 주소를 먼저 등록한 뒤 다시 시도해주세요.", "Could not check the Git repository information. If the original repository address changed, register the new address with 'Change Git URL' first and try again.")
                 )
 
             # 업데이트는 카드의 plugin_id(=설치 폴더)를 그대로 교체 대상으로 지정한다.
@@ -4183,7 +4265,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 git_url, token, gitea_tokens=gitea_tokens, db_type=db_type,
                 existing_folder=existing_folder,
             )
-        return False, "지원하지 않는 액션입니다: %s" % action
+        return False, _T("지원하지 않는 액션입니다: %s", "Unsupported action: %s") % action
 
     # ------------------------------------------------------------------
     # 카테고리 풀페이지 탭이 script.js를 통해 호출하는 데이터 엔드포인트.
@@ -4192,6 +4274,40 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
     # 가져온다. plugins/metadata 디렉토리를 직접 확인해 설치 여부·업데이트 필요
     # 여부·활성화 상태·설정 보유 여부까지 함께 반환한다.
     # ------------------------------------------------------------------
+    def _sync_problem_cards(self, db_type, has_token):
+        """GitHub 인증 실패·호출 한도 초과를 관리자 알림 문제 카드로 올리고, 풀리면 닫는다.
+        report_problem이 없는 구버전 코어(2.8.4 미만)에서는 아무것도 하지 않는다."""
+        if not hasattr(self, "report_problem") or not hasattr(self, "resolve_problem"):
+            return
+        probs = _github_problem_snapshot()
+        try:
+            if "github_auth" in probs:
+                self.report_problem(
+                    "github_auth", severity="action_required",
+                    title=_T("GitHub 토큰 인증 실패", "GitHub token rejected"),
+                    detail=_T("설정한 GITHUB_TOKEN이 잘못됐거나 만료·폐기됐습니다. 환경설정 > 플러그인 설정 > 플러그인게시판에서 "
+                              "새 토큰을 넣어 주세요. 그동안은 목록·버전 확인이 실패합니다.",
+                              "The GITHUB_TOKEN is wrong, expired or revoked. Put a new token in Settings > Plugin settings > "
+                              "Plugin Board. Until then listing and version checks fail."),
+                    db_type=db_type, message=probs["github_auth"]["message"])
+            else:
+                self.resolve_problem("github_auth", db_type=db_type)
+            if "github_rate" in probs:
+                self.report_problem(
+                    "github_rate", severity="notice" if has_token else "action_required",
+                    title=_T("GitHub API 호출 한도 초과", "GitHub API rate limit reached"),
+                    detail=(_T("토큰 기준 한도(시간당 5,000회)를 넘었습니다. 한 시간 안에 풀립니다.",
+                               "The token's limit (5,000 calls per hour) was exceeded. It resets within an hour.") if has_token else
+                            _T("무인증 한도(시간당 60회)를 넘었습니다. 플러그인게시판 설정에 GITHUB_TOKEN(권한 없는 토큰이면 충분)을 "
+                               "넣으면 시간당 5,000회로 늘어납니다.",
+                               "The anonymous limit (60 calls per hour) was exceeded. Add a GITHUB_TOKEN (one with no "
+                               "permissions is enough) in the Plugin Board settings to raise it to 5,000 per hour.")),
+                    db_type=db_type, message=probs["github_rate"]["message"])
+            else:
+                self.resolve_problem("github_rate", db_type=db_type)
+        except Exception:
+            pass   # 알림은 덤 - 목록 표시를 막지 않는다
+
     def get_dashboard_data(self, db_type, limit=10):
         cfg = self.get_plugin_config(db_type, default={})
         token = cfg.get("GITHUB_TOKEN") or None
@@ -4404,10 +4520,10 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 discovered_items.append({
                     "id": "gitea-search-error:" + host,
                     "owner": "",
-                    "title": "%s 토픽 검색 실패" % host,
+                    "title": _T("%s 토픽 검색 실패", "%s topic search failed") % host,
                     "type": "other",
                     "type_label": TYPE_LABELS["other"],
-                    "desc": "이 Gitea 서버에서 토픽 검색이 실패했습니다: %s" % err_msg,
+                    "desc": _T("이 Gitea 서버에서 토픽 검색이 실패했습니다: %s", "Topic search failed on this Gitea server: %s") % err_msg,
                     "tags": [], "features": [], "version_label": "—",
                     "url": "%s://%s" % ((gitea_hosts_to_search.get(host) or {}).get("scheme", "https"), host),
                     "error": True,
@@ -4426,14 +4542,14 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                     discovered_items.append({
                         "id": "gitea-search-hint:" + host,
                         "owner": "",
-                        "title": "%s — 비공개 저장소가 검색되지 않았을 수 있음" % host,
+                        "title": _T("%s — 비공개 저장소가 검색되지 않았을 수 있음", "%s — private repositories may not have been searched") % host,
                         "type": "other",
                         "type_label": TYPE_LABELS["other"],
                         "desc": (
-                            "이 Gitea 서버를 인증 없이 조회해 공개 저장소만 확인됐고, 플러그인으로 "
+                            _T("이 Gitea 서버를 인증 없이 조회해 공개 저장소만 확인됐고, 플러그인으로 "
                             "보이는 저장소가 하나도 없었습니다. 비공개 저장소라면 플러그인게시판 설정(⚙)의 "
                             "'Gitea 서버'에 이 서버의 아이디/비밀번호 또는 읽기 토큰을 등록한 뒤 "
-                            "'연결 테스트'로 확인하고 목록을 새로고침하세요."
+                            "'연결 테스트'로 확인하고 목록을 새로고침하세요.", "This Gitea server was queried without authentication, so only public repositories were checked and none looked like a plugin. If they are private, register this server's username/password or a read token under 'Gitea server' in the Plugin Board settings (⚙), check with 'Test connection' and reload the list.")
                         ),
                         "tags": [], "features": [], "version_label": "—",
                         "url": "%s://%s" % (spec.get("scheme", "https"), host),
@@ -4489,7 +4605,7 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                         fetched_registry_items[plugin_id_key] = {
                             "id": plugin_id_key, "owner": "", "title": plugin_id_key, "type": "other",
                             "type_label": TYPE_LABELS["other"],
-                            "desc": "저장소 정보를 불러오지 못했습니다 (%s)" % exc,
+                            "desc": _T("저장소 정보를 불러오지 못했습니다 (%s)", "Could not load the repository information (%s)") % exc,
                             "tags": [], "features": [], "version_label": "—",
                             "url": None, "error": True,
                             "installed": installed,
@@ -4562,6 +4678,8 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
         else:
             for it in all_items:
                 it["in_catalog"] = False
+
+        self._sync_problem_cards(db_type, bool(token))
 
         return {
             "success": True,
