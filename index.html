@@ -3,25 +3,25 @@
 
   <header class="pb-header">
     <div class="pb-header-actions">
-      <button type="button" id="pb-history-all-btn" class="pb-refresh-btn" hidden title="이 서버에서 일어난 플러그인 설치·업데이트·롤백·삭제 기록 전체 보기(삭제된 플러그인 포함)">
+      <button type="button" id="pb-history-all-btn" class="pb-refresh-btn" hidden title="이 서버에서 일어난 플러그인 설치·업데이트·롤백·삭제 기록 전체 보기(삭제된 플러그인 포함)" data-en-title="All plugin install, update, rollback and delete records on this server (including deleted plugins)">
         <span class="pb-refresh-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></span>
-        설치 이력
+        <span data-en="Install history">설치 이력</span>
       </button>
-      <button type="button" id="pb-refresh-list-btn" class="pb-refresh-btn" hidden title="GitHub Topics 검색 결과를 지금 다시 불러오기">
+      <button type="button" id="pb-refresh-list-btn" class="pb-refresh-btn" hidden title="GitHub Topics 검색 결과를 지금 다시 불러오기" data-en-title="Reload the GitHub Topics search results now">
         <span class="pb-refresh-icon"><svg viewBox="0 0 16 16"><path d="M13.65 2.35a7.958 7.958 0 0 0-11.3 0L1 3.7V1H0v4h4V4H1.7l1-1a6.965 6.965 0 0 1 9.9 0 6.965 6.965 0 0 1 0 9.9 6.965 6.965 0 0 1-9.9 0 6.93 6.93 0 0 1-1.7-2.86l-.96.29a7.94 7.94 0 0 0 1.95 3.27 7.958 7.958 0 0 0 11.3 0 7.958 7.958 0 0 0 0-11.3Z"/></svg></span>
-        목록 새로고침
+        <span data-en="Reload list">목록 새로고침</span>
       </button>
-      <button type="button" id="pb-reset-cache-btn" class="pb-refresh-btn" hidden title="캐시 파일(plugins/data/plugin_board/cache.json)과 공유 캐시를 삭제하고 완전히 새로 불러오기 — 목록에 이상한 항목이 계속 남아있을 때 사용">
+      <button type="button" id="pb-reset-cache-btn" class="pb-refresh-btn" hidden title="캐시 파일(plugins/data/plugin_board/cache.json)과 공유 캐시를 삭제하고 완전히 새로 불러오기 — 목록에 이상한 항목이 계속 남아있을 때 사용" data-en-title="Delete the cache file (plugins/data/plugin_board/cache.json) and the shared cache and reload everything — use when odd entries keep showing">
         <span class="pb-refresh-icon"><svg viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5Zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5Zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6Z"/><path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1ZM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118ZM2.5 3h11V2h-11v1Z"/></svg></span>
-        캐시 초기화
+        <span data-en="Clear cache">캐시 초기화</span>
       </button>
     </div>
     <h1 class="pb-title">
       <span class="pb-title-icon"><svg viewBox="0 0 16 16"><path d="M7.657.247a1.5 1.5 0 0 1 .686 0l6.5 1.5A1.5 1.5 0 0 1 16 3.214V5.5a.5.5 0 0 1-1 0V3.214a.5.5 0 0 0-.386-.487l-6.5-1.5a.5.5 0 0 0-.228 0l-6.5 1.5A.5.5 0 0 0 1 3.214v9.572a.5.5 0 0 0 .386.487l6.5 1.5a.5.5 0 0 0 .228 0l6.5-1.5a.5.5 0 0 0 .386-.487V9a.5.5 0 0 1 1 0v3.786a1.5 1.5 0 0 1-1.157 1.461l-6.5 1.5a1.5 1.5 0 0 1-.686 0l-6.5-1.5A1.5 1.5 0 0 1 0 12.786V3.214A1.5 1.5 0 0 1 1.157 1.753l6.5-1.5Z"/><path d="M4.5 5a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1h-7Zm0 2.5a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1h-7Zm0 2.5a.5.5 0 0 0 0 1h4a.5.5 0 0 0 0-1h-4Z"/></svg></span>
-      플러그인게시판
+      <span data-en="Plugin Board">플러그인게시판</span>
       <span class="pb-title-version" id="pb-title-version" hidden></span>
     </h1>
-    <p class="pb-desc">BookOasis 플러그인 목록을 GitHub에서 실시간으로 불러와, 설명·최신 버전·이 서버의 설치 여부를 확인해 카드로 보여줍니다.</p>
+    <p class="pb-desc" data-en="Loads the BookOasis plugin list live from GitHub and shows each one as a card with its description, latest version and whether it is installed on this server.">BookOasis 플러그인 목록을 GitHub에서 실시간으로 불러와, 설명·최신 버전·이 서버의 설치 여부를 확인해 카드로 보여줍니다.</p>
     <div class="pb-tally" id="pb-tally"></div>
     <p class="pb-topic-search-time" id="pb-topic-search-time" hidden></p>
   </header>
@@ -29,9 +29,19 @@
   <details class="pb-token-help">
     <summary>
       <span class="pb-token-help-icon"><svg viewBox="0 0 16 16"><path d="M8 0a5.53 5.53 0 0 0-5.5 5.5c0 .87.19 1.7.53 2.44L0 11.06V14a1 1 0 0 0 1 1h2.94l3.12-3.13c.73.34 1.56.53 2.44.53a5.5 5.5 0 1 0 0-11Zm2.5 3.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Z"/></svg></span>
-      <span class="pb-token-help-title">GitHub API 호출 제한(rate limit)이 자주 걸리시나요? — 토큰 발급 안내</span>
+      <span class="pb-token-help-title" data-en="Hitting the GitHub API rate limit often? — How to get a token">GitHub API 호출 제한(rate limit)이 자주 걸리시나요? — 토큰 발급 안내</span>
     </summary>
-    <div class="pb-token-help-body">
+    <div class="pb-token-help-body" data-en-html="&lt;p&gt;Without a &lt;code&gt;GITHUB_TOKEN&lt;/code&gt; you are limited to 60 calls per hour (anonymous); with a token it rises to 5,000 per hour. This plugin only reads public repository information, so &lt;strong&gt;a single token with no permissions at all (Repository access: None) is enough&lt;/strong&gt;.&lt;/p&gt;
+      &lt;ol&gt;
+        &lt;li&gt;Open the GitHub token page with the button below.&lt;/li&gt;
+        &lt;li&gt;Enter any &lt;b&gt;Token name&lt;/b&gt; (e.g. &lt;code&gt;bookoasis-plugin-board&lt;/code&gt;).&lt;/li&gt;
+        &lt;li&gt;Leave &lt;b&gt;Repository access&lt;/b&gt; at &lt;b&gt;Public Repositories (read-only)&lt;/b&gt; or set it to &lt;b&gt;None&lt;/b&gt; — it needs no access to any repository.&lt;/li&gt;
+        &lt;li&gt;Press &lt;b&gt;Generate token&lt;/b&gt; and copy the token.&lt;/li&gt;
+        &lt;li&gt;In BookOasis go to &lt;b&gt;Settings → Plugin settings&lt;/b&gt; and find the &lt;b&gt;Plugin Board&lt;/b&gt; card.&lt;/li&gt;
+        &lt;li&gt;Paste it into the &lt;code&gt;GitHub Personal Access Token&lt;/code&gt; field and save.&lt;/li&gt;
+      &lt;/ol&gt;
+      &lt;a class=&quot;pb-token-help-link&quot; href=&quot;https://github.com/settings/personal-access-tokens/new&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;&gt;Get a token on GitHub ↗&lt;/a&gt;
+      &lt;p class=&quot;pb-token-help-note&quot;&gt;The token is stored only in this server&#39;s plugin settings and used only for read-only API calls such as listing and description/version checks.&lt;/p&gt;">
       <p>
         <code>GITHUB_TOKEN</code>을 설정하지 않으면 시간당 60회(무인증)로 제한되고,
         토큰을 넣으면 시간당 5,000회로 늘어납니다. 이 플러그인은 공개 저장소 정보만
@@ -65,15 +75,15 @@
       <div class="pb-git-panel-head">
         <div class="pb-git-panel-title">
           <span class="pb-git-panel-icon"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></span>
-          <h2>Git 저장소 URL 설치</h2>
+          <h2 data-en="Install from a Git repository URL">Git 저장소 URL 설치</h2>
         </div>
-        <span class="pb-git-panel-badge">GIT 설치</span>
+        <span class="pb-git-panel-badge" data-en="GIT INSTALL">GIT 설치</span>
       </div>
       <form id="pb-git-install-form" class="pb-git-panel-form">
-        <input type="text" id="pb-git-install-input" placeholder="https://github.com/user/repo (또는 https://아이디:비밀번호@호스트/owner/repo)" autocomplete="off" />
-        <button type="submit" id="pb-git-install-btn">Git 설치</button>
+        <input type="text" id="pb-git-install-input" placeholder="https://github.com/user/repo (또는 https://아이디:비밀번호@호스트/owner/repo)" data-en-placeholder="https://github.com/user/repo (or https://user:password@host/owner/repo)" autocomplete="off" />
+        <button type="submit" id="pb-git-install-btn" data-en="Git install">Git 설치</button>
       </form>
-      <p class="pb-git-panel-tip">
+      <p class="pb-git-panel-tip" data-en-html="💡 Tip: only BookOasis plugin repositories with a main module named after the repository (e.g. &lt;code&gt;my_plugin/my_plugin.py&lt;/code&gt;) are supported. Installing replaces the whole target folder with the repository contents.">
         💡 팁: 저장소 이름과 같은 메인 모듈 파일(예: <code>my_plugin/my_plugin.py</code>)이
         있는 BookOasis 플러그인 저장소만 지원합니다. 설치 시 대상 폴더 전체를 저장소
         내용으로 교체합니다.
@@ -84,18 +94,18 @@
       <div class="pb-git-panel-head">
         <div class="pb-git-panel-title">
           <span class="pb-git-panel-icon"><svg viewBox="0 0 16 16"><path d="M4 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4.828a2 2 0 0 0-.586-1.414l-2.828-2.828A2 2 0 0 0 9.172 0H4Zm0 1h4v2a1 1 0 0 0 1 1h2v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1Zm2.5 6a.5.5 0 0 1 .5.5v.634l1.146-.647a.5.5 0 0 1 .708.647l-.708.707.708.707a.5.5 0 0 1-.708.707L7 9.607V10.5a.5.5 0 0 1-1 0v-.893l-1.146.647a.5.5 0 0 1-.708-.707l.708-.707-.708-.707a.5.5 0 1 1 .708-.707L6 8.134V7.5a.5.5 0 0 1 .5-.5Z"/></svg></span>
-          <h2>압축 파일 업로드 설치</h2>
+          <h2 data-en="Install from an uploaded archive">압축 파일 업로드 설치</h2>
         </div>
-        <span class="pb-git-panel-badge">압축파일 업로드</span>
+        <span class="pb-git-panel-badge" data-en="ARCHIVE UPLOAD">압축파일 업로드</span>
       </div>
       <form id="pb-zip-install-form" class="pb-git-panel-form">
         <input type="file" id="pb-zip-file-input" accept=".zip,.tar,.tar.gz,.tgz,.tar.bz2,.tbz2,.tar.xz,.txz,.7z" hidden />
         <button type="button" id="pb-zip-file-select-btn" class="pb-zip-file-select-btn">
-          <span id="pb-zip-file-label">압축 파일 선택…</span>
+          <span id="pb-zip-file-label" data-en="Choose an archive…">압축 파일 선택…</span>
         </button>
-        <button type="submit" id="pb-zip-install-btn">설치</button>
+        <button type="submit" id="pb-zip-install-btn" data-en="Install">설치</button>
       </form>
-      <p class="pb-git-panel-tip">
+      <p class="pb-git-panel-tip" data-en-html="💡 Tip: choose a &lt;code&gt;.zip&lt;/code&gt; / &lt;code&gt;.tar&lt;/code&gt; / &lt;code&gt;.tar.gz&lt;/code&gt; / &lt;code&gt;.tar.bz2&lt;/code&gt; / &lt;code&gt;.tar.xz&lt;/code&gt; file with a &lt;code&gt;VERSION&lt;/code&gt; file and Python code (&lt;code&gt;.7z&lt;/code&gt; needs &lt;code&gt;py7zr&lt;/code&gt; on the server). If the archive comes from a repository that declares &lt;code&gt;update_manifest&lt;/code&gt;, updates keep being tracked just like a Git repository.">
         💡 팁: <code>VERSION</code> 파일과 파이썬 코드가 포함된 <code>.zip</code> /
         <code>.tar</code> / <code>.tar.gz</code> / <code>.tar.bz2</code> /
         <code>.tar.xz</code> 파일을 선택하세요(<code>.7z</code>는 서버에
@@ -112,9 +122,9 @@
   </div>
 
   <main class="pb-board">
-    <div class="pb-status" id="pb-status">불러오는 중…</div>
+    <div class="pb-status" id="pb-status" data-en="Loading…">불러오는 중…</div>
     <div class="pb-grid" id="pb-grid" hidden></div>
   </main>
 
-  <footer class="pb-footer">plugin_board · BookOasis 카테고리 탭 플러그인 · 플러그인게시판</footer>
+  <footer class="pb-footer" data-en="plugin_board · BookOasis category tab plugin · Plugin Board">plugin_board · BookOasis 카테고리 탭 플러그인 · 플러그인게시판</footer>
 </div>
