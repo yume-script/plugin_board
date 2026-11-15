@@ -2000,6 +2000,40 @@
 
   // 헤더 제목("플러그인게시판") 옆에 plugin_board 자기 자신의 현재 설치된
   // 버전을 표시한다. 값이 없으면(설치 확인 자체가 안 된 극단적 상황) 조용히 숨긴다.
+  // 규약 검사에 막힌 플러그인 (설정 '플러그인 규약 위반 알림 보낼 곳'이 '알리지 않음'이면 서버가 빈 목록을 준다)
+  function showContractProblems(list) {
+    const el = document.getElementById("pb-contract-box");
+    if (!el) return;
+    list = Array.isArray(list) ? list : [];
+    el.hidden = !list.length;
+    el.textContent = "";
+    if (!list.length) return;
+    const head = document.createElement("div");
+    head.className = "pb-contract-title";
+    head.textContent = T("규약 검사를 통과하지 못해 설치·업데이트가 막힌 플러그인", "Plugins whose install or update was stopped by the rule check") + ` (${list.length})`;
+    el.appendChild(head);
+    list.forEach((p) => {
+      const row = document.createElement("details");
+      row.className = "pb-contract-row";
+      const sum = document.createElement("summary");
+      const code = document.createElement("code");
+      code.textContent = p.id;
+      sum.appendChild(code);
+      if (p.at) sum.appendChild(document.createTextNode(" · " + new Date(p.at * 1000).toLocaleString()));
+      row.appendChild(sum);
+      const pre = document.createElement("div");
+      pre.className = "pb-contract-items";
+      pre.textContent = (p.items || []).join("\n");
+      row.appendChild(pre);
+      el.appendChild(row);
+    });
+    const note = document.createElement("div");
+    note.className = "pb-contract-note";
+    note.textContent = T("고쳐진 버전으로 다시 설치하거나 플러그인을 지우면 사라집니다. 알릴 곳은 환경설정 > 플러그인 설정 > 플러그인게시판에서 바꿉니다.",
+      "It disappears once a fixed version is installed or the plugin is deleted. Change where this is shown in Settings > Plugin settings > Plugin Board.");
+    el.appendChild(note);
+  }
+
   function showTitleVersion(version) {
     const el = document.getElementById("pb-title-version");
     if (!el) return;
@@ -2077,6 +2111,7 @@
       render();
       showTopicSearchTime(json.topic_search_at, json.searched_topics);
       showTitleVersion(json.plugin_board_version);
+      showContractProblems(isAdmin ? json.contract_problems : []);
 
       const errorCount = allItems.filter((it) => it.error).length;
       console.log(

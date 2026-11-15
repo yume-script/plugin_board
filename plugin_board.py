@@ -449,6 +449,70 @@ def _github_problem_snapshot():
         return {k: dict(v) for k, v in _GH_PROBLEMS.items()}
 
 
+# ------------------------------------------------------------------
+# 플러그인 규약 검사 실패 알림. 설치·업데이트 때 _validate_plugin_source()가 막은 플러그인을
+# 설정(VIOLATION_NOTICE)에 따라 BookOasis 관리자 알림 문제 카드 / 이 화면 위 알림 상자로 알린다.
+#   both   = 관리자 알림 + 이 화면 (기본) / screen = 이 화면에만 / off = 알리지 않음 (설치 결과·이력·로그에는 그대로)
+# 여러 워커가 함께 보도록 파일(contract_problems.json)에 둔다. 같은 플러그인이 설치에 성공하거나 지워지면 닫는다.
+# ------------------------------------------------------------------
+_CONTRACT_LOCK = threading.Lock()
+_CONTRACT_FILE = os.path.join(_PLUGIN_DATA_DIR, "contract_problems.json")
+_NOTICE_MODES = ("both", "screen", "off")
+
+
+def _notice_mode(cfg):
+    raw = str((cfg or {}).get("VIOLATION_NOTICE") or "").strip().lower()
+    return raw if raw in _NOTICE_MODES else "both"
+
+
+def _load_contract():
+    try:
+        with open(_CONTRACT_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return {"problems": dict(data.get("problems") or {}), "cleared": list(data.get("cleared") or [])}
+    except (OSError, ValueError):
+        pass
+    return {"problems": {}, "cleared": []}
+
+
+def _save_contract(data):
+    try:
+        os.makedirs(_PLUGIN_DATA_DIR, exist_ok=True)
+        tmp = "%s.%d.tmp" % (_CONTRACT_FILE, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, _CONTRACT_FILE)
+    except OSError:
+        pass
+
+
+def _note_contract_failure(folder, class_id, failed_items, origin=None):
+    if not folder:
+        return
+    with _CONTRACT_LOCK:
+        data = _load_contract()
+        data["problems"][str(folder)] = {"class_id": class_id or "", "items": [str(x) for x in failed_items][:20],
+                                         "origin": origin or "", "at": time.time()}
+        data["cleared"] = [x for x in data["cleared"] if x != folder]
+        _save_contract(data)
+
+
+def _note_contract_ok(folder):
+    """설치에 성공했거나 지워진 플러그인 - 올려 둔 카드를 다음 동기화 때 닫는다"""
+    with _CONTRACT_LOCK:
+        data = _load_contract()
+        if str(folder) not in data["problems"]:
+            return
+        data["problems"].pop(str(folder), None)
+        data["cleared"] = ([x for x in data["cleared"] if x != folder] + [str(folder)])[-50:]
+        _save_contract(data)
+
+
+def _contract_code(folder):
+    return ("contract_" + re.sub(r"[^A-Za-z0-9_.-]", "_", str(folder)))[:64]
+
+
 def _http_get_json(url, token=None):
     req = urllib.request.Request(url, headers=_headers(token))
     is_github = url.startswith("https://api.github.com/")
@@ -2960,6 +3024,7 @@ def _delete_plugin(plugin_id):
     _unregister_repo(plugin_id)
     if plugin_id in _load_auto_update_skip():
         _set_auto_update_skip(plugin_id, False)
+    _note_contract_ok(plugin_id)
     _record_history("delete", plugin_id, class_id, from_version=deleted_version,
                     message=data_dir_warning.strip() or None)
 
@@ -3709,12 +3774,14 @@ def _install_from_source_dir(src_root, repo_hint, existing_folder, source_url, d
         _record_history("install" if is_new else "update", folder, class_id, result="failed",
                         from_version=None if is_new else _local_version(folder), to_version=to_version,
                         origin=origin_label, message=fail_msg)
+        _note_contract_failure(folder, class_id, failed_items, origin_label)
         return False, fail_msg, None
 
     ok, note = _install_dir_atomically(src_root, folder, class_id, db_type, is_new, ignore=ignore,
                                        origin=origin_label)
     if not ok:
         return False, note, None
+    _note_contract_ok(folder)
 
     for cache in (_DESC_CACHE, _VERSION_CACHE):
         for key in [k for k in cache if k.endswith("/" + folder) or (repo_hint and k.endswith("/" + repo_hint))]:
@@ -3916,6 +3983,23 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
                 "입력한 토픽은 발견 대상 토픽에도 자동으로 포함되므로(추가 발견 토픽에 "
                 "따로 적지 않아도 됩니다), 'bookoasis-plugin' 토픽이 없는 저장소도 이 "
                 "토픽만 달아두면 발견·카탈로그 탭 표시가 모두 가능합니다."
+            ),
+        },
+        {
+            "key": "VIOLATION_NOTICE",
+            "label": "플러그인 규약 위반 알림 보낼 곳",
+            "type": "select",
+            "required": False,
+            "default": "both",
+            "options": [
+                {"value": "both", "label": "BookOasis 관리자 알림 + 플러그인게시판 화면 (기본)"},
+                {"value": "screen", "label": "플러그인게시판 화면에만"},
+                {"value": "off", "label": "알리지 않음 (설치 결과·이력·로그에만)"},
+            ],
+            "description": (
+                "설치·업데이트하려던 플러그인이 가이드 규약 검사(클래스 id, VERSION 파일, 필수 메서드, 금지 패턴 등)를 "
+                "통과하지 못해 막혔을 때 어디로 알릴지 고릅니다. 관리자 알림 카드는 그 플러그인을 고친 버전으로 설치하거나 "
+                "지우면 저절로 닫히고, '알리지 않음'·'화면에만'으로 바꾸면 이미 올린 카드도 닫힙니다."
             ),
         },
         {
@@ -4274,11 +4358,42 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
     # 가져온다. plugins/metadata 디렉토리를 직접 확인해 설치 여부·업데이트 필요
     # 여부·활성화 상태·설정 보유 여부까지 함께 반환한다.
     # ------------------------------------------------------------------
-    def _sync_problem_cards(self, db_type, has_token):
-        """GitHub 인증 실패·호출 한도 초과를 관리자 알림 문제 카드로 올리고, 풀리면 닫는다.
+    def _sync_contract_cards(self, mode):
+        """규약 검사에 막힌 플러그인을 관리자 알림 문제 카드로 (mode가 both일 때만, 아니면 올려 둔 카드를 닫는다)"""
+        with _CONTRACT_LOCK:
+            data = _load_contract()
+        for folder, prob in data["problems"].items():
+            code = _contract_code(folder)
+            try:
+                if mode != "both":
+                    self.resolve_problem(code, db_type="general")
+                    continue
+                self.report_problem(
+                    code, severity="action_required",
+                    title=_T("'%s' 플러그인이 규약 검사를 통과하지 못했습니다" % folder,
+                             "The '%s' plugin failed the plugin rule check" % folder),
+                    detail=_T("플러그인 가이드 규약을 어겨 설치·업데이트를 막았습니다(이미 설치된 것은 그대로). "
+                              "제작자에게 알리거나 고쳐진 버전으로 다시 설치하면 닫힙니다:\n%s" % "\n".join(prob.get("items") or []),
+                              "It breaks the plugin guide rules, so the install or update was stopped (an existing install is "
+                              "unchanged). Tell the author or reinstall a fixed version and this closes:\n%s" % "\n".join(prob.get("items") or [])),
+                    db_type="general", message="; ".join(prob.get("items") or [])[:500])
+            except Exception:
+                pass
+        for folder in data["cleared"]:
+            try:
+                self.resolve_problem(_contract_code(folder), db_type="general")
+            except Exception:
+                pass
+
+    def _sync_problem_cards(self, db_type, has_token, notice_mode="both"):
+        """GitHub 인증 실패·호출 한도 초과·규약 검사 실패를 관리자 알림 문제 카드로 올리고, 풀리면 닫는다.
         report_problem이 없는 구버전 코어(2.8.4 미만)에서는 아무것도 하지 않는다."""
         if not hasattr(self, "report_problem") or not hasattr(self, "resolve_problem"):
             return
+        try:
+            self._sync_contract_cards(notice_mode)
+        except Exception:
+            pass
         probs = _github_problem_snapshot()
         try:
             if "github_auth" in probs:
@@ -4679,7 +4794,13 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             for it in all_items:
                 it["in_catalog"] = False
 
-        self._sync_problem_cards(db_type, bool(token))
+        notice_mode = _notice_mode(cfg)
+        self._sync_problem_cards(db_type, bool(token), notice_mode)
+        contract = []
+        if is_admin and notice_mode != "off":
+            with _CONTRACT_LOCK:
+                probs = _load_contract()["problems"]
+            contract = [{"id": k, "items": v.get("items") or [], "at": v.get("at")} for k, v in sorted(probs.items())]
 
         return {
             "success": True,
@@ -4690,4 +4811,5 @@ class PluginBoardMetadataProvider(BaseMetadataProvider):
             "plugin_board_version": self_item.get("installed_version"),  # 헤더 제목 옆 버전 표기용
             "catalog_topic": catalog_topic,  # 빈 문자열이면 프런트에서 "카탈로그" 탭을 숨긴다
             "searched_topics": all_topics,  # [PATCH-8] 실제로 검색한 토픽(설정 반영 확인용)
+            "contract_problems": contract,  # 규약 검사에 막힌 플러그인 (VIOLATION_NOTICE가 off면 빈 목록)
         }

@@ -1607,3 +1607,19 @@
 .pb-manage-left {
   flex-wrap: wrap;
 }
+
+/* 규약 검사에 막힌 플러그인 알림 상자 */
+.pb-contract-box {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(240, 160, 60, 0.45);
+  background: rgba(240, 160, 60, 0.08);
+  font-size: 13px;
+}
+.pb-contract-box[hidden] { display: none; }
+.pb-contract-title { font-weight: 600; margin-bottom: 6px; }
+.pb-contract-row { margin: 4px 0; }
+.pb-contract-row summary { cursor: pointer; overflow-wrap: anywhere; }
+.pb-contract-items { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0 4px 14px; opacity: 0.85; font-size: 12px; }
+.pb-contract-note { margin-top: 6px; opacity: 0.7; font-size: 12px; }
